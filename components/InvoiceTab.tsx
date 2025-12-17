@@ -839,7 +839,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
 
     let subtitle = '';
     if (displayStatus === 'overdue' && inv.status !== 'paid') {
-      const daysPast = daysBetween(inv.due_date, today);
+      const daysPast = daysBetween(dueDate, today);
       subtitle = `${daysPast} day${daysPast === 1 ? '' : 's'} past due`;
     } else if (displayStatus === 'sent') {
       if (daysToDue > 0) {

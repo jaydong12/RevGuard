@@ -217,41 +217,6 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
     return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
 
-  function getTermDays(terms: string | null): number | null {
-    if (!terms) return null;
-    const lower = terms.toLowerCase().trim();
-    if (lower.includes('due on receipt')) return 0;
-    const match = lower.match(/net\s+(\d+)/);
-    if (match) return parseInt(match[1], 10);
-    return null;
-  }
-
-  function getCustomerDueText(customer: Customer): string {
-    if (!customer.last_invoice_date) return 'No recent invoice';
-    const termDays = getTermDays(customer.billing_terms);
-    if (termDays === null) return 'No terms set';
-
-    const invoiceDate = new Date(customer.last_invoice_date);
-    if (Number.isNaN(invoiceDate.getTime())) return 'Invalid invoice date';
-
-    const dueDate = new Date(invoiceDate);
-    dueDate.setDate(dueDate.getDate() + termDays);
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    dueDate.setHours(0, 0, 0, 0);
-
-    const diffMs = dueDate.getTime() - today.getTime();
-    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffDays > 0)
-      return `Due in ${diffDays} day${diffDays === 1 ? '' : 's'}`;
-    if (diffDays === 0) return 'Due today';
-    return `Overdue by ${Math.abs(diffDays)} day${
-      diffDays === -1 ? '' : 's'
-    }`;
-  }
-
   return (
     <div className="flex flex-col gap-6">
       {/* Header */}

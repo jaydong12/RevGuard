@@ -270,7 +270,9 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
                   <Cell
                     key={`cell-${idx}`}
                     fill={isPositive ? '#22c55e' : '#fb7185'}
-                    radius={isPositive ? [6, 6, 0, 0] : [0, 0, 6, 6]}
+                    // Recharts supports tuple radius (TL, TR, BR, BL), but the
+                    // installed type definitions here only accept string|number.
+                    radius={(isPositive ? [6, 6, 0, 0] : [0, 0, 6, 6]) as any}
                   />
                 );
               })}

@@ -20,6 +20,7 @@ type Bill = {
   notes?: string | null;
   paid_at?: string | null;
   is_recurring?: boolean | null;
+  recurrence_frequency?: 'weekly' | 'monthly' | 'yearly' | null;
   recurring_interval?: string | null;
   recurring_next_due_date?: string | null;
   reminder_days_before?: number | null;
@@ -50,47 +51,64 @@ function BillingSection({
   });
 
   React.useEffect(() => {
-    if (!selectedBusinessId) {
-      setBills([]);
-      return;
-    }
-    setLoading(true);
-    supabase
-      .from('bills')
-      .select('*')
-      .eq('business_id', selectedBusinessId)
-      .order('due_date', { ascending: true })
-      .then(({ data, error }) => {
+    let cancelled = false;
+
+    async function loadBills() {
+      if (!selectedBusinessId) {
+        setBills([]);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('bills')
+          .select('*')
+          .eq('business_id', selectedBusinessId)
+          .order('due_date', { ascending: true });
+
+        if (cancelled) return;
+
         if (error) {
           setBills([]);
-        } else {
-          const rows = (data ?? []) as any[];
-          const mapped: Bill[] = rows.map((row) => ({
-            id: String(row.id),
-            business_id: row.business_id,
-            vendor: row.vendor,
-            description: row.description ?? null,
-            category: row.category ?? null,
-            amount: Number(row.amount) || 0,
-            issue_date: row.issue_date,
-            due_date: row.due_date,
-            status: row.status === 'PAID' ? 'PAID' : 'OPEN',
-            payment_method: row.payment_method ?? null,
-            notes: row.notes ?? null,
-            paid_at: row.paid_at ?? null,
-            is_recurring: row.is_recurring ?? false,
-            recurring_interval: row.recurring_interval ?? null,
-            recurring_next_due_date: row.recurring_next_due_date ?? null,
-            reminder_days_before:
-              row.reminder_days_before !== null &&
-              row.reminder_days_before !== undefined
-                ? Number(row.reminder_days_before)
-                : null,
-          }));
-          setBills(mapped);
+          return;
         }
-      })
-      .finally(() => setLoading(false));
+
+        const rows = (data ?? []) as any[];
+        const mapped: Bill[] = rows.map((row) => ({
+          id: String(row.id),
+          business_id: row.business_id,
+          vendor: row.vendor,
+          description: row.description ?? null,
+          category: row.category ?? null,
+          amount: Number(row.amount) || 0,
+          issue_date: row.issue_date,
+          due_date: row.due_date,
+          status: row.status === 'PAID' ? 'PAID' : 'OPEN',
+          payment_method: row.payment_method ?? null,
+          notes: row.notes ?? null,
+          paid_at: row.paid_at ?? null,
+          is_recurring: row.is_recurring ?? false,
+          recurrence_frequency: row.recurrence_frequency ?? null,
+          recurring_interval: row.recurring_interval ?? null,
+          recurring_next_due_date: row.recurring_next_due_date ?? null,
+          reminder_days_before:
+            row.reminder_days_before !== null &&
+            row.reminder_days_before !== undefined
+              ? Number(row.reminder_days_before)
+              : null,
+        }));
+        setBills(mapped);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadBills();
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedBusinessId]);
 
   const today = new Date();
@@ -243,6 +261,7 @@ function BillingSection({
       notes: saved.notes ?? null,
       paid_at: saved.paid_at ?? null,
       is_recurring: saved.is_recurring ?? false,
+      recurrence_frequency: saved.recurrence_frequency ?? null,
       recurring_interval: saved.recurring_interval ?? null,
       recurring_next_due_date: saved.recurring_next_due_date ?? null,
       reminder_days_before:
@@ -616,6 +635,9 @@ function BillingSection({
                   due_date: '',
                   payment_method: '',
                   notes: '',
+                  is_recurring: false,
+                  recurrence_frequency: null,
+                  reminder_days_before: 7,
                 });
               }}
               className="text-xs text-slate-400 hover:text-slate-200"

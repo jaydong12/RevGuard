@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AuthCard } from '../../components/AuthCard';
@@ -11,6 +11,14 @@ function classNames(...xs: Array<string | false | null | undefined>) {
 }
 
 export default function SignupPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
+      <SignupInner />
+    </Suspense>
+  );
+}
+
+function SignupInner() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get('redirect') || params.get('next') || '/dashboard';

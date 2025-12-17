@@ -61,7 +61,7 @@ export function useTransactions(
         filters.to
       );
 
-      const query = supabase
+      let query = supabase
         .from('transactions')
         .select('*')
         .eq('business_id', businessId)

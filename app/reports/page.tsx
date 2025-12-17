@@ -393,7 +393,7 @@ async function fetchTransactionsByRange(params: {
     const selectWithoutTax =
       'id,date,amount,category,description,business_id,customer_id,customers(name,business_id)';
 
-    let res = await supabase
+    let res: any = await supabase
       .from('transactions')
       // Include customer_id and a joined customer name when possible.
       // The join works when the FK relationship exists in Supabase schema.
@@ -444,7 +444,7 @@ async function fetchUnassignedRevenueTxsPage(params: {
     'id,date,amount,description,category,business_id,customer_id,tax_category,tax_status,tax_year';
   const selectWithoutTax = 'id,date,amount,description,category,business_id,customer_id';
 
-  let res = await supabase
+  let res: any = await supabase
     .from('transactions')
     .select(selectWithTax, { count: 'exact' })
     .eq('business_id', businessId)

@@ -74,7 +74,7 @@ export default async function ReportsPrintPage({
   const selectWithoutTax =
     'id,date,amount,category,description,business_id,customer_id,customers(name)';
 
-  let res = await supabase
+  let res: any = await supabase
     .from('transactions')
     .select(selectWithTax)
     .eq('business_id', businessId)

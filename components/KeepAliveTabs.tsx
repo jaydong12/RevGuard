@@ -56,19 +56,11 @@ export default function KeepAliveTabs({ children }: Props) {
 
   const entries = useMemo(() => Array.from(cacheRef.current.entries()), [pathname]);
 
-  const onRender = useCallback(
-    (
-      id: string,
-      phase: 'mount' | 'update',
-      actualDuration: number,
-      baseDuration: number
-    ) => {
+  const onRender = useCallback<React.ProfilerOnRenderCallback>((id, phase, actualDuration, baseDuration) => {
       if (!perfEnabled) return;
       // eslint-disable-next-line no-console
       console.log('[PERF]', { id, phase, actualMs: Math.round(actualDuration), baseMs: Math.round(baseDuration) });
-    },
-    [perfEnabled]
-  );
+    }, [perfEnabled]);
 
   return (
     <>
