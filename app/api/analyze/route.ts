@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 type PeriodMode = 'month' | 'year';
 
@@ -28,6 +27,16 @@ type AIContext = {
 
 export async function POST(request: Request) {
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'Missing OPENAI_API_KEY' },
+        { status: 500 }
+      );
+    }
+
+    const client = new OpenAI({ apiKey });
+
     const body = await request.json();
     const { aiContext } = body as { aiContext: AIContext };
 

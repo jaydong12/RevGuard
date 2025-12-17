@@ -9,15 +9,12 @@ export type AIInsightResult = {
   actions: string[];
 };
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 async function callInsightsModel(params: {
+  openai: OpenAI;
   systemPrompt: string;
   userContext: string;
 }): Promise<AIInsightResult> {
-  const { systemPrompt, userContext } = params;
+  const { openai, systemPrompt, userContext } = params;
 
   const prompt = `
 ${systemPrompt.trim()}
@@ -42,7 +39,7 @@ Respond ONLY with JSON in this exact shape. Do not include any commentary or mar
 }
 `.trim();
 
-  const completion = await client.chat.completions.create({
+  const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.4,
@@ -73,56 +70,84 @@ Respond ONLY with JSON in this exact shape. Do not include any commentary or mar
   };
 }
 
-export async function getDashboardInsights(context: string): Promise<AIInsightResult> {
+export async function getDashboardInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant for a small solo business owner. Explain the period in simple, teenager-friendly language. Focus on cash, income, and expenses.',
     userContext: context,
   });
 }
 
-export async function getTransactionsInsights(context: string): Promise<AIInsightResult> {
+export async function getTransactionsInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant reviewing a list of transactions. Spot spending and income patterns and tell the owner what to fix first.',
     userContext: context,
   });
 }
 
-export async function getInvoicesInsights(context: string): Promise<AIInsightResult> {
+export async function getInvoicesInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant reviewing accounts receivable. Identify slow-paying customers, concentration risk, and simple actions to improve collections.',
     userContext: context,
   });
 }
 
-export async function getBillsInsights(context: string): Promise<AIInsightResult> {
+export async function getBillsInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant reviewing upcoming bills. Explain upcoming cash pressure and suggest a smart order to pay if money is tight.',
     userContext: context,
   });
 }
 
-export async function getCustomersInsights(context: string): Promise<AIInsightResult> {
+export async function getCustomersInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant reviewing customer performance. Identify best and risky customers and suggest simple follow-up actions.',
     userContext: context,
   });
 }
 
-export async function getForecastInsights(context: string): Promise<AIInsightResult> {
+export async function getForecastInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant reviewing a forecast scenario. Explain the risk and reward in plain English and highlight what could go wrong.',
     userContext: context,
   });
 }
 
-export async function getReportInsights(context: string): Promise<AIInsightResult> {
+export async function getReportInsights(
+  openai: OpenAI,
+  context: string
+): Promise<AIInsightResult> {
   return callInsightsModel({
+    openai,
     systemPrompt:
       'You are an AI accountant explaining a financial report. Explain it like you are talking to a 15-year-old running a business. Mention good signs and concerns.',
     userContext: context,
@@ -134,6 +159,13 @@ export async function getAdvisorChatReply(params: {
   question: string;
 }): Promise<string> {
   const { metricsSummary, question } = params;
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY');
+  }
+
+  const openai = new OpenAI({ apiKey });
 
   const prompt = `
 You are an AI accounting coach for a small business owner. You are not a human accountant or a lawyer.
@@ -149,7 +181,7 @@ The owner asks:
 Answer in 1-3 short paragraphs. Do not include JSON, just plain text.
 `.trim();
 
-  const completion = await client.chat.completions.create({
+  const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.5,

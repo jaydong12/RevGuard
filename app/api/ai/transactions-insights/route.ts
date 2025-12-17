@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
 import { supabase } from '../../../../utils/supabaseClient';
 import {
   getTransactionsInsights,
@@ -17,6 +18,19 @@ type RequestBody = {
 
 export async function POST(request: Request) {
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json<AIInsightResult>(
+        {
+          summary: 'AI unavailable. Missing OPENAI_API_KEY.',
+          observations: [],
+          actions: [],
+        },
+        { status: 500 }
+      );
+    }
+    const openai = new OpenAI({ apiKey });
+
     const body = (await request.json()) as Partial<RequestBody>;
     const businessId = body.businessId ?? null;
     const from = body.from ?? null;
@@ -153,7 +167,7 @@ export async function POST(request: Request) {
       ...categoryLines,
     ];
 
-    const insights = await getTransactionsInsights(contextLines.join('\n'));
+    const insights = await getTransactionsInsights(openai, contextLines.join('\n'));
 
     return NextResponse.json<AIInsightResult>(insights, { status: 200 });
   } catch (err) {
