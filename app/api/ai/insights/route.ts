@@ -2,15 +2,14 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { supabase } from '../../../../utils/supabaseClient';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 // AI Money Story endpoint:
 // - Accepts { businessId, from, to } in the body.
 // - Pulls that business's transactions from Supabase.
 // - Summarizes income, expenses, and net profit.
 // - Calls OpenAI to turn the numbers into a plain-English “money story”.
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 type MoneyStoryRequest = {
   businessId: string;
@@ -26,6 +25,20 @@ type MoneyStoryResponse = {
 
 export async function POST(request: Request) {
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          summary: 'Connect AI key',
+          observations: [],
+          actions: [],
+        } satisfies MoneyStoryResponse,
+        { status: 200 }
+      );
+    }
+
+    const client = new OpenAI({ apiKey });
+
     const body = (await request.json()) as Partial<MoneyStoryRequest>;
     const businessId = body.businessId ?? null;
     const from = body.from ?? null;

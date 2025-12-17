@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { supabase } from '../../../../utils/supabaseClient';
-import { getDashboardInsights, type AIInsightResult } from '../../../../lib/aiInsights';
+import { getDashboardInsights } from '../../../../lib/aiInsights';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+type DashboardInsightsResponse = {
+  summary: string;
+  recommendations: string[];
+  // Kept for backward-compat with older clients
+  observations?: string[];
+  actions?: string[];
+};
 
 type DashboardInsightsRequest = {
   businessId: string;
@@ -12,17 +20,22 @@ type DashboardInsightsRequest = {
   to: string;
 };
 
+export async function GET() {
+  // Build-safe: never throw during static evaluation / page data collection.
+  // This endpoint is intended to be called by the client with POST.
+  return NextResponse.json<DashboardInsightsResponse>(
+    { summary: 'Connect AI key', recommendations: [] },
+    { status: 200 }
+  );
+}
+
 export async function POST(request: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json<AIInsightResult>(
-        {
-          summary: 'AI unavailable. Missing OPENAI_API_KEY.',
-          observations: [],
-          actions: [],
-        },
-        { status: 500 }
+      return NextResponse.json<DashboardInsightsResponse>(
+        { summary: 'Connect AI key', recommendations: [] },
+        { status: 200 }
       );
     }
     const openai = new OpenAI({ apiKey });
@@ -33,12 +46,11 @@ export async function POST(request: Request) {
     const to = body.to ?? null;
 
     if (!businessId || !from || !to) {
-      return NextResponse.json<AIInsightResult>(
+      return NextResponse.json<DashboardInsightsResponse>(
         {
           summary:
             'Missing business or date range. Please select a business and period, then try again.',
-          observations: [],
-          actions: [],
+          recommendations: [],
         },
         { status: 400 }
       );
@@ -53,12 +65,11 @@ export async function POST(request: Request) {
       .order('date', { ascending: true });
 
     if (error) {
-      return NextResponse.json<AIInsightResult>(
+      return NextResponse.json<DashboardInsightsResponse>(
         {
           summary:
             'There was an error loading your transactions for this period. Try again in a moment.',
-          observations: [],
-          actions: [],
+          recommendations: [],
         },
         { status: 500 }
       );
@@ -72,12 +83,11 @@ export async function POST(request: Request) {
     }));
 
     if (txs.length === 0) {
-      return NextResponse.json<AIInsightResult>(
+      return NextResponse.json<DashboardInsightsResponse>(
         {
           summary:
             'No transactions found for this business in the selected period yet. Once you add some activity, the AI can explain what is happening.',
-          observations: [],
-          actions: [],
+          recommendations: [],
         },
         { status: 200 }
       );
@@ -129,15 +139,23 @@ export async function POST(request: Request) {
 
     const insights = await getDashboardInsights(openai, contextLines.join('\n'));
 
-    return NextResponse.json<AIInsightResult>(insights, { status: 200 });
+    // Return a stable shape for the frontend, while keeping backwards-compat fields.
+    return NextResponse.json<DashboardInsightsResponse>(
+      {
+        summary: insights.summary,
+        recommendations: insights.actions ?? [],
+        observations: insights.observations ?? [],
+        actions: insights.actions ?? [],
+      },
+      { status: 200 }
+    );
   } catch (err) {
     console.error('Dashboard insights error:', err);
-    return NextResponse.json<AIInsightResult>(
+    return NextResponse.json<DashboardInsightsResponse>(
       {
         summary:
           'Something went wrong while generating your dashboard insights. Please try again shortly.',
-        observations: [],
-        actions: [],
+        recommendations: [],
       },
       { status: 500 }
     );

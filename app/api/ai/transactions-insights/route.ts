@@ -6,6 +6,9 @@ import {
   type AIInsightResult,
 } from '../../../../lib/aiInsights';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 type TypeFilter = 'all' | 'income' | 'expense';
 
 type RequestBody = {
@@ -22,11 +25,11 @@ export async function POST(request: Request) {
     if (!apiKey) {
       return NextResponse.json<AIInsightResult>(
         {
-          summary: 'AI unavailable. Missing OPENAI_API_KEY.',
+          summary: 'Connect AI key',
           observations: [],
           actions: [],
         },
-        { status: 500 }
+        { status: 200 }
       );
     }
     const openai = new OpenAI({ apiKey });

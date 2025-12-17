@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 type CategoryAmount = { category: string; amount: number };
 
 type RunRequest = {
@@ -25,8 +28,8 @@ export async function POST(req: Request) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
-        { error: 'Missing OPENAI_API_KEY' },
-        { status: 500 }
+        { error: 'Connect AI key' },
+        { status: 200 }
       );
     }
 

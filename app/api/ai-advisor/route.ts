@@ -1,5 +1,8 @@
 import OpenAI from 'openai';
 
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 type Mode = 'support' | 'how-to' | 'bug' | 'cfo';
 
 function detectMode(message: string): Mode {

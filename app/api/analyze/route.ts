@@ -30,8 +30,8 @@ export async function POST(request: Request) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: 'Missing OPENAI_API_KEY' },
-        { status: 500 }
+        { summary: 'Connect AI key', recommendations: [] as string[] },
+        { status: 200 }
       );
     }
 
