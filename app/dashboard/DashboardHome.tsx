@@ -1742,13 +1742,13 @@ export default function DashboardHome() {
           .maybeSingle();
 
         const basePayload: any = {
-          user_id: userId,
-          business_id: selectedBusinessId,
-          preset: insightPreset,
-          from_date: from,
-          to_date: to,
-          prompt: extraPrompt ?? null,
-          result,
+            user_id: userId,
+            business_id: selectedBusinessId,
+            preset: insightPreset,
+            from_date: from,
+            to_date: to,
+            prompt: extraPrompt ?? null,
+            result,
         };
 
         const saveQuery = existing?.id

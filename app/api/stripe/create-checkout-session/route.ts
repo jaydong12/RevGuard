@@ -5,6 +5,10 @@ import { createClient } from '@supabase/supabase-js';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function normalizeSiteUrl(raw: string) {
+  return raw.replace(/\/+$/, '');
+}
+
 export async function POST(request: Request) {
   try {
     const secretKey = process.env.STRIPE_SECRET_KEY;
@@ -12,7 +16,12 @@ export async function POST(request: Request) {
     const couponId = process.env.STRIPE_COUPON_ID;
 
     const origin = request.headers.get('origin') ?? new URL(request.url).origin;
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || origin;
+    const appUrl = normalizeSiteUrl(
+      process.env.NEXT_PUBLIC_SITE_URL ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        process.env.APP_URL ||
+        origin
+    );
 
     if (!secretKey) {
       return NextResponse.json(

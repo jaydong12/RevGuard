@@ -1,13 +1,25 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { AuthCard } from '../../components/AuthCard';
 import { supabase } from '../../utils/supabaseClient';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
+}
+
+function setAuthCookie(token: string | null) {
+  try {
+    if (!token) {
+      document.cookie = `rg_at=; Path=/; Max-Age=0; SameSite=Lax`;
+      return;
+    }
+    document.cookie = `rg_at=${encodeURIComponent(token)}; Path=/; Max-Age=604800; SameSite=Lax`;
+  } catch {
+    // ignore
+  }
 }
 
 export default function SignupPage() {
@@ -20,8 +32,6 @@ export default function SignupPage() {
 
 function SignupInner() {
   const router = useRouter();
-  const params = useSearchParams();
-  const next = params.get('redirect') || params.get('next') || '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -45,24 +55,6 @@ function SignupInner() {
     return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
   }
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      if (data.session) {
-        const userId = data.session.user.id;
-        const status = await getSubscriptionStatus(userId);
-
-        if (status !== 'active') router.replace('/pricing');
-        else router.replace(next);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [router]);
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -83,12 +75,13 @@ function SignupInner() {
 
       // If email confirmation is off, we get a session immediately.
       if (data.session) {
+        setAuthCookie(data.session.access_token ?? null);
         // Paywall: if not active, redirect to pricing after signup.
         const userId = data.session.user.id;
         const status = await getSubscriptionStatus(userId);
 
         if (status !== 'active') router.replace('/pricing');
-        else router.replace(next);
+        else router.replace('/dashboard');
         return;
       }
 
@@ -112,7 +105,7 @@ function SignupInner() {
               Already have an account?{' '}
               <Link
                 className="text-emerald-200 hover:text-emerald-100"
-                href={`/login?redirect=${encodeURIComponent(next)}`}
+                href={`/login`}
               >
                 Log in
               </Link>

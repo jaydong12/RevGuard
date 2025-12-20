@@ -1,13 +1,25 @@
 'use client';
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { AuthCard } from '../../components/AuthCard';
 import { supabase } from '../../utils/supabaseClient';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
+}
+
+function setAuthCookie(token: string | null) {
+  try {
+    if (!token) {
+      document.cookie = `rg_at=; Path=/; Max-Age=0; SameSite=Lax`;
+      return;
+    }
+    document.cookie = `rg_at=${encodeURIComponent(token)}; Path=/; Max-Age=604800; SameSite=Lax`;
+  } catch {
+    // ignore
+  }
 }
 
 export default function LoginPage() {
@@ -20,8 +32,6 @@ export default function LoginPage() {
 
 function LoginInner() {
   const router = useRouter();
-  const params = useSearchParams();
-  const next = params.get('redirect') || params.get('next') || '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -44,24 +54,6 @@ function LoginInner() {
     return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
   }
 
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      if (data.session) {
-        const userId = data.session.user.id;
-        const status = await getSubscriptionStatus(userId);
-
-        if (status !== 'active') router.replace('/pricing');
-        else router.replace(next);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [router]);
-
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -77,6 +69,7 @@ function LoginInner() {
       if (error) throw error;
 
       const { data: sess } = await supabase.auth.getSession();
+      setAuthCookie(sess.session?.access_token ?? null);
       const userId = sess.session?.user?.id ?? null;
       if (!userId) {
         router.replace('/login?redirect=/pricing');
@@ -86,7 +79,7 @@ function LoginInner() {
       const status = await getSubscriptionStatus(userId);
 
       if (status !== 'active') router.replace('/pricing');
-      else router.replace(next);
+      else router.replace('/dashboard');
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error('LOGIN_ERROR', err);
@@ -105,8 +98,11 @@ function LoginInner() {
         setError('Enter your email first.');
         return;
       }
+      const siteUrl =
+        (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/+$/, '') ||
+        window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${siteUrl}/login`,
       });
       if (error) throw error;
       setNote('Password reset email sent. Check your inbox.');
@@ -137,7 +133,7 @@ function LoginInner() {
                 New to RevGuard?{' '}
                 <Link
                   className="text-emerald-200 hover:text-emerald-100"
-                  href={`/signup?redirect=${encodeURIComponent(next)}`}
+                  href="/signup"
                 >
                   Create an account
                 </Link>

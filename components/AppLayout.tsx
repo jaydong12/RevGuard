@@ -9,6 +9,19 @@ import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../utils/supabaseClient';
 
+function setAuthCookie(token: string | null) {
+  try {
+    if (!token) {
+      document.cookie = `rg_at=; Path=/; Max-Age=0; SameSite=Lax`;
+      return;
+    }
+    // JS-readable cookie so middleware can gate routes. (Auth is already in localStorage.)
+    document.cookie = `rg_at=${encodeURIComponent(token)}; Path=/; Max-Age=604800; SameSite=Lax`;
+  } catch {
+    // ignore
+  }
+}
+
 type NavItem = {
   label: string;
   href: string;
@@ -287,6 +300,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
       setSessionUserId(data.session?.user?.id ?? null);
+      setAuthCookie(data.session?.access_token ?? null);
       void checkSubscription(data.session ?? null);
     })();
 
@@ -301,6 +315,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
 
       setSessionUserId(nextUserId);
+      setAuthCookie(session?.access_token ?? null);
       void checkSubscription(session ?? null);
     });
 

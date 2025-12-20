@@ -5,6 +5,7 @@ import {
   getTransactionsInsights,
   type AIInsightResult,
 } from '../../../../lib/aiInsights';
+import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -21,6 +22,9 @@ type RequestBody = {
 
 export async function POST(request: Request) {
   try {
+    const gate = await requireActiveSubscription(request);
+    if (gate instanceof NextResponse) return gate;
+
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json<AIInsightResult>(
@@ -56,44 +60,19 @@ export async function POST(request: Request) {
       ? authHeader.slice(7)
       : null;
 
-    if (!token) {
-      return NextResponse.json<AIInsightResult>(
-        {
-          summary: 'Please log in again.',
-          observations: [],
-          actions: [],
-        },
-        { status: 401 }
-      );
-    }
-
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
-        global: { headers: { Authorization: `Bearer ${token}` } },
+        global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
         auth: { persistSession: false, autoRefreshToken: false },
       }
     );
-
-    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
-    const user = userRes?.user ?? null;
-    if (userErr || !user) {
-      return NextResponse.json<AIInsightResult>(
-        {
-          summary: 'Please log in again.',
-          observations: [],
-          actions: [],
-        },
-        { status: 401 }
-      );
-    }
 
     let query = supabase
       .from('transactions')
       .select('*')
       .eq('business_id', businessId)
-      .eq('user_id', user.id)
       .gte('date', from)
       .lte('date', to);
 

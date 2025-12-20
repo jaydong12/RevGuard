@@ -137,6 +137,11 @@ export default function SettingsPage() {
     setSigningOut(true);
     try {
       await supabase.auth.signOut();
+      try {
+        document.cookie = `rg_at=; Path=/; Max-Age=0; SameSite=Lax`;
+      } catch {
+        // ignore
+      }
       router.push('/login');
     } finally {
       setSigningOut(false);

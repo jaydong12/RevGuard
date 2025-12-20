@@ -1,12 +1,96 @@
 'use client';
 
-import React from 'react';
-import Link from 'next/link';
+import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
+import { supabase } from '../../../utils/supabaseClient';
+
+function setAuthCookie(token: string | null) {
+  try {
+    if (!token) {
+      document.cookie = `rg_at=; Path=/; Max-Age=0; SameSite=Lax`;
+      return;
+    }
+    document.cookie = `rg_at=${encodeURIComponent(token)}; Path=/; Max-Age=604800; SameSite=Lax`;
+  } catch {
+    // ignore
+  }
+}
 
 export default function BillingSuccessClient() {
+  const router = useRouter();
   const params = useSearchParams();
   const sessionId = params.get('session_id');
+
+  const [status, setStatus] = useState<'checking' | 'active' | 'inactive' | 'error'>('checking');
+  const [detail, setDetail] = useState<string>('Finalizing your subscription…');
+
+  useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const session = data.session ?? null;
+        if (!session) {
+          if (!alive) return;
+          setStatus('inactive');
+          setDetail('Please log in to finish activating your subscription.');
+          router.replace('/login?redirect=/pricing');
+          return;
+        }
+
+        setAuthCookie(session.access_token ?? null);
+        const userId = session.user.id;
+
+        const started = Date.now();
+        const timeoutMs = 45_000;
+
+        while (alive && Date.now() - started < timeoutMs) {
+          const first = await supabase
+            .from('business')
+            .select('id, subscription_status')
+            .eq('owner_id', userId)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          const sub = String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+          if (sub === 'active') {
+            if (!alive) return;
+            setStatus('active');
+            setDetail('Subscription active. Redirecting to your dashboard…');
+            // Ensure any server components revalidate if needed.
+            router.refresh();
+            router.replace('/dashboard');
+            return;
+          }
+
+          if (!alive) return;
+          setStatus('checking');
+          setDetail('Processing payment… (this can take a few seconds)');
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+
+        if (!alive) return;
+        setStatus('inactive');
+        setDetail('Payment received, but activation is still processing. Go to Pricing to retry.');
+        router.replace('/pricing');
+      } catch (e: any) {
+        // eslint-disable-next-line no-console
+        console.error('BILLING_SUCCESS_ERROR', e);
+        if (!alive) return;
+        setStatus('error');
+        setDetail(e?.message ?? 'Could not verify subscription status.');
+      }
+    }
+
+    void run();
+
+    return () => {
+      alive = false;
+    };
+  }, [router]);
 
   return (
     <main className="max-w-2xl mx-auto">
@@ -19,28 +103,25 @@ export default function BillingSuccessClient() {
             You’re all set
           </h1>
           <p className="mt-2 text-sm md:text-base text-slate-300 leading-relaxed">
-            Your checkout completed successfully. You can head back to the app.
+            {detail}
           </p>
+          <div className="mt-4 text-[11px] text-slate-500">
+            Status:{' '}
+            <span className="text-slate-200">
+              {status === 'checking'
+                ? 'Checking…'
+                : status === 'active'
+                ? 'Active'
+                : status === 'inactive'
+                ? 'Inactive'
+                : 'Error'}
+            </span>
+          </div>
           {sessionId ? (
             <div className="mt-4 text-[11px] text-slate-500">
               Session: <span className="text-slate-300">{sessionId}</span>
             </div>
           ) : null}
-
-          <div className="mt-6 flex flex-col sm:flex-row gap-3">
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 transition"
-            >
-              Go to dashboard
-            </Link>
-            <Link
-              href="/transactions"
-              className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-900/70 transition"
-            >
-              View transactions
-            </Link>
-          </div>
         </div>
       </div>
     </main>

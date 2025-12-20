@@ -15,6 +15,7 @@ ADMIN_API_KEY=...
 
 # Used for Stripe success/cancel URLs (set to your deployed origin)
 # Example: https://your-app.example.com
+NEXT_PUBLIC_SITE_URL=
 NEXT_PUBLIC_APP_URL=
 
 
