@@ -271,7 +271,6 @@ export async function POST(req: Request) {
           .from('transactions')
           .select('amount, date')
           .eq('business_id', effectiveBusinessId)
-          .eq('user_id', user.id)
           .gte('date', from30Str)
           .lte('date', todayStr);
 
@@ -374,7 +373,6 @@ Keep it <=5 lines.
               kpis,
               cfo_context: cfoContext,
               memory: memoryForPrompt,
-              memory_engine_v1: memoryEngineContext || null,
               user_message: text,
             }
           : {
@@ -382,7 +380,6 @@ Keep it <=5 lines.
               kpis,
               ui_context: supportContext,
               memory: memoryForPrompt,
-              memory_engine_v1: memoryEngineContext || null,
               user_message: text,
             };
 
@@ -394,6 +391,13 @@ Keep it <=5 lines.
     "memory_append": "string",
     "facts_merge": { },
     "preferences_merge": { }
+  },
+  "memory_update": {
+    "confidence": 0.0,
+    "business_dna_merge": { },
+    "owner_preferences_merge": { },
+    "ai_assumptions_merge": { },
+    "decision_event": null
   }
 }
 Rules:
@@ -409,6 +413,11 @@ Rules:
 - new_recommendations: 0-3 items, each actionable and specific (no duplicates of "What to do next").
 - memory_patch.memory_append: <= 300 chars, factual, no opinions.
 - facts_merge / preferences_merge: only stable facts/preferences; omit unknowns.
+- memory_update:
+  - Only include when confidence >= 0.85 AND the signal is stable (repeated behavior, explicit preference, consistent overrides).
+  - If confidence is 0.5–0.84: DO NOT include memory_update. Keep it silent.
+  - business_dna_merge / owner_preferences_merge / ai_assumptions_merge must be small, flat-ish JSON merges (no giant blobs).
+  - decision_event: either null OR a short string describing an override/decision (<= 220 chars).
 - Analogy throttle (preferences):
   - Read memory.preferences.analogy_cooldown (number). If missing, assume 0.
   - If analogy_cooldown > 0: do NOT use analogies, and set preferences_merge.analogy_cooldown to (analogy_cooldown - 1).
@@ -422,7 +431,10 @@ Rules:
         temperature: 0.4,
         response_format: { type: 'json_object' } as any,
         messages: [
-          { role: 'system', content: system },
+          {
+            role: 'system',
+            content: memoryEngineContext ? `${system}\n\n${memoryEngineContext}` : system,
+          },
           { role: 'user', content: `${jsonShape}\n\nInput:\n${JSON.stringify(promptPayload)}` },
         ],
       });
@@ -464,6 +476,8 @@ Rules:
             : {},
       };
 
+      const memoryUpdate = parsed?.memory_update ?? null;
+
       // Map the advisor's stable facts/preferences into Memory Engine v1 (best-effort).
       // We only auto-update when the response is not explicitly low-confidence.
       try {
@@ -473,7 +487,51 @@ Rules:
           (memoryPatch && Object.keys(memoryPatch.preferences_merge || {}).length > 0) ||
           Boolean(memoryPatch.memory_append);
 
-        if (!lowConfidence && hasPatch) {
+        // 1) Model-provided memory_update (preferred): only apply when confidence is high.
+        const conf = Number(memoryUpdate?.confidence ?? 0);
+        const hasModelUpdate =
+          memoryUpdate &&
+          Number.isFinite(conf) &&
+          conf >= 0.85 &&
+          (Object.keys(memoryUpdate?.business_dna_merge ?? {}).length > 0 ||
+            Object.keys(memoryUpdate?.owner_preferences_merge ?? {}).length > 0 ||
+            Object.keys(memoryUpdate?.ai_assumptions_merge ?? {}).length > 0 ||
+            Boolean(memoryUpdate?.decision_event));
+
+        // 2) Fallback: derive a conservative update from memory_patch (existing system).
+        const shouldFallbackUpdate = !hasModelUpdate && !lowConfidence && hasPatch;
+
+        // Detect user overrides and log as decision history (server-side heuristic).
+        const userOverrideSignal =
+          typeof text === 'string' &&
+          /\b(ignore|don['’]t|do not|stop|actually|instead|override|never|skip)\b/i.test(text)
+            ? text.trim().slice(0, 220)
+            : null;
+
+        if (hasModelUpdate) {
+          await applyMemoryDirective({
+            supabase,
+            businessId: effectiveBusinessId,
+            current: memoryEngineRow,
+            directive: {
+              confidence: conf,
+              needs_confirmation: false,
+              question: null,
+              update: {
+                business_dna: memoryUpdate.business_dna_merge ?? {},
+                owner_preferences: memoryUpdate.owner_preferences_merge ?? {},
+                ai_assumptions: memoryUpdate.ai_assumptions_merge ?? {},
+                decision_event: memoryUpdate.decision_event || userOverrideSignal
+                  ? {
+                      at: new Date().toISOString(),
+                      source: 'ai_advisor',
+                      note: String(memoryUpdate.decision_event || userOverrideSignal).slice(0, 220),
+                    }
+                  : null,
+              },
+            },
+          });
+        } else if (shouldFallbackUpdate) {
           await applyMemoryDirective({
             supabase,
             businessId: effectiveBusinessId,
