@@ -20,7 +20,6 @@ export interface Transaction {
   status: TransactionStatus | null;
   source: TransactionSource | null;
   notes: string | null;
-  user_id?: string;
   business_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;

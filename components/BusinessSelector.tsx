@@ -31,29 +31,17 @@ export function BusinessSelector({ value, onChange }: Props) {
       try {
         const { data: sess } = await supabase.auth.getSession();
         const userId = sess.session?.user?.id ?? null;
-
-        // Prefer owner-scoped selection; fall back if owner_id doesn't exist yet.
-        let res = userId
-          ? await supabase
-              .from('business')
-              .select('id, name, created_at, owner_id')
-              .eq('owner_id', userId)
-              .order('created_at', { ascending: true })
-          : await supabase
-              .from('business')
-              .select('id, name, created_at')
-              .order('created_at', { ascending: true });
-
-        if (res.error && userId) {
-          const msg = String((res.error as any)?.message ?? '');
-          if (msg.includes('owner_id')) {
-            // owner_id column not migrated yet.
-            res = await supabase
-              .from('business')
-              .select('id, name, created_at')
-              .order('created_at', { ascending: true });
-          }
+        if (!userId) {
+          setError('Please log in to load businesses.');
+          setBusinesses([]);
+          return;
         }
+
+        const res = await supabase
+          .from('business')
+          .select('id, name, created_at, owner_id')
+          .eq('owner_id', userId)
+          .order('created_at', { ascending: true });
 
         const data = res.data;
         const error = res.error as any;
@@ -63,7 +51,14 @@ export function BusinessSelector({ value, onChange }: Props) {
         if (error) {
           // eslint-disable-next-line no-console
           console.error('BUSINESS_SELECTOR_LOAD_ERROR', error);
-          setError('Could not load businesses.');
+          const msg = String((error as any)?.message ?? '');
+          if (msg.toLowerCase().includes('owner_id')) {
+            setError(
+              'Database migration required: add public.business.owner_id (run `supabase/business_add_owner_id.sql`), then reload.'
+            );
+          } else {
+            setError('Could not load businesses.');
+          }
           setBusinesses([]);
           return;
         }
@@ -118,10 +113,14 @@ export function BusinessSelector({ value, onChange }: Props) {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const userId = sess.session?.user?.id ?? null;
+      if (!userId) {
+        setError('Please log in to create a business.');
+        return;
+      }
 
       const { data, error } = await supabase
         .from('business')
-        .insert(userId ? { name, owner_id: userId } : { name })
+        .insert({ name, owner_id: userId })
         .select('id, name')
         .single();
 

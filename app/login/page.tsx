@@ -29,12 +29,33 @@ function LoginInner() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
+  async function getSubscriptionStatus(userId: string): Promise<string> {
+    const first = await supabase
+      .from('business')
+      .select('id, subscription_status')
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    // If the row doesn't exist yet (trigger not applied / race), treat as inactive (paywall).
+    if (first.error || !first.data?.id) return 'inactive';
+
+    return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+  }
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      if (data.session) router.replace('/dashboard');
+      if (data.session) {
+        const userId = data.session.user.id;
+        const status = await getSubscriptionStatus(userId);
+
+        if (status !== 'active') router.replace('/pricing');
+        else router.replace(next);
+      }
     })();
     return () => {
       mounted = false;
@@ -54,7 +75,18 @@ function LoginInner() {
 
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
-      router.replace(next);
+
+      const { data: sess } = await supabase.auth.getSession();
+      const userId = sess.session?.user?.id ?? null;
+      if (!userId) {
+        router.replace('/login?redirect=/pricing');
+        return;
+      }
+
+      const status = await getSubscriptionStatus(userId);
+
+      if (status !== 'active') router.replace('/pricing');
+      else router.replace(next);
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error('LOGIN_ERROR', err);

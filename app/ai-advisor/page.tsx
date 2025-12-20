@@ -4,12 +4,12 @@
 // business-aware summaries and coaching.
 
 import React, { useState } from 'react';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
 import AiAdvisorSection from '../../components/AiAdvisorSection';
+import { useAppData } from '../../components/AppDataProvider';
 
 export default function AiAdvisorPage() {
   const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
+    useAppData();
 
   return (
     <main className="space-y-4">

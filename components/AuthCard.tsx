@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
@@ -27,7 +28,14 @@ export function AuthCard({
       <div className={classNames('w-full', compact ? 'max-w-sm' : 'max-w-md')}>
         <div className="mb-4 flex items-center justify-center">
           <Link href="/" className="inline-flex items-center gap-2">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-400 via-sky-400 to-blue-500 shadow-lg shadow-emerald-500/30" />
+            <Image
+              src="/revguard-r.svg"
+              alt="RevGuard"
+              width={40}
+              height={40}
+              className="h-10 w-10"
+              priority
+            />
             <div className="text-left">
               <div className="text-sm font-semibold tracking-tight text-slate-100">
                 RevGuard

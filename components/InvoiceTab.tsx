@@ -1,10 +1,11 @@
 'use client';
 
-import React, { useEffect, useState, FormEvent } from 'react';
+import React, { useState, FormEvent } from 'react';
 import clsx from 'clsx';
 import { supabase } from '../utils/supabaseClient';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { useQueryClient } from '@tanstack/react-query';
 
 type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 
@@ -378,6 +379,12 @@ type InvoiceItem = {
 type InvoiceTabProps = {
   businessId: string | null;
   businessName?: string | null;
+  /** Provided by shared app cache so this tab doesn't fetch on mount. */
+  invoices?: Invoice[];
+  /** Provided by shared app cache so this tab doesn't fetch supabase auth on mount. */
+  userId?: string | null;
+  loading?: boolean;
+  error?: string | null;
 };
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -408,10 +415,19 @@ function daysBetween(from: string, to: string) {
   return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
-const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [loading, setLoading] = useState(false);
+const InvoiceTab: React.FC<InvoiceTabProps> = ({
+  businessId,
+  businessName,
+  invoices: invoicesProp,
+  userId: userIdProp,
+  loading: loadingProp,
+  error: errorProp,
+}) => {
+  const queryClient = useQueryClient();
+  const invoices = invoicesProp ?? [];
+  const loading = Boolean(loadingProp);
   const [error, setError] = useState<string | null>(null);
+  const userId = userIdProp ?? null;
 
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -428,33 +444,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
     null
   );
 
-  // Load invoices for the selected business
-  useEffect(() => {
-    const fetchInvoices = async () => {
-      if (!businessId) {
-        setInvoices([]);
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      const { data, error: qError } = await supabase
-        .from('invoices')
-        .select(
-          'id, business_id, invoice_number, client_name, issue_date, due_date, status, subtotal, tax, total, notes, transaction_id, created_at'
-        )
-        .eq('business_id', businessId)
-        .order('created_at', { ascending: false });
-
-      if (qError) {
-        setError('Could not load invoices.');
-      } else if (data) {
-        setInvoices(data as Invoice[]);
-      }
-      setLoading(false);
-    };
-
-    void fetchInvoices();
-  }, [businessId]);
+  const effectiveError = error || errorProp;
 
   // Recalculate subtotal/tax/total from line items (tax is a flat dollar amount)
   const recalcTotalsFromItems = (draftItems: InvoiceItem[], taxValue?: number) => {
@@ -535,6 +525,10 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
       setError('Select a business first.');
       return;
     }
+    if (!userId) {
+      setError('Please log in to save invoices.');
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -564,6 +558,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
           .from('invoices')
           .update(basePayload)
           .eq('id', editingInvoiceId)
+          .eq('business_id', businessId)
           .select('*')
           .single();
 
@@ -609,12 +604,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
           }
         }
 
-        const updatedInvoice = updated as Invoice;
-        setInvoices((prev) =>
-          prev.map((i) =>
-            i.id === editingInvoiceId ? updatedInvoice : i
-          )
-        );
+        await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
       } else {
         // CREATE new invoice
         const {
@@ -660,7 +650,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
           }
         }
 
-        setInvoices((prev) => [created, ...prev]);
+        await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
       }
 
       // Reset form after save
@@ -719,11 +709,16 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
     nextStatus: InvoiceStatus
   ) => {
     setError(null);
+    if (!userId) {
+      setError('Please log in to update invoices.');
+      return;
+    }
 
     const { data, error: updError } = await supabase
       .from('invoices')
       .update({ status: nextStatus })
       .eq('id', inv.id)
+      .eq('business_id', inv.business_id)
       .select('*')
       .single();
 
@@ -750,9 +745,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
         transaction_id: row.transaction_id ?? inv.transaction_id ?? null,
       };
 
-      setInvoices((prev) =>
-        prev.map((i) => (i.id === inv.id ? updated : i))
-      );
+      await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
 
       if (nextStatus === 'draft') {
         await beginEditInvoice(updated);
@@ -767,11 +760,17 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
     setMarkingId(inv.id);
 
     try {
+      if (!userId) {
+        setError('Please log in to mark invoices as paid.');
+        return;
+      }
+
       // 1) Mark invoice as paid in Supabase
       const { data: updatedInvoice, error: invError } = await supabase
         .from('invoices')
         .update({ status: 'paid' })
         .eq('id', inv.id)
+        .eq('business_id', inv.business_id)
         .select('*')
         .single();
 
@@ -798,9 +797,6 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
         txPayload.business_id = paidInvoice.business_id;
       }
 
-      // Demo schema: keep consistent user_id
-      txPayload.user_id = 'demo-user';
-
       const { error: txError } = await supabase
         .from('transactions')
         .insert(txPayload);
@@ -814,12 +810,11 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
         );
       }
 
-      // 3) Update local state so UI reflects change
-      setInvoices((prev) =>
-        prev.map((i) =>
-          i.id === paidInvoice.id ? { ...i, status: 'paid' } : i
-        )
-      );
+      // 3) Refresh cached lists (invoice status + created transaction).
+      await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
+      if (paidInvoice.business_id) {
+        await queryClient.invalidateQueries({ queryKey: ['transactions', paidInvoice.business_id] });
+      }
     } finally {
       setMarkingId(null);
     }
@@ -1006,9 +1001,9 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({ businessId, businessName }) => 
         </p>
       )}
 
-      {error && (
+      {effectiveError && (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-          {error}
+          {effectiveError}
         </div>
       )}
 

@@ -65,33 +65,48 @@ end $$;
 alter table public.business_settings enable row level security;
 
 -- Read/write only for the business owner.
--- Fallback for local/demo environments: if owner_id is NULL and there's no auth session, allow access.
 create policy "business_settings_select_owner"
   on public.business_settings
   for select
   using (
-    owner_id = auth.uid()
-    or (owner_id is null and auth.uid() is null)
+    exists (
+      select 1
+      from public.business b
+      where b.id = business_settings.business_id
+        and b.owner_id = auth.uid()
+    )
   );
 
 create policy "business_settings_insert_owner"
   on public.business_settings
   for insert
   with check (
-    owner_id = auth.uid()
-    or (owner_id is null and auth.uid() is null)
+    exists (
+      select 1
+      from public.business b
+      where b.id = business_settings.business_id
+        and b.owner_id = auth.uid()
+    )
   );
 
 create policy "business_settings_update_owner"
   on public.business_settings
   for update
   using (
-    owner_id = auth.uid()
-    or (owner_id is null and auth.uid() is null)
+    exists (
+      select 1
+      from public.business b
+      where b.id = business_settings.business_id
+        and b.owner_id = auth.uid()
+    )
   )
   with check (
-    owner_id = auth.uid()
-    or (owner_id is null and auth.uid() is null)
+    exists (
+      select 1
+      from public.business b
+      where b.id = business_settings.business_id
+        and b.owner_id = auth.uid()
+    )
   );
 
 -- Storage bucket for business logos (public read; writes governed by storage policies in Supabase).

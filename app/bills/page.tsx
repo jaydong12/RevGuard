@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAppData } from '../../components/AppDataProvider';
 
 type BillStatusFilter = 'ALL' | 'UPCOMING' | 'TODAY' | 'OVERDUE' | 'PAID';
 
@@ -26,13 +27,36 @@ type Bill = {
   reminder_days_before?: number | null;
 };
 
-function BillingSection({
-  selectedBusinessId,
-}: {
-  selectedBusinessId: string | null;
-}) {
-  const [bills, setBills] = React.useState<Bill[]>([]);
-  const [loading, setLoading] = React.useState(false);
+function BillingSection() {
+  const queryClient = useQueryClient();
+  const { businessId: selectedBusinessId, userId, bills: billsRaw, loading, error: loadError } =
+    useAppData();
+  const bills = React.useMemo(() => {
+    const rows = (billsRaw as any[]) ?? [];
+    return rows.map((row) => ({
+      id: String((row as any).id),
+      business_id: String((row as any).business_id),
+      vendor: String((row as any).vendor ?? ''),
+      description: (row as any).description ?? null,
+      category: (row as any).category ?? null,
+      amount: Number((row as any).amount) || 0,
+      issue_date: String((row as any).issue_date ?? ''),
+      due_date: String((row as any).due_date ?? ''),
+      status: (row as any).status === 'PAID' ? 'PAID' : 'OPEN',
+      payment_method: (row as any).payment_method ?? null,
+      notes: (row as any).notes ?? null,
+      paid_at: (row as any).paid_at ?? null,
+      is_recurring: (row as any).is_recurring ?? false,
+      recurrence_frequency: (row as any).recurrence_frequency ?? null,
+      recurring_interval: (row as any).recurring_interval ?? null,
+      recurring_next_due_date: (row as any).recurring_next_due_date ?? null,
+      reminder_days_before:
+        (row as any).reminder_days_before !== null &&
+        (row as any).reminder_days_before !== undefined
+          ? Number((row as any).reminder_days_before)
+          : null,
+    })) as Bill[];
+  }, [billsRaw]);
   const [filter, setFilter] = React.useState<BillStatusFilter>('ALL');
   const [search, setSearch] = React.useState('');
   const [editingBillId, setEditingBillId] = React.useState<string | null>(null);
@@ -50,66 +74,7 @@ function BillingSection({
     reminder_days_before: 7 as number | null,
   });
 
-  React.useEffect(() => {
-    let cancelled = false;
-
-    async function loadBills() {
-      if (!selectedBusinessId) {
-        setBills([]);
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('bills')
-          .select('*')
-          .eq('business_id', selectedBusinessId)
-          .order('due_date', { ascending: true });
-
-        if (cancelled) return;
-
-        if (error) {
-          setBills([]);
-          return;
-        }
-
-        const rows = (data ?? []) as any[];
-        const mapped: Bill[] = rows.map((row) => ({
-          id: String(row.id),
-          business_id: row.business_id,
-          vendor: row.vendor,
-          description: row.description ?? null,
-          category: row.category ?? null,
-          amount: Number(row.amount) || 0,
-          issue_date: row.issue_date,
-          due_date: row.due_date,
-          status: row.status === 'PAID' ? 'PAID' : 'OPEN',
-          payment_method: row.payment_method ?? null,
-          notes: row.notes ?? null,
-          paid_at: row.paid_at ?? null,
-          is_recurring: row.is_recurring ?? false,
-          recurrence_frequency: row.recurrence_frequency ?? null,
-          recurring_interval: row.recurring_interval ?? null,
-          recurring_next_due_date: row.recurring_next_due_date ?? null,
-          reminder_days_before:
-            row.reminder_days_before !== null &&
-            row.reminder_days_before !== undefined
-              ? Number(row.reminder_days_before)
-              : null,
-        }));
-        setBills(mapped);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    void loadBills();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedBusinessId]);
+  const effectiveError = loadError;
 
   const today = new Date();
 
@@ -200,6 +165,12 @@ function BillingSection({
     e.preventDefault();
     if (!selectedBusinessId) return;
 
+    const userIdToUse = userId ?? null;
+    if (!userIdToUse) {
+      alert('Please log in to save bills.');
+      return;
+    }
+
     const payload = {
       business_id: selectedBusinessId,
       vendor: form.vendor.trim(),
@@ -233,6 +204,7 @@ function BillingSection({
         .from('bills')
         .update(payload)
         .eq('id', editingBillId)
+        .eq('business_id', selectedBusinessId)
         .select('*');
     } else {
       res = await supabase.from('bills').insert(payload).select('*');
@@ -246,40 +218,7 @@ function BillingSection({
       return;
     }
 
-    const saved = (data ?? [])[0] as any;
-    const savedBill: Bill = {
-      id: String(saved.id),
-      business_id: saved.business_id,
-      vendor: saved.vendor,
-      description: saved.description ?? null,
-      category: saved.category ?? null,
-      amount: Number(saved.amount) || 0,
-      issue_date: saved.issue_date,
-      due_date: saved.due_date,
-      status: saved.status === 'PAID' ? 'PAID' : 'OPEN',
-      payment_method: saved.payment_method ?? null,
-      notes: saved.notes ?? null,
-      paid_at: saved.paid_at ?? null,
-      is_recurring: saved.is_recurring ?? false,
-      recurrence_frequency: saved.recurrence_frequency ?? null,
-      recurring_interval: saved.recurring_interval ?? null,
-      recurring_next_due_date: saved.recurring_next_due_date ?? null,
-      reminder_days_before:
-        saved.reminder_days_before !== null &&
-        saved.reminder_days_before !== undefined
-          ? Number(saved.reminder_days_before)
-          : null,
-    };
-
-    setBills((prev) => {
-      if (editingBillId) {
-        return prev.map((b) => (b.id === editingBillId ? savedBill : b));
-      }
-      return [...prev, savedBill].sort(
-        (a, b) =>
-          new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
-      );
-    });
+    await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
 
     setEditingBillId(null);
     setForm({
@@ -318,6 +257,14 @@ function BillingSection({
     const updatingToPaid = bill.status !== 'PAID';
     const nowIso = new Date().toISOString();
 
+    if (!selectedBusinessId) return;
+
+    const userIdToUse = userId ?? null;
+    if (!userIdToUse) {
+      alert('Please log in to update bills.');
+      return;
+    }
+
     const { data, error } = await supabase
       .from('bills')
       .update({
@@ -325,6 +272,7 @@ function BillingSection({
         paid_at: updatingToPaid ? nowIso : null,
       })
       .eq('id', bill.id)
+      .eq('business_id', selectedBusinessId)
       .select('*');
 
     if (error) {
@@ -334,13 +282,20 @@ function BillingSection({
       return;
     }
 
-    const updated = (data ?? [])[0] as Bill;
-    setBills((prev) => prev.map((b) => (b.id === bill.id ? updated : b)));
+    await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
   }
 
   async function toggleRecurring(bill: Bill) {
     // If it's already recurring → turn it OFF
     if (bill.is_recurring) {
+      if (!selectedBusinessId) return;
+
+      const userIdToUse = userId ?? null;
+      if (!userIdToUse) {
+        alert('Please log in to update bills.');
+        return;
+      }
+
       const { data, error } = await supabase
         .from('bills')
         .update({
@@ -349,6 +304,7 @@ function BillingSection({
           recurring_next_due_date: null,
         })
         .eq('id', bill.id)
+        .eq('business_id', selectedBusinessId)
         .select('*');
 
       if (error) {
@@ -358,8 +314,7 @@ function BillingSection({
         return;
       }
 
-      const updated = (data ?? [])[0] as Bill;
-      setBills((prev) => prev.map((b) => (b.id === bill.id ? updated : b)));
+      await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
       return;
     }
 
@@ -368,6 +323,14 @@ function BillingSection({
     const nextDue = new Date(currentDue);
     if (!Number.isNaN(nextDue.getTime())) {
       nextDue.setMonth(nextDue.getMonth() + 1);
+    }
+
+    if (!selectedBusinessId) return;
+
+    const userIdToUse = userId ?? null;
+    if (!userIdToUse) {
+      alert('Please log in to update bills.');
+      return;
     }
 
     const { data, error } = await supabase
@@ -380,6 +343,7 @@ function BillingSection({
           : null,
       })
       .eq('id', bill.id)
+      .eq('business_id', selectedBusinessId)
       .select('*');
 
     if (error) {
@@ -389,8 +353,7 @@ function BillingSection({
       return;
     }
 
-    const updated = (data ?? [])[0] as Bill;
-    setBills((prev) => prev.map((b) => (b.id === bill.id ? updated : b)));
+    await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
   }
 
   function formatCurrency(n: number) {
@@ -402,6 +365,11 @@ function BillingSection({
 
   return (
     <div className="space-y-6">
+      {effectiveError && (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          {effectiveError}
+        </div>
+      )}
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="rounded-2xl border bg-slate-950/80 border-slate-800 p-3">
@@ -738,8 +706,7 @@ function BillingSection({
 }
 
 export default function BillsPage() {
-  const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
+  const { loading: businessLoading, error: businessError } = useAppData();
 
   return (
     <main className="space-y-4">
@@ -756,7 +723,7 @@ export default function BillsPage() {
         {businessError && <div className="text-xs text-rose-300">{businessError}</div>}
         {businessLoading && <div className="text-xs text-slate-400">Loading business…</div>}
 
-        <BillingSection selectedBusinessId={selectedBusinessId} />
+        <BillingSection />
     </main>
   );
 }

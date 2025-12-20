@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { formatCurrency } from '../lib/formatCurrency';
+import { useAppData } from './AppDataProvider';
 
 type AdvisorMessageRole = 'user' | 'assistant';
 
@@ -26,6 +27,7 @@ interface AdvisorTransaction {
   id: number;
   date: string;
   amount: number;
+  category?: string | null;
   business_id?: string | null;
 }
 
@@ -40,130 +42,91 @@ const initialSummary: AdvisorSummary = {
 };
 
 const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
-  const [summary, setSummary] = useState<AdvisorSummary>(initialSummary);
-  const [topIncomeCategories, setTopIncomeCategories] = useState<
-    Array<{ category: string; amount: number }>
-  >([]);
-  const [topExpenseCategories, setTopExpenseCategories] = useState<
-    Array<{ category: string; amount: number }>
-  >([]);
+  const {
+    userId,
+    businessId: ctxBusinessId,
+    transactions,
+    loading,
+    error: appDataError,
+  } = useAppData();
+  const effectiveBusinessId = businessId ?? ctxBusinessId ?? null;
+
+  const { summary, topIncomeCategories, topExpenseCategories } = useMemo(() => {
+    if (!effectiveBusinessId) {
+      return {
+        summary: initialSummary,
+        topIncomeCategories: [] as Array<{ category: string; amount: number }>,
+        topExpenseCategories: [] as Array<{ category: string; amount: number }>,
+      };
+    }
+
+    const rows = (transactions as any[]) as AdvisorTransaction[];
+
+    const today = new Date();
+    const pastYear = new Date();
+    pastYear.setFullYear(today.getFullYear() - 1);
+    const startDate = pastYear.toISOString().slice(0, 10);
+    const endDate = today.toISOString().slice(0, 10);
+
+    let income = 0;
+    let expenses = 0;
+    const incomeByCat = new Map<string, number>();
+    const expenseByCat = new Map<string, number>();
+
+    for (const tx of rows) {
+      if (!tx?.date) continue;
+      if (tx.date < startDate || tx.date > endDate) continue;
+
+      const amountNum = Number(tx.amount) || 0;
+      const category = String((tx as any).category ?? '').trim() || 'Uncategorized';
+
+      if (amountNum > 0) {
+        income += amountNum;
+        incomeByCat.set(category, (incomeByCat.get(category) ?? 0) + amountNum);
+      } else if (amountNum < 0) {
+        const abs = Math.abs(amountNum);
+        expenses += abs;
+        expenseByCat.set(category, (expenseByCat.get(category) ?? 0) + abs);
+      }
+    }
+
+    const profit = income - expenses;
+
+    return {
+      summary: {
+        totalIncomeLast365: income,
+        totalExpensesLast365: expenses,
+        profitLast365: profit,
+      },
+      topIncomeCategories: Array.from(incomeByCat.entries())
+        .map(([category, amount]) => ({ category, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 3),
+      topExpenseCategories: Array.from(expenseByCat.entries())
+        .map(([category, amount]) => ({ category, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 3),
+    };
+  }, [effectiveBusinessId, transactions]);
+
   const [messages, setMessages] = useState<AdvisorMessage[]>([]);
   const [input, setInput] = useState('');
-  const [loadingSummary, setLoadingSummary] = useState(false);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [uiError, setUiError] = useState<string | null>(null);
   const [lastUiError, setLastUiError] = useState<string | null>(null);
+
+  const loadingSummary = loading;
+  const summaryError = !userId
+    ? 'Please log in to load AI summary.'
+    : appDataError
+      ? String(appDataError)
+      : null;
 
   const hasHistory = useMemo(
     () =>
       summary.totalIncomeLast365 !== 0 || summary.totalExpensesLast365 !== 0,
     [summary]
   );
-
-  useEffect(() => {
-    const loadSummary = async () => {
-      setLoadingSummary(true);
-      setSummaryError(null);
-
-      if (!businessId) {
-        // No business selected: treat as zero summary with no error
-        setSummary({
-          totalIncomeLast365: 0,
-          totalExpensesLast365: 0,
-          profitLast365: 0,
-        });
-        setLoadingSummary(false);
-        setTopIncomeCategories([]);
-        setTopExpenseCategories([]);
-        return;
-      }
-
-      const today = new Date();
-      const pastYear = new Date();
-      pastYear.setFullYear(today.getFullYear() - 1);
-
-      const startDate = pastYear.toISOString().slice(0, 10);
-      const endDate = today.toISOString().slice(0, 10);
-
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('business_id', businessId)
-        .gte('date', startDate)
-        .lte('date', endDate)
-        .order('date', { ascending: true });
-
-      if (error) {
-        setSummary({
-          totalIncomeLast365: 0,
-          totalExpensesLast365: 0,
-          profitLast365: 0,
-        });
-        setSummaryError(null);
-        setLoadingSummary(false);
-        setTopIncomeCategories([]);
-        setTopExpenseCategories([]);
-        return;
-      }
-
-      if (!data || data.length === 0) {
-        // No transactions yet – zero summary, no error
-        setSummary({
-          totalIncomeLast365: 0,
-          totalExpensesLast365: 0,
-          profitLast365: 0,
-        });
-        setSummaryError(null);
-        setLoadingSummary(false);
-        setTopIncomeCategories([]);
-        setTopExpenseCategories([]);
-        return;
-      }
-
-      let income = 0;
-      let expenses = 0;
-      const incomeByCat = new Map<string, number>();
-      const expenseByCat = new Map<string, number>();
-
-      for (const tx of data) {
-        const amountNum = Number((tx as any).amount) || 0;
-        const category = String((tx as any).category ?? '').trim() || 'Uncategorized';
-        if (amountNum > 0) {
-          income += amountNum;
-          incomeByCat.set(category, (incomeByCat.get(category) ?? 0) + amountNum);
-        } else if (amountNum < 0) {
-          expenses += Math.abs(amountNum);
-          expenseByCat.set(category, (expenseByCat.get(category) ?? 0) + Math.abs(amountNum));
-        }
-      }
-
-      const profit = income - expenses;
-
-      setSummary({
-        totalIncomeLast365: income,
-        totalExpensesLast365: expenses,
-        profitLast365: profit,
-      });
-
-      setTopIncomeCategories(
-        Array.from(incomeByCat.entries())
-          .map(([category, amount]) => ({ category, amount }))
-          .sort((a, b) => b.amount - a.amount)
-          .slice(0, 3)
-      );
-      setTopExpenseCategories(
-        Array.from(expenseByCat.entries())
-          .map(([category, amount]) => ({ category, amount }))
-          .sort((a, b) => b.amount - a.amount)
-          .slice(0, 3)
-      );
-      setSummaryError(null);
-      setLoadingSummary(false);
-    };
-
-    loadSummary();
-  }, [businessId]);
 
   // Single-flight guard so we never render twice for one user submit.
   const requestIdRef = React.useRef(0);
@@ -185,7 +148,7 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
   const handleSend = async (prompt?: string) => {
     const content = (prompt ?? input).trim();
     if (!content || sending) return;
-    if (!businessId) {
+    if (!effectiveBusinessId || !userId) {
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', content: 'Sign in required to use AI Advisor.' },
@@ -214,7 +177,7 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
     ]);
     setInput('');
     setSending(true);
-    setError(null);
+    setUiError(null);
     setLastUiError(null);
 
     try {
@@ -224,13 +187,20 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token ?? null;
+      if (!token) {
+        throw new Error('AUTH_REQUIRED');
+      }
+
       const res = await fetch('/api/ai-advisor', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          businessId,
+          businessId: effectiveBusinessId,
           message: content,
           context: {
             revenueLast365: summary.totalIncomeLast365,
@@ -333,7 +303,7 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
         return next;
       });
       setLastUiError('Network error talking to AI Advisor.');
-      setError('Network error talking to AI Advisor.');
+      setUiError('Network error talking to AI Advisor.');
     } finally {
       setSending(false);
     }

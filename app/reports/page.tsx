@@ -1,22 +1,60 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ReportLayout } from '../../components/ReportLayout';
 import { supabase } from '../../utils/supabaseClient';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { computeStatements } from '../../lib/financialStatements';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAppData } from '../../components/AppDataProvider';
 import {
   ResponsiveContainer,
   ComposedChart,
-  BarChart,
   Bar,
+  Cell,
   Line,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { PremiumBarChart } from '../../components/PremiumBarChart';
+
+function ChartFrame({
+  children,
+  minHeight = 320,
+  className = 'w-full h-[320px]',
+}: {
+  children: React.ReactNode;
+  minHeight?: number;
+  className?: string;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setReady(r.width > 0 && r.height > 0);
+    };
+
+    update();
+
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref} className={className} style={{ minHeight }}>
+      {ready ? children : null}
+    </div>
+  );
+}
 
 type Transaction = {
   id: number;
@@ -354,6 +392,48 @@ function fmtMoneyRounded(value: unknown) {
   const rounded = Math.round(n);
   const sign = rounded < 0 ? '-' : '';
   return `${sign}$${Math.abs(rounded).toLocaleString('en-US')}`;
+}
+
+function TrendGlassTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: any[];
+  label?: any;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  const row: Record<string, number> = {};
+  for (const p of payload) {
+    const k = String(p?.dataKey ?? p?.name ?? '');
+    if (!k) continue;
+    row[k] = Number(p?.value) || 0;
+  }
+  const income = row.income ?? 0;
+  const expenses = row.expenses ?? 0;
+  const net = row.net ?? 0;
+
+  return (
+    <div className="rounded-2xl border border-slate-800/80 bg-slate-950/70 backdrop-blur px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+      <div className="text-[11px] text-slate-400">{String(label ?? '')}</div>
+      <div className="mt-1 grid gap-1 text-[11px]">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-slate-400">Income</span>
+          <span className="font-semibold text-emerald-200">{fmtMoneyRounded(income)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-slate-400">Expenses</span>
+          <span className="font-semibold text-rose-200">{fmtMoneyRounded(-expenses)}</span>
+        </div>
+        <div className="h-px bg-slate-800 my-1" />
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-slate-400">Net</span>
+          <span className="font-semibold text-slate-100">{fmtMoneyRounded(net)}</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function startOfMonth(d: Date) {
@@ -1155,8 +1235,16 @@ export default function ReportsPage() {
       return false;
     }
   }, []);
-  const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
+  const queryClient = useQueryClient();
+  const {
+    businessId: selectedBusinessId,
+    userId,
+    transactions: allTransactionsRaw,
+    customers: customersRaw,
+    loading: businessLoading,
+    error: businessError,
+  } = useAppData();
+  const allTransactions = (allTransactionsRaw as any[]) as Transaction[];
   const [activeReportId, setActiveReportId] = useState<string>('pnl');
   const [search, setSearch] = useState('');
   const [basis, setBasis] = useState<Basis>('cash');
@@ -1175,151 +1263,63 @@ export default function ReportsPage() {
     formatIsoToMdy(defaultRange.end)
   );
 
-  const [txs, setTxs] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; tone?: 'ok' | 'error' } | null>(
     null
   );
-  const [refetchTick, setRefetchTick] = useState(0);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [trendHoverIndex, setTrendHoverIndex] = useState<number | null>(null);
 
   useEffect(() => {
     setDetailsOpen(false);
   }, [activeReportId]);
 
-  // Customers map for this business (for customer_id -> name in reports).
-  const [customersById, setCustomersById] = useState<Map<string, string>>(
-    () => new Map()
-  );
-  const [customersList, setCustomersList] = useState<
-    Array<{ id: string; name: string; company: string }>
-  >([]);
+  const loading = businessLoading;
+  const customersList = useMemo(() => {
+    const rows = (customersRaw as any[]) ?? [];
+    return rows.map((row) => ({
+      id: String((row as any).id),
+      name: String((row as any).name ?? '').trim() || 'Unnamed customer',
+      company: String((row as any).company ?? '').trim(),
+    }));
+  }, [customersRaw]);
+  const customersById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of customersList) {
+      if (c.id) map.set(c.id, c.name || 'Unnamed customer');
+    }
+    return map;
+  }, [customersList]);
 
+  // Transactions for the currently selected report date window.
+  const txs = useMemo(() => {
+    if (!selectedBusinessId) return [];
+    if (!startDate || !endDate) return [];
+    if (!isIsoDate(startDate) || !isIsoDate(endDate)) return [];
+    if (endDate < startDate) return [];
+
+    const start = startDate;
+    const endEx = endExclusive;
+    return allTransactions.filter((tx) => {
+      if (!tx.date) return false;
+      // ISO date comparison is safe for YYYY-MM-DD.
+      return tx.date >= start && tx.date < endEx;
+    });
+  }, [allTransactions, selectedBusinessId, startDate, endDate, endExclusive]);
+
+  // Date validation (no refetch on mount/focus; data is read from cached queries).
   useEffect(() => {
-    let mounted = true;
-
-    async function load() {
-      setError(null);
-      setTxs([]);
-
-      const active = REPORT_LIBRARY.find((r) => r.id === activeReportId);
-      if (!active) return;
-      if (!selectedBusinessId) return;
-      if (!startDate || !endDate) return;
-      if (!isIsoDate(startDate) || !isIsoDate(endDate)) {
-        setError('Invalid date format. Please use the date pickers.');
-        setToast({ message: 'Invalid date format.', tone: 'error' });
-        return;
-      }
-      if (endDate < startDate) {
-        setError('End date must be on or after the start date.');
-        setToast({ message: 'End date must be on or after start date.', tone: 'error' });
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const rows = await fetchTransactionsByRange({
-          businessId: selectedBusinessId,
-          start: startDate,
-          end: endExclusive,
-        });
-        if (!mounted) return;
-        setTxs(rows);
-      } catch (e: any) {
-        if (!mounted) return;
-        const msg = e?.message ?? 'Failed to load transactions for report.';
-        setError(msg);
-        setToast({ message: 'Report failed to load. Check Supabase logs.', tone: 'error' });
-        setTxs([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
+    setError(null);
+    if (!selectedBusinessId) return;
+    if (!startDate || !endDate) return;
+    if (!isIsoDate(startDate) || !isIsoDate(endDate)) {
+      setError('Invalid date format. Please use the date pickers.');
+      return;
     }
-
-    void load();
-    return () => {
-      mounted = false;
-    };
-  }, [activeReportId, selectedBusinessId, startDate, endExclusive, endDate, refetchTick]);
-
-  // Refresh reports when the tab/window regains focus (e.g., after creating a transaction).
-  useEffect(() => {
-    function onFocus() {
-      setRefetchTick((n) => n + 1);
+    if (endDate < startDate) {
+      setError('End date must be on or after the start date.');
     }
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
-
-  // Cross-page/tab invalidation: Transactions page can signal changes.
-  useEffect(() => {
-    function onTxChanged() {
-      setRefetchTick((n) => n + 1);
-    }
-    function onStorage(e: StorageEvent) {
-      if (e.key === 'revguard:tx_changed') {
-        setRefetchTick((n) => n + 1);
-      }
-    }
-    window.addEventListener('revguard:transactions_changed', onTxChanged as any);
-    window.addEventListener('storage', onStorage);
-    return () => {
-      window.removeEventListener(
-        'revguard:transactions_changed',
-        onTxChanged as any
-      );
-      window.removeEventListener('storage', onStorage);
-    };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadCustomersForReports() {
-      setCustomersById(new Map());
-      setCustomersList([]);
-      if (!selectedBusinessId) return;
-
-      try {
-        const { data, error } = await supabase
-          .from('customers')
-          .select('id, name, company')
-          .eq('business_id', selectedBusinessId);
-
-        if (!mounted) return;
-        if (error) {
-          setCustomersById(new Map());
-          return;
-        }
-
-        const map = new Map<string, string>();
-        const list: Array<{ id: string; name: string; company: string }> = [];
-        for (const row of (data ?? []) as any[]) {
-          const id = String(row.id);
-          const name = String(row.name ?? '').trim();
-          const company = String(row.company ?? '').trim();
-          if (id) {
-            const finalName = name || 'Unnamed customer';
-            map.set(id, finalName);
-            list.push({ id, name: finalName, company });
-          }
-        }
-        setCustomersById(map);
-        setCustomersList(list.sort((a, b) => a.name.localeCompare(b.name)));
-      } catch {
-        if (!mounted) return;
-        setCustomersById(new Map());
-        setCustomersList([]);
-      }
-    }
-
-    void loadCustomersForReports();
-    return () => {
-      mounted = false;
-    };
-  }, [selectedBusinessId]);
+  }, [selectedBusinessId, startDate, endDate]);
 
   // Basis toggle is fully functional. Until invoices/bills are modeled, Accrual
   // uses the same transactions as Cash — but everything recomputes instantly.
@@ -1351,13 +1351,8 @@ export default function ReportsPage() {
     [effectiveTxs, customersById]
   );
 
-  const [needsReviewRevenueTxs, setNeedsReviewRevenueTxs] = useState<Transaction[]>([]);
-  const [needsReviewLoading, setNeedsReviewLoading] = useState(false);
-  const [needsReviewError, setNeedsReviewError] = useState<string | null>(null);
   const NEEDS_REVIEW_PAGE_SIZE = 20;
   const [needsReviewPage, setNeedsReviewPage] = useState(0);
-  const [needsReviewTotal, setNeedsReviewTotal] = useState(0);
-
   const [needsReviewSavingId, setNeedsReviewSavingId] = useState<number | null>(null);
 
   // Reset paging when the scope changes.
@@ -1365,63 +1360,33 @@ export default function ReportsPage() {
     setNeedsReviewPage(0);
   }, [activeReportId, selectedBusinessId, startDate, endDate]);
 
-  // Keep Needs Review list fresh when viewing Sales by Customer.
+  const needsReviewLoading = false;
+  const needsReviewError: string | null = null;
+
+  const needsReviewAll = useMemo(() => {
+    if (!selectedBusinessId) return [];
+    if (activeReportId !== 'sales_by_customer') return [];
+    if (!isIsoDate(startDate) || !isIsoDate(endDate)) return [];
+    if (endDate < startDate) return [];
+
+    return effectiveTxs.filter((tx) => {
+      const amt = Number(tx.amount) || 0;
+      if (amt <= 0) return false;
+      const custId = (tx as any).customer_id ?? null;
+      return custId === null || custId === '';
+    });
+  }, [activeReportId, selectedBusinessId, startDate, endDate, effectiveTxs]);
+
+  const needsReviewTotal = needsReviewAll.length;
+  const needsReviewRevenueTxs = useMemo(() => {
+    const start = needsReviewPage * NEEDS_REVIEW_PAGE_SIZE;
+    return needsReviewAll.slice(start, start + NEEDS_REVIEW_PAGE_SIZE);
+  }, [needsReviewAll, needsReviewPage]);
+
   useEffect(() => {
-    let mounted = true;
-
-    async function loadNeedsReview() {
-      setNeedsReviewError(null);
-      setNeedsReviewRevenueTxs([]);
-      setNeedsReviewTotal(0);
-      if (!selectedBusinessId) return;
-      if (activeReportId !== 'sales_by_customer') return;
-      if (!isIsoDate(startDate) || !isIsoDate(endDate)) return;
-      if (endDate < startDate) return;
-
-      setNeedsReviewLoading(true);
-      try {
-        const res = await fetchUnassignedRevenueTxsPage({
-          businessId: selectedBusinessId,
-          start: startDate,
-          endExclusive,
-          offset: needsReviewPage * NEEDS_REVIEW_PAGE_SIZE,
-          limit: NEEDS_REVIEW_PAGE_SIZE,
-        });
-        if (!mounted) return;
-        setNeedsReviewRevenueTxs(res.rows);
-        setNeedsReviewTotal(res.total);
-
-        // Clamp page if the total shrank (e.g. assignments removed items).
-        const lastPage = Math.max(
-          0,
-          Math.ceil((res.total || 0) / NEEDS_REVIEW_PAGE_SIZE) - 1
-        );
-        if (needsReviewPage > lastPage) setNeedsReviewPage(lastPage);
-      } catch (e: any) {
-        if (!mounted) return;
-        // eslint-disable-next-line no-console
-        console.error('NEEDS_REVIEW_LOAD_ERROR', e);
-        setNeedsReviewError(e?.message ?? 'Failed to load Needs Review.');
-        setNeedsReviewRevenueTxs([]);
-        setNeedsReviewTotal(0);
-      } finally {
-        if (mounted) setNeedsReviewLoading(false);
-      }
-    }
-
-    void loadNeedsReview();
-    return () => {
-      mounted = false;
-    };
-  }, [
-    activeReportId,
-    selectedBusinessId,
-    startDate,
-    endDate,
-    endExclusive,
-    refetchTick,
-    needsReviewPage,
-  ]);
+    const lastPage = Math.max(0, Math.ceil(needsReviewTotal / NEEDS_REVIEW_PAGE_SIZE) - 1);
+    if (needsReviewPage > lastPage) setNeedsReviewPage(lastPage);
+  }, [needsReviewTotal, needsReviewPage]);
   const expensesByVendor = useMemo(
     () => buildExpensesByVendorRows(effectiveTxs),
     [effectiveTxs]
@@ -2141,184 +2106,110 @@ export default function ReportsPage() {
                     }
                     chart={
                       activeReport.kind === 'sales_by_customer' ? (
-                        <div className="h-[320px] w-full">
+                        <ChartFrame>
                           {salesByCustomer.rows.length === 0 ? (
                             <div className="h-full w-full flex items-center justify-center text-[11px] text-slate-400">
                               No revenue transactions in this range.
                             </div>
                           ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart
-                                data={salesByCustomer.rows.slice(0, 10).map((r) => ({
-                                  label: r.name,
-                                  value: r.amount,
-                                }))}
-                                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                              >
-                                <CartesianGrid
-                                  stroke="rgba(148,163,184,0.18)"
-                                  strokeDasharray="2 2"
-                                  vertical={false}
-                                />
-                                <XAxis
-                                  dataKey="label"
-                                  tick={{ fill: '#94a3b8', fontSize: 10 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  interval={0}
-                                  angle={-25}
-                                  textAnchor="end"
-                                  height={58}
-                                />
-                                <YAxis
-                                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickFormatter={(v: number) => fmtMoneyRounded(v)}
-                                />
-                                <Tooltip
-                                  contentStyle={{
-                                    backgroundColor: '#020617',
-                                    borderRadius: 10,
-                                    border: '1px solid #1e293b',
-                                    fontSize: 12,
-                                    color: '#ffffff',
-                                  }}
-                                  labelStyle={{ color: '#ffffff' }}
-                                  itemStyle={{ color: '#ffffff' }}
-                                  formatter={(value: any) => [fmtMoneyRounded(value), 'Customer spend']}
-                                />
-                                <Bar
-                                  dataKey="value"
-                                  fill="#22c55e"
-                                  radius={[6, 6, 0, 0]}
-                                  isAnimationActive={false}
-                                />
-                              </BarChart>
-                            </ResponsiveContainer>
+                            <PremiumBarChart
+                              data={salesByCustomer.rows.slice(0, 10).map((r) => ({
+                                label: r.name,
+                                value: r.amount,
+                              }))}
+                              variant="green"
+                              formatValue={(v) => fmtMoneyRounded(v)}
+                              formatYAxisTick={(v) => fmtMoneyRounded(v)}
+                              tooltipSubtitle="Customer spend"
+                              xInterval={0}
+                              xAngle={-25}
+                              xHeight={58}
+                              minHeight={320}
+                            />
                           )}
-                        </div>
+                        </ChartFrame>
                       ) : activeReport.kind === 'expenses_by_vendor' ? (
-                        <div className="h-[320px] w-full">
+                        <ChartFrame>
                           {expensesByVendor.rows.length === 0 ? (
                             <div className="h-full w-full flex items-center justify-center text-[11px] text-slate-400">
                               No negative transactions in this range.
                             </div>
                           ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart
-                                data={expensesByVendor.rows.slice(0, 10).map((r) => ({
-                                  label: r.name.length > 12 ? `${r.name.slice(0, 12)}…` : r.name,
-                                  value: r.amount,
-                                }))}
-                                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                              >
-                                <CartesianGrid
-                                  stroke="rgba(148,163,184,0.18)"
-                                  strokeDasharray="2 2"
-                                  vertical={false}
-                                />
-                                <XAxis
-                                  dataKey="label"
-                                  tick={{ fill: '#94a3b8', fontSize: 10 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                />
-                                <YAxis
-                                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickFormatter={(v: number) => fmtMoneyRounded(-v)}
-                                />
-                                <Tooltip
-                                  contentStyle={{
-                                    backgroundColor: '#020617',
-                                    borderRadius: 10,
-                                    border: '1px solid #1e293b',
-                                    fontSize: 12,
-                                    color: '#ffffff',
-                                  }}
-                                  labelStyle={{ color: '#ffffff' }}
-                                  itemStyle={{ color: '#ffffff' }}
-                                  formatter={(value: any) => [fmtMoneyRounded(-Number(value)), 'Spend']}
-                                />
-                                <Bar
-                                  dataKey="value"
-                                  fill="#fb7185"
-                                  radius={[6, 6, 0, 0]}
-                                  isAnimationActive={false}
-                                />
-                              </BarChart>
-                            </ResponsiveContainer>
+                            <PremiumBarChart
+                              data={expensesByVendor.rows.slice(0, 10).map((r) => ({
+                                label: r.name.length > 12 ? `${r.name.slice(0, 12)}…` : r.name,
+                                value: r.amount,
+                              }))}
+                              variant="red"
+                              formatValue={(v) => fmtMoneyRounded(-v)}
+                              formatYAxisTick={(v) => fmtMoneyRounded(-v)}
+                              tooltipSubtitle="Spend"
+                              minHeight={320}
+                            />
                           )}
-                        </div>
+                        </ChartFrame>
                       ) : activeReport.kind === 'tax_summary' ? (
-                        <div className="h-[320px] w-full">
+                        <ChartFrame>
                           {taxSummary.rows.length === 0 ? (
                             <div className="h-full w-full flex items-center justify-center text-[11px] text-slate-400">
                               No transactions to summarize.
                             </div>
                           ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart
-                                data={[
-                                  { label: 'Gross income', value: taxSummary.totalIncome },
-                                  { label: 'Est. taxes', value: taxSummary.estTotalRemaining },
-                                  {
-                                    label: 'Net after tax',
-                                    value:
-                                      (taxSummary.net || 0) - (taxSummary.estTotalRemaining || 0),
-                                  },
-                                ]}
-                                margin={{ top: 10, right: 10, bottom: 10, left: 10 }}
-                              >
-                                <CartesianGrid
-                                  stroke="rgba(148,163,184,0.18)"
-                                  strokeDasharray="2 2"
-                                  vertical={false}
-                                />
-                                <XAxis
-                                  dataKey="label"
-                                  tick={{ fill: '#94a3b8', fontSize: 10 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                />
-                                <YAxis
-                                  tick={{ fill: '#94a3b8', fontSize: 11 }}
-                                  axisLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-                                  tickFormatter={(v: number) => fmtMoneyRounded(v)}
-                                />
-                                <Tooltip
-                                  contentStyle={{
-                                    backgroundColor: '#020617',
-                                    borderRadius: 10,
-                                    border: '1px solid #1e293b',
-                                    fontSize: 12,
-                                    color: '#ffffff',
-                                  }}
-                                  labelStyle={{ color: '#ffffff' }}
-                                  itemStyle={{ color: '#ffffff' }}
-                                  formatter={(value: any) => [fmtMoneyRounded(value), '']}
-                                />
-                                <Bar
-                                  dataKey="value"
-                                  fill="#60a5fa"
-                                  radius={[6, 6, 0, 0]}
-                                  isAnimationActive={false}
-                                />
-                              </BarChart>
-                            </ResponsiveContainer>
+                            <PremiumBarChart
+                              data={[
+                                { label: 'Gross income', value: taxSummary.totalIncome },
+                                { label: 'Est. taxes', value: taxSummary.estTotalRemaining },
+                                {
+                                  label: 'Net after tax',
+                                  value:
+                                    (taxSummary.net || 0) - (taxSummary.estTotalRemaining || 0),
+                                },
+                              ]}
+                              variant="blue"
+                              formatValue={(v) => fmtMoneyRounded(v)}
+                              formatYAxisTick={(v) => fmtMoneyRounded(v)}
+                              minHeight={320}
+                            />
                           )}
-                        </div>
+                        </ChartFrame>
                       ) : monthlySeries.length < 2 ? (
                         <div className="h-[320px] w-full flex items-center justify-center text-[11px] text-slate-400">
                           Not enough months in this range to chart yet. Try a wider preset.
                         </div>
                       ) : (
-                        <div className="h-[320px] w-full">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <ComposedChart data={monthlySeries}>
+                        <ChartFrame>
+                          <ResponsiveContainer width="100%" height="100%" minHeight={320}>
+                            <ComposedChart
+                              data={monthlySeries}
+                              barCategoryGap="22%"
+                              onMouseMove={(s: any) => {
+                                const idx =
+                                  typeof s?.activeTooltipIndex === 'number'
+                                    ? s.activeTooltipIndex
+                                    : null;
+                                setTrendHoverIndex(idx);
+                              }}
+                              onMouseLeave={() => setTrendHoverIndex(null)}
+                            >
+                              <defs>
+                                <linearGradient id="rg_income" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#34D399" stopOpacity="0.95" />
+                                  <stop offset="60%" stopColor="#22C55E" stopOpacity="0.78" />
+                                  <stop offset="100%" stopColor="#16A34A" stopOpacity="0.68" />
+                                </linearGradient>
+                                <linearGradient id="rg_expenses" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#FB7185" stopOpacity="0.95" />
+                                  <stop offset="60%" stopColor="#F43F5E" stopOpacity="0.78" />
+                                  <stop offset="100%" stopColor="#E11D48" stopOpacity="0.68" />
+                                </linearGradient>
+                                <filter id="rg_glow_income" x="-40%" y="-40%" width="180%" height="180%">
+                                  <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#34D399" floodOpacity="0.18" />
+                                  <feDropShadow dx="0" dy="0" stdDeviation="10" floodColor="#38BDF8" floodOpacity="0.12" />
+                                </filter>
+                                <filter id="rg_glow_expenses" x="-40%" y="-40%" width="180%" height="180%">
+                                  <feDropShadow dx="0" dy="0" stdDeviation="6" floodColor="#FB7185" floodOpacity="0.16" />
+                                </filter>
+                              </defs>
                               <CartesianGrid
                                 stroke="rgba(148,163,184,0.18)"
                                 strokeDasharray="2 2"
@@ -2337,36 +2228,99 @@ export default function ReportsPage() {
                                 tickFormatter={(v: number) => fmtMoneyRounded(v)}
                               />
                               <Tooltip
-                                contentStyle={{
-                                  backgroundColor: '#020617',
-                                  borderRadius: 10,
-                                  border: '1px solid #1e293b',
-                                  fontSize: 12,
-                                  color: '#ffffff',
-                                }}
-                                labelStyle={{ color: '#ffffff' }}
-                                itemStyle={{ color: '#ffffff' }}
-                                formatter={(value: any, name: any) => {
-                                  const v = Number(value) || 0;
-                                  if (name === 'income') return [fmtMoneyRounded(v), 'Income'];
-                                  if (name === 'expenses')
-                                    return [fmtMoneyRounded(-v), 'Expenses'];
-                                  if (name === 'net') return [fmtMoneyRounded(v), 'Net'];
-                                  return [fmtMoneyRounded(v), name];
-                                }}
+                                content={<TrendGlassTooltip />}
+                                cursor={{ fill: 'rgba(148,163,184,0.06)' }}
                               />
                               <Bar
                                 dataKey="income"
-                                fill="#22c55e"
-                                radius={[6, 6, 0, 0]}
-                                isAnimationActive={false}
-                              />
+                                fill="url(#rg_income)"
+                                radius={[10, 10, 10, 10]}
+                                isAnimationActive={true}
+                                animationDuration={520}
+                                animationEasing="ease-out"
+                                barSize={22}
+                              >
+                                {monthlySeries.map((_, idx) => {
+                                  const isActive = trendHoverIndex === idx;
+                                  return (
+                                    <Cell
+                                      key={`inc-${idx}`}
+                                      opacity={trendHoverIndex === null || isActive ? 1 : 0.55}
+                                      stroke={isActive ? '#34D399' : 'rgba(148,163,184,0.0)'}
+                                      strokeWidth={isActive ? 1.5 : 0}
+                                      filter={isActive ? 'url(#rg_glow_income)' : undefined}
+                                    />
+                                  );
+                                })}
+                                <LabelList
+                                  dataKey="income"
+                                  content={(props: any) => {
+                                    const idx = props?.index as number;
+                                    if (trendHoverIndex === null || idx !== trendHoverIndex) return null;
+                                    const v = Number(props?.value) || 0;
+                                    const x = Number(props?.x) || 0;
+                                    const y = Number(props?.y) || 0;
+                                    const w = Number(props?.width) || 0;
+                                    return (
+                                      <text
+                                        x={x + w / 2}
+                                        y={y - 10}
+                                        textAnchor="middle"
+                                        fill="#A7F3D0"
+                                        fontSize="11"
+                                        fontWeight="600"
+                                      >
+                                        {fmtMoneyRounded(v)}
+                                      </text>
+                                    );
+                                  }}
+                                />
+                              </Bar>
                               <Bar
                                 dataKey="expenses"
-                                fill="#fb7185"
-                                radius={[6, 6, 0, 0]}
-                                isAnimationActive={false}
-                              />
+                                fill="url(#rg_expenses)"
+                                radius={[10, 10, 10, 10]}
+                                isAnimationActive={true}
+                                animationDuration={520}
+                                animationEasing="ease-out"
+                                barSize={22}
+                              >
+                                {monthlySeries.map((_, idx) => {
+                                  const isActive = trendHoverIndex === idx;
+                                  return (
+                                    <Cell
+                                      key={`exp-${idx}`}
+                                      opacity={trendHoverIndex === null || isActive ? 1 : 0.55}
+                                      stroke={isActive ? '#FB7185' : 'rgba(148,163,184,0.0)'}
+                                      strokeWidth={isActive ? 1.5 : 0}
+                                      filter={isActive ? 'url(#rg_glow_expenses)' : undefined}
+                                    />
+                                  );
+                                })}
+                                <LabelList
+                                  dataKey="expenses"
+                                  content={(props: any) => {
+                                    const idx = props?.index as number;
+                                    if (trendHoverIndex === null || idx !== trendHoverIndex) return null;
+                                    const v = Number(props?.value) || 0;
+                                    const x = Number(props?.x) || 0;
+                                    const y = Number(props?.y) || 0;
+                                    const w = Number(props?.width) || 0;
+                                    return (
+                                      <text
+                                        x={x + w / 2}
+                                        y={y - 10}
+                                        textAnchor="middle"
+                                        fill="#FDA4AF"
+                                        fontSize="11"
+                                        fontWeight="600"
+                                      >
+                                        {fmtMoneyRounded(-v)}
+                                      </text>
+                                    );
+                                  }}
+                                />
+                              </Bar>
                               <Line
                                 type="monotone"
                                 dataKey="net"
@@ -2377,7 +2331,7 @@ export default function ReportsPage() {
                               />
                             </ComposedChart>
                           </ResponsiveContainer>
-                        </div>
+                        </ChartFrame>
                       )
                     }
                     detailsTitle="Details / Breakdown"
@@ -2709,13 +2663,18 @@ export default function ReportsPage() {
                                                 if (!custId || !selectedBusinessId) return;
                                                 setNeedsReviewSavingId(tx.id);
                                                 try {
+                                                  const userIdToUse = userId ?? null;
+                                                  if (!userIdToUse) throw new Error('Please log in.');
+
                                                   const { error } = await supabase
                                                     .from('transactions')
                                                     .update({ customer_id: custId })
                                                     .eq('business_id', selectedBusinessId)
                                                     .eq('id', tx.id);
                                                   if (error) throw error;
-                                                  setRefetchTick((n) => n + 1);
+                                                  await queryClient.invalidateQueries({
+                                                    queryKey: ['transactions', selectedBusinessId],
+                                                  });
                                                 } catch (err: any) {
                                                   // eslint-disable-next-line no-console
                                                   console.error('ASSIGN_CUSTOMER_ERROR', err);

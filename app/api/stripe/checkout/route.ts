@@ -1,16 +1,18 @@
 import Stripe from 'stripe';
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
-export async function POST() {
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function POST(request: Request) {
   try {
     const secretKey = process.env.STRIPE_SECRET_KEY;
     const priceId = process.env.STRIPE_PRICE_ID;
     const couponId = process.env.STRIPE_COUPON_ID;
 
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ||
-      process.env.APP_URL ||
-      'http://localhost:3000';
+    const origin = request.headers.get('origin') ?? new URL(request.url).origin;
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || origin;
 
     if (!secretKey) {
       return NextResponse.json(
@@ -49,16 +51,100 @@ export async function POST() {
       );
     }
 
+    // Require authenticated Supabase user.
+    const authHeader = request.headers.get('authorization') ?? '';
+    const token = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7)
+      : null;
+
+    if (!token) {
+      return NextResponse.json(
+        { error: 'Not authenticated. Please log in again.' },
+        { status: 401 }
+      );
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+        auth: { persistSession: false, autoRefreshToken: false },
+      }
+    );
+
+    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+    const user = userRes?.user ?? null;
+    if (userErr || !user) {
+      return NextResponse.json(
+        { error: 'Not authenticated. Please log in again.' },
+        { status: 401 }
+      );
+    }
+
+    // Load the user's business (business.owner_id = auth.uid()).
+    const { data: biz, error: bizErr } = await supabase
+      .from('business')
+      .select('id, name, owner_id, stripe_customer_id')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (bizErr || !biz?.id) {
+      return NextResponse.json(
+        { error: 'Could not load your business. Please refresh and try again.' },
+        { status: 400 }
+      );
+    }
+
     const stripe = new Stripe(secretKey);
+
+    // Create Stripe customer if needed and store on the business record.
+    let stripeCustomerId = (biz as any).stripe_customer_id as string | null;
+    if (!stripeCustomerId) {
+      const customer = await stripe.customers.create({
+        email: user.email ?? undefined,
+        name: (biz as any).name ?? undefined,
+        metadata: {
+          business_id: String(biz.id),
+          owner_id: String(user.id),
+        },
+      });
+
+      stripeCustomerId = customer.id;
+
+      const { error: updErr } = await supabase
+        .from('business')
+        .update({ stripe_customer_id: stripeCustomerId })
+        .eq('id', biz.id)
+        .eq('owner_id', user.id);
+
+      if (updErr) {
+        return NextResponse.json(
+          {
+            error:
+              'Failed to save billing customer. Run `supabase/business_stripe_fields.sql` then try again.',
+          },
+          { status: 500 }
+        );
+      }
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
+      customer: stripeCustomerId,
       line_items: [{ price: priceId, quantity: 1 }],
       ...(couponId ? { discounts: [{ coupon: couponId }] } : {}),
       success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/pricing`,
       // If you don't provide STRIPE_COUPON_ID, allow users to enter a promo code.
       allow_promotion_codes: !couponId,
+      client_reference_id: String(biz.id),
+      metadata: { business_id: String(biz.id), owner_id: String(user.id) },
+      subscription_data: {
+        metadata: { business_id: String(biz.id), owner_id: String(user.id) },
+      },
     });
 
     return NextResponse.json({ url: session.url });

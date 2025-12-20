@@ -4,7 +4,17 @@ STRIPE_PRICE_ID=price_...
 # Optional: if provided, it will be applied automatically as a discount.
 STRIPE_COUPON_ID=coupon_...
 
-# Used for Stripe success/cancel URLs
-NEXT_PUBLIC_APP_URL=http://localhost:3000
+# Webhook verification secret (Stripe Dashboard → Developers → Webhooks → Signing secret)
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# Supabase admin key for webhook writes (NEVER expose to client)
+SUPABASE_SERVICE_ROLE_KEY=...
+
+# Admin-only API key for server routes like /api/admin/hard-delete-user
+ADMIN_API_KEY=...
+
+# Used for Stripe success/cancel URLs (set to your deployed origin)
+# Example: https://your-app.example.com
+NEXT_PUBLIC_APP_URL=
 
 

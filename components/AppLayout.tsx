@@ -5,37 +5,213 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../utils/supabaseClient';
 
 type NavItem = {
   label: string;
   href: string;
+  icon:
+    | 'dashboard'
+    | 'transactions'
+    | 'invoices'
+    | 'bills'
+    | 'customers'
+    | 'ai'
+    | 'reports'
+    | 'pricing'
+    | 'settings';
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Dashboard', href: '/' },
-  { label: 'Transactions', href: '/transactions' },
-  { label: 'Invoices', href: '/invoices' },
-  { label: 'Bills', href: '/bills' },
-  { label: 'Customers', href: '/customers' },
-  { label: 'AI Advisor', href: '/ai-advisor' },
-  { label: 'Reports', href: '/reports' },
-  { label: 'Pricing', href: '/pricing' },
+  { label: 'Dashboard', href: '/dashboard', icon: 'dashboard' },
+  { label: 'Transactions', href: '/transactions', icon: 'transactions' },
+  { label: 'Invoices', href: '/invoices', icon: 'invoices' },
+  { label: 'Bills', href: '/bills', icon: 'bills' },
+  { label: 'Customers', href: '/customers', icon: 'customers' },
+  { label: 'AI Advisor', href: '/ai-advisor', icon: 'ai' },
+  { label: 'Reports', href: '/reports', icon: 'reports' },
+  { label: 'Settings', href: '/settings', icon: 'settings' },
+  { label: 'Pricing', href: '/pricing', icon: 'pricing' },
 ];
 
 function isActive(pathname: string, href: string) {
-  if (href === '/') return pathname === '/';
   return pathname === href;
+}
+
+function NavIcon({ name }: { name: NavItem['icon'] }) {
+  const common = 'h-4 w-4 shrink-0';
+  if (name === 'dashboard') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M4 13.5V6.8c0-.8.6-1.5 1.4-1.6l5-.8c1-.1 1.8.6 1.8 1.6v7.5c0 .9-.7 1.6-1.6 1.6H5.6c-.9 0-1.6-.7-1.6-1.6Z"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M12.8 13.5V10c0-.9.7-1.6 1.6-1.6h4c.9 0 1.6.7 1.6 1.6v7.8c0 .9-.7 1.6-1.6 1.6h-4c-.9 0-1.6-.7-1.6-1.6v-1.8"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (name === 'transactions') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path d="M7 7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M7 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M7 17h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M3 7h.01M3 12h.01M3 17h.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'invoices') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M7 3h8l3 3v15l-2-1-2 1-2-1-2 1-2-1-2 1V3Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path d="M9 10h6M9 14h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'bills') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M6 3h12v18l-2-1-2 1-2-1-2 1-2-1-2 1V3Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path d="M8.5 10h7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M8.5 14h4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'customers') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0Z"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M4 21c1.5-4 14.5-4 16 0"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (name === 'ai') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+      </svg>
+    );
+  }
+  if (name === 'reports') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path d="M4 19V5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M4 19h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M8 15v-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M12 15V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <path d="M16 15v-3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === 'pricing') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M7 7h10l-1 12H8L7 7Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path d="M9 7a3 3 0 0 1 6 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  // settings
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+      <path
+        d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+      <path
+        d="M19.4 15a8 8 0 0 0 .1-2l2-1.2-2-3.5-2.3.6a8 8 0 0 0-1.7-1l-.3-2.4H11l-.3 2.4a8 8 0 0 0-1.7 1l-2.3-.6-2 3.5 2 1.2a8 8 0 0 0 0 2l-2 1.2 2 3.5 2.3-.6a8 8 0 0 0 1.7 1L11 22h4l.3-2.4a8 8 0 0 0 1.7-1l2.3.6 2-3.5-2-1.2Z"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [email, setEmail] = useState<string | null>(null);
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
   const [appResetKey, setAppResetKey] = useState(0);
+  const [subscriptionActive, setSubscriptionActive] = useState<boolean>(true);
+  const [subscriptionChecked, setSubscriptionChecked] = useState<boolean>(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // IMPORTANT: Avoid reading window/localStorage during render to prevent hydration mismatches.
+  // Use a deterministic default for the first render, then hydrate from localStorage in an effect.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+
+    // Persisted sidebar state (desktop)
+    try {
+      const raw = localStorage.getItem('sidebarCollapsed');
+      if (raw === '1' || raw === 'true') setSidebarCollapsed(true);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  async function getSubscriptionActiveForOwner(userId: string): Promise<boolean> {
+    const first = await supabase
+      .from('business')
+      .select('id, subscription_status')
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    // If the row doesn't exist yet (trigger not applied / race), treat as inactive (paywall).
+    if (first.error || !first.data?.id) return false;
+
+    const status = String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+    return status === 'active';
+  }
 
   function clearAppClientCache() {
     try {
@@ -71,18 +247,51 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }
 
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sidebarCollapsed', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
+
   useEffect(() => {
     let mounted = true;
+
+    async function checkSubscription(session: any | null) {
+      try {
+        const userId = session?.user?.id ?? null;
+        if (!userId) {
+          if (!mounted) return;
+          setSubscriptionActive(true);
+          setSubscriptionChecked(true);
+          return;
+        }
+
+        const isActive = await getSubscriptionActiveForOwner(userId);
+        if (!mounted) return;
+        setSubscriptionActive(isActive);
+        setSubscriptionChecked(true);
+      } catch {
+        if (!mounted) return;
+        setSubscriptionActive(false);
+        setSubscriptionChecked(true);
+      }
+    }
+
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      setEmail(data.session?.user?.email ?? null);
       setSessionUserId(data.session?.user?.id ?? null);
+      void checkSubscription(data.session ?? null);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      const nextEmail = session?.user?.email ?? null;
       const nextUserId = session?.user?.id ?? null;
 
       // Hard reset app state whenever the auth identity changes.
@@ -91,102 +300,140 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         setAppResetKey((k) => k + 1);
       }
 
-      setEmail(nextEmail);
       setSessionUserId(nextUserId);
+      void checkSubscription(session ?? null);
     });
+
+    function onFocus() {
+      // Re-check on focus so users returning from Stripe can unlock without a hard refresh.
+      void supabase.auth.getSession().then(({ data }) => checkSubscription(data.session ?? null));
+    }
+    window.addEventListener('focus', onFocus);
 
     return () => {
       mounted = false;
       sub.subscription.unsubscribe();
+      window.removeEventListener('focus', onFocus);
     };
   }, []);
 
-  async function logout() {
-    setSigningOut(true);
-    try {
-      clearAppClientCache();
-      await supabase.auth.signOut();
-      router.push('/login?redirect=/dashboard');
-    } finally {
-      setSigningOut(false);
-    }
+  useEffect(() => {
+    // NOTE: We no longer hard-redirect users to /pricing when subscription is inactive.
+    // Navigation should always work; individual pages can decide how to present paywalls.
+    // (Kept subscription state for pricing UI / future feature-gating.)
+  }, []);
+
+  useEffect(() => {
+    // Auto-unlock: while paywalled, poll periodically so Stripe webhook changes take effect without refresh.
+    if (!subscriptionChecked) return;
+    if (subscriptionActive) return;
+
+    let cancelled = false;
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          const { data } = await supabase.auth.getSession();
+          const userId = data.session?.user?.id ?? null;
+          if (!userId) return;
+          const isActive = await getSubscriptionActiveForOwner(userId);
+          if (cancelled) return;
+          if (isActive) {
+            setSubscriptionActive(true);
+          }
+        } catch {
+          // ignore
+        }
+      })();
+    }, 8000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [subscriptionChecked, subscriptionActive]);
+
+  if (!mounted) {
+    // Keep markup stable between server + first client render, while still running hooks in a stable order.
+    return <div className="min-h-screen bg-slate-950 text-slate-50" />;
   }
 
   return (
     <div className="min-h-screen flex bg-slate-950 text-slate-50">
       {/* Sidebar */}
-      <aside className="no-print hidden md:flex md:flex-col w-60 bg-slate-950 border-r border-slate-800/80 px-4 py-5">
+      <aside
+        className={`no-print hidden md:flex md:flex-col bg-slate-950 border-r border-slate-800/80 py-5 transition-all duration-200 ${
+          sidebarCollapsed ? 'w-16 px-2' : 'w-60 px-4'
+        }`}
+      >
         <div className="mb-6">
-          <div className="flex items-center gap-2">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-emerald-400 via-sky-400 to-blue-500 shadow-lg shadow-emerald-500/40" />
-            <div>
-              <div className="text-sm font-semibold tracking-tight">
-                RevGuard
-              </div>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400">
-                AI ACCOUNTING
-              </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Image
+                src="/revguard-r.svg"
+                alt="RevGuard"
+                width={32}
+                height={32}
+                className="h-8 w-8"
+              />
+              {!sidebarCollapsed ? (
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold tracking-tight truncate">
+                    RevGuard
+                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400 truncate">
+                    AI ACCOUNTING
+                  </div>
+                </div>
+              ) : null}
             </div>
+
+            <button
+              type="button"
+              onClick={toggleSidebarCollapsed}
+              className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950/40 p-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
+                <path
+                  d={sidebarCollapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1 text-sm">
+        <nav className="flex-1 space-y-1 text-sm overflow-y-auto pr-1">
           {NAV_ITEMS.map((item) => {
             const active = isActive(pathname, item.href);
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-2 rounded-xl px-3 py-2 transition-colors ${
+                title={sidebarCollapsed ? item.label : undefined}
+                className={`flex items-center rounded-xl py-2 transition-colors ${
                   active
                     ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40 shadow-sm shadow-emerald-500/40'
                     : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
-                }`}
+                } ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
               >
-                <span className="truncate">{item.label}</span>
+                <NavIcon name={item.icon} />
+                <span className={sidebarCollapsed ? 'hidden' : 'truncate'}>
+                  {item.label}
+                </span>
               </Link>
             );
           })}
         </nav>
-
-        <div className="mt-4 pt-3 border-t border-slate-800">
-          {email ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 px-4 py-3 shadow-[0_0_0_1px_rgba(148,163,184,0.06)]">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                    Account
-                  </div>
-                  <div className="mt-1 text-[12px] text-slate-300 truncate">
-                    {email}
-                  </div>
-                </div>
-              </div>
-              <div className="my-3 h-px bg-slate-800/80" />
-              <button
-                type="button"
-                onClick={logout}
-                disabled={signingOut}
-                className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950/30 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
-              >
-                {signingOut ? 'Logging out…' : 'Log out'}
-              </button>
-            </div>
-          ) : (
-            <div className="text-[11px] text-slate-400 space-y-2">
-              <div>
-                <div>Signed in as</div>
-                <div className="font-medium text-slate-100">Not signed in</div>
-              </div>
-              <Link
-                href="/login?redirect=/dashboard"
-                className="block rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/15"
-              >
-                Log in
-              </Link>
-            </div>
-          )}
-        </div>
       </aside>
 
       {/* Main content */}
@@ -200,29 +447,81 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               AI ACCOUNTING
             </div>
           </div>
-          {email ? (
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:block text-[11px] text-slate-400 max-w-[180px] truncate">
-                {email}
-              </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/settings"
+              className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => setMobileNavOpen(false)}
+            >
+              <span className="inline-flex items-center gap-2">
+                <NavIcon name="settings" />
+                <span className="hidden sm:inline">Settings</span>
+              </span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(true)}
+              className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
+              aria-label="Open navigation"
+            >
+              Menu
+            </button>
+          </div>
+        </div>
+
+        <div
+          className={`no-print md:hidden fixed inset-0 z-[90] transition-opacity duration-200 ${
+            mobileNavOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          }`}
+        >
+          <button
+            type="button"
+            aria-label="Close navigation overlay"
+            className="absolute inset-0 bg-black/60"
+            onClick={() => setMobileNavOpen(false)}
+          />
+
+          <div
+            className={`absolute inset-y-0 left-0 w-[82%] max-w-xs bg-slate-950 border-r border-slate-800 p-4 transition-transform duration-200 ${
+              mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-semibold text-slate-100">Navigation</div>
               <button
                 type="button"
-                onClick={logout}
-                disabled={signingOut}
-                className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
+                onClick={() => setMobileNavOpen(false)}
+                className="rounded-lg border border-slate-800 bg-slate-950/30 px-2 py-1 text-xs text-slate-200"
               >
-                {signingOut ? '…' : 'Log out'}
+                Close
               </button>
             </div>
-          ) : (
-            <Link
-              href="/login?redirect=/dashboard"
-              className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/15"
-            >
-              Log in
-            </Link>
-          )}
+
+            <nav className="mt-4 space-y-1 text-sm max-h-[70vh] overflow-y-auto pr-1">
+              {NAV_ITEMS.map((item) => {
+                const active = isActive(pathname, item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setMobileNavOpen(false)}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-2 transition-colors ${
+                      active
+                        ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40'
+                        : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
+                    }`}
+                  >
+                    <NavIcon name={item.icon} />
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </div>
         </div>
+
         <div
           key={`${sessionUserId ?? 'anon'}:${appResetKey}`}
           className="max-w-6xl mx-auto px-4 py-8 md:py-10"

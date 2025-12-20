@@ -55,6 +55,14 @@ export function useTransactions(
         return;
       }
 
+      const { data: sess } = await supabase.auth.getSession();
+      const userId = sess.session?.user?.id ?? null;
+      if (!userId) {
+        setError('Please log in to load transactions.');
+        setTransactions([]);
+        return;
+      }
+
       const { from, to } = computeDateRange(
         filters.datePreset,
         filters.from,
@@ -105,7 +113,6 @@ export function useTransactions(
         status: (row.status as TransactionStatus | null) ?? null,
         source: (row.source as Transaction['source']) ?? null,
         notes: (row.notes as string | null) ?? null,
-        user_id: row.user_id ?? 'demo-user',
         business_id: row.business_id ?? null,
         created_at: row.created_at ?? null,
         updated_at: row.updated_at ?? null,
@@ -169,10 +176,16 @@ export function useTransactions(
       prev.map((tx) => (tx.id === id ? { ...tx, ...patch } : tx))
     );
 
+    if (!businessId) {
+      await load();
+      return;
+    }
+
     const { error: updError } = await supabase
       .from('transactions')
       .update(patch)
-      .eq('id', id);
+      .eq('id', id)
+      .eq('business_id', businessId);
 
     if (updError) {
       await load();
@@ -185,11 +198,13 @@ export function useTransactions(
     extra?: { category?: string }
   ) {
     if (!ids.length) return;
+    if (!businessId) return;
 
     if (action === 'delete') {
       const { error: delError } = await supabase
         .from('transactions')
         .delete()
+        .eq('business_id', businessId)
         .in('id', ids);
       if (delError) {
         return;
@@ -208,6 +223,7 @@ export function useTransactions(
     const { error: updError } = await supabase
       .from('transactions')
       .update(patch)
+      .eq('business_id', businessId)
       .in('id', ids);
     if (updError) {
       return;

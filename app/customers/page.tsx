@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAppData } from '../../components/AppDataProvider';
 
 type Customer = {
   id: string;
@@ -31,15 +32,17 @@ const initialCustomerForm = {
   last_invoice_date: '',
 };
 
-type CustomersSectionProps = {
-  selectedBusinessId: string | null;
-};
+const CustomersSection: React.FC = () => {
+  const queryClient = useQueryClient();
+  const {
+    businessId: selectedBusinessId,
+    userId,
+    customers: customersRaw,
+    loading,
+    error: loadError,
+  } = useAppData();
 
-const CustomersSection: React.FC<CustomersSectionProps> = ({
-  selectedBusinessId,
-}) => {
-  const [customers, setCustomers] = React.useState<Customer[]>([]);
-  const [loading, setLoading] = React.useState(false);
+  const customers = (customersRaw as any[]) as Customer[];
   const [error, setError] = React.useState<string | null>(null);
   const [search, setSearch] = React.useState('');
   const [isCreating, setIsCreating] = React.useState(false);
@@ -50,33 +53,7 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
   const [form, setForm] =
     React.useState<typeof initialCustomerForm>(initialCustomerForm);
 
-  React.useEffect(() => {
-    if (!selectedBusinessId) {
-      setCustomers([]);
-      return;
-    }
-
-    const loadCustomers = async () => {
-      setLoading(true);
-      setError(null);
-      const { data, error } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('business_id', selectedBusinessId)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        // eslint-disable-next-line no-console
-        console.error('Error loading customers', error);
-        setError('Could not load customers.');
-      } else if (Array.isArray(data)) {
-        setCustomers(data as Customer[]);
-      }
-      setLoading(false);
-    };
-
-    loadCustomers();
-  }, [selectedBusinessId]);
+  const effectiveError = error || loadError;
 
   const handleInputChange = (
     e:
@@ -103,6 +80,13 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
     setSaving(true);
     setError(null);
 
+    const userIdToUse = userId ?? null;
+    if (!userIdToUse) {
+      setError('Please log in to save customers.');
+      setSaving(false);
+      return;
+    }
+
     const payload = {
       business_id: selectedBusinessId ?? null,
       name: form.name.trim(),
@@ -122,6 +106,7 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
         .from('customers')
         .update(payload)
         .eq('id', editingCustomer.id)
+        .eq('business_id', selectedBusinessId)
         .select('*');
     } else {
       res = await supabase.from('customers').insert(payload).select('*');
@@ -136,13 +121,7 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
       return;
     }
 
-    const updated = (data ?? [])[0] as Customer;
-    setCustomers((prev) => {
-      if (editingCustomer) {
-        return prev.map((c) => (c.id === updated.id ? updated : c));
-      }
-      return [...prev, updated];
-    });
+    await queryClient.invalidateQueries({ queryKey: ['customers', selectedBusinessId] });
 
     setEditingCustomer(null);
     setForm({
@@ -290,9 +269,9 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
         </div>
       </div>
 
-      {error && (
+      {effectiveError && (
         <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          {error}
+          {effectiveError}
         </div>
       )}
 
@@ -556,8 +535,7 @@ const CustomersSection: React.FC<CustomersSectionProps> = ({
 };
 
 export default function CustomersPage() {
-  const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
+  const { loading: businessLoading, error: businessError } = useAppData();
 
   return (
     <main className="space-y-4">
@@ -575,7 +553,7 @@ export default function CustomersPage() {
         {businessLoading && <div className="text-xs text-slate-400">Loading business…</div>}
 
         <section className="rounded-2xl bg-slate-900/80 border border-slate-700 p-4 md:p-5">
-          <CustomersSection selectedBusinessId={selectedBusinessId} />
+          <CustomersSection />
         </section>
     </main>
   );

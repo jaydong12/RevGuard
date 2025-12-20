@@ -4,19 +4,37 @@ import React from 'react';
 import { usePathname } from 'next/navigation';
 import AppLayout from './AppLayout';
 import KeepAliveTabs from './KeepAliveTabs';
-import { TransactionsCacheProvider } from './TransactionsCacheProvider';
+import ReactQueryProvider from './ReactQueryProvider';
+import { AppDataProvider } from './AppDataProvider';
 
 type Props = {
   children: React.ReactNode;
 };
 
-const NO_SHELL_PREFIXES = ['/login', '/signup'];
+const AUTH_PREFIXES = ['/login', '/signup'];
+
+// Routes that should render inside the app shell (sidebar + tabs).
+// Everything else (like the marketing landing page at "/") renders without shell.
+const APP_SHELL_PREFIXES = [
+  '/dashboard',
+  '/transactions',
+  '/invoices',
+  '/bills',
+  '/customers',
+  '/ai-advisor',
+  '/reports',
+  '/settings',
+  '/pricing',
+  '/billing',
+  '/admin',
+];
 
 export default function RootShell({ children }: Props) {
   const pathname = usePathname() || '/';
-  const noShell = NO_SHELL_PREFIXES.some((p) => pathname.startsWith(p));
+  const isAuth = AUTH_PREFIXES.some((p) => pathname.startsWith(p));
+  const hasShell = APP_SHELL_PREFIXES.some((p) => pathname.startsWith(p));
 
-  if (noShell) {
+  if (isAuth) {
     // Auth pages should not show the sidebar shell, but should keep the same
     // premium background + centered width container.
     return (
@@ -26,12 +44,19 @@ export default function RootShell({ children }: Props) {
     );
   }
 
+  if (!hasShell) {
+    // Marketing/public pages should not be wrapped by the app shell.
+    return <>{children}</>;
+  }
+
   return (
-    <AppLayout>
-      <TransactionsCacheProvider>
-        <KeepAliveTabs>{children}</KeepAliveTabs>
-      </TransactionsCacheProvider>
-    </AppLayout>
+    <ReactQueryProvider>
+      <AppLayout>
+        <AppDataProvider>
+          <KeepAliveTabs>{children}</KeepAliveTabs>
+        </AppDataProvider>
+      </AppLayout>
+    </ReactQueryProvider>
   );
 }
 

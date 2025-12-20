@@ -5,10 +5,10 @@
 // - Lets you create, edit, and delete a single transaction at a time
 // - Optional client-side search by description
 
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
-import { useTransactionsCache } from '../../components/TransactionsCacheProvider';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAppData } from '../../components/AppDataProvider';
 
 const CATEGORIES = [
   // Income
@@ -55,7 +55,6 @@ type Transaction = {
   amount: number; // positive = income, negative = expense
   customer_id?: string | null;
   business_id?: string | null;
-  user_id?: string | null;
 };
 
 // Form state for creating / editing a transaction.
@@ -78,15 +77,19 @@ type FlowFilter = 'all' | 'income' | 'expenses';
 export default function TransactionsPage() {
   // ---------- basic state ----------
 
-  const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
-  const { getTransactions: getCachedTransactions, setTransactions: setCachedTransactions } =
-    useTransactionsCache();
+  const queryClient = useQueryClient();
+  const {
+    userId,
+    businessId: selectedBusinessId,
+    loading: businessLoading,
+    error: businessError,
+    transactions: transactionsRaw,
+    customers: customersRaw,
+  } = useAppData();
 
-  // List of transactions loaded from Supabase.
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const transactions = (transactionsRaw as any[]) as Transaction[];
+  const loading = businessLoading;
+  const error = businessError;
 
   // Simple client-side search by description.
   const [search, setSearch] = useState('');
@@ -116,133 +119,15 @@ export default function TransactionsPage() {
   });
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Customers for the selected business (for customer dropdown).
-  const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>(
-    []
-  );
-  const [customersLoading, setCustomersLoading] = useState(false);
-  const [customersError, setCustomersError] = useState<string | null>(null);
-
-  function notifyTransactionsChanged() {
-    try {
-      localStorage.setItem('revguard:tx_changed', String(Date.now()));
-      window.dispatchEvent(new Event('revguard:transactions_changed'));
-    } catch {
-      // ignore
-    }
-  }
-
-  // ---------- load transactions ----------
-
-  async function loadTransactions(opts?: { force?: boolean }) {
-    const businessId = selectedBusinessId;
-    const force = Boolean(opts?.force);
-
-    setError(null);
-
-    if (!businessId) {
-      setTransactions([]);
-      setLoading(false);
-      return;
-    }
-
-    if (!force) {
-      const cached = getCachedTransactions<Transaction>(businessId);
-      if (cached) {
-        // Render immediately from cache (no loading flash).
-        setTransactions(cached);
-        setLoading(false);
-        return;
-      }
-    }
-
-    setLoading(true);
-
-    try {
-      const { data, error } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('date', { ascending: false });
-
-      if (error) {
-        setError('Could not load transactions. Please check Supabase logs.');
-        setTransactions([]);
-        return;
-      }
-
-      const mapped = (data ?? []).map((row: any) => ({
-          id: row.id as number,
-          date: row.date ?? '',
-          description: row.description ?? '',
-          category: row.category ?? '',
-          amount: Number(row.amount) || 0,
-          customer_id: row.customer_id ?? null,
-          business_id: row.business_id ?? null,
-          user_id: row.user_id ?? null,
-        })) as Transaction[];
-
-      setTransactions(mapped);
-      setCachedTransactions<Transaction>(businessId, mapped);
-    } catch {
-      setError('Could not load transactions. Please check Supabase logs.');
-      setTransactions([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadTransactions();
-  }, [selectedBusinessId]);
-
-  // ---------- load customers for dropdown ----------
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadCustomers() {
-      setCustomersError(null);
-      setCustomers([]);
-
-      if (!selectedBusinessId) return;
-
-      setCustomersLoading(true);
-      try {
-        const { data, error } = await supabase
-          .from('customers')
-          .select('id, name')
-          .eq('business_id', selectedBusinessId)
-          .order('name', { ascending: true });
-
-        if (!mounted) return;
-
-        if (error) {
-          setCustomersError('Could not load customers.');
-          setCustomers([]);
-          return;
-        }
-
-        setCustomers(
-          (data ?? []).map((c: any) => ({
-            id: String(c.id),
-            name: String(c.name ?? 'Unnamed customer'),
-          }))
-        );
-      } catch {
-        if (!mounted) return;
-        setCustomersError('Could not load customers.');
-        setCustomers([]);
-      } finally {
-        if (mounted) setCustomersLoading(false);
-      }
-    }
-
-    void loadCustomers();
-    return () => {
-      mounted = false;
-    };
-  }, [selectedBusinessId]);
+  const customersLoading = false;
+  const customersError: string | null = null;
+  const customers = useMemo(() => {
+    const rows = (customersRaw as any[]) ?? [];
+    return rows.map((c: any) => ({
+      id: String(c.id),
+      name: String(c.name ?? 'Unnamed customer'),
+    }));
+  }, [customersRaw]);
 
   // ---------- helpers for the form ----------
 
@@ -336,7 +221,6 @@ export default function TransactionsPage() {
             category: formValues.category,
             amount: amountNumber,
             customer_id: customerIdToSave,
-            user_id: userId,
             business_id: selectedBusinessId,
           })
           .select('*')
@@ -349,22 +233,8 @@ export default function TransactionsPage() {
           return;
         }
 
-        const mapped: Transaction = {
-          id: (inserted as any).id as number,
-          date: (inserted as any).date ?? formValues.date,
-          description: (inserted as any).description ?? formValues.description,
-          category: (inserted as any).category ?? formValues.category,
-          amount: Number((inserted as any).amount) || amountNumber,
-          customer_id: (inserted as any).customer_id ?? customerIdToSave,
-          business_id: (inserted as any).business_id ?? selectedBusinessId,
-          user_id: (inserted as any).user_id ?? userId,
-        };
-
-        // Update UI immediately (no refetch).
-        setTransactions((prev) => {
-          const next = [mapped, ...prev];
-          setCachedTransactions<Transaction>(selectedBusinessId, next);
-          return next;
+        await queryClient.invalidateQueries({
+          queryKey: ['transactions', selectedBusinessId],
         });
       } else if (formMode === 'edit' && editingTx) {
         const { data: updated, error } = await supabase
@@ -388,27 +258,13 @@ export default function TransactionsPage() {
           return;
         }
 
-        const mapped: Transaction = {
-          id: (updated as any).id as number,
-          date: (updated as any).date ?? formValues.date,
-          description: (updated as any).description ?? formValues.description,
-          category: (updated as any).category ?? formValues.category,
-          amount: Number((updated as any).amount) || amountNumber,
-          customer_id: (updated as any).customer_id ?? customerIdToSave,
-          business_id: (updated as any).business_id ?? selectedBusinessId,
-          user_id: (updated as any).user_id ?? userId,
-        };
-
-        setTransactions((prev) => {
-          const next = prev.map((t) => (t.id === mapped.id ? mapped : t));
-          setCachedTransactions<Transaction>(selectedBusinessId, next);
-          return next;
+        await queryClient.invalidateQueries({
+          queryKey: ['transactions', selectedBusinessId],
         });
       }
 
       // On success: close the form and refresh the list
       closeForm();
-      notifyTransactionsChanged();
     } catch {
       setFormError('Something went wrong. Please try again.');
     }
@@ -421,18 +277,32 @@ export default function TransactionsPage() {
     if (!ok) return;
 
     try {
+      if (!selectedBusinessId) {
+        alert('Loading your business…');
+        return;
+      }
+
+      const userIdToUse = userId ?? null;
+      if (!userIdToUse) {
+        alert('Please log in to delete transactions.');
+        return;
+      }
+
       const { error } = await supabase
         .from('transactions')
         .delete()
-        .eq('id', tx.id);
+        .eq('id', tx.id)
+        .eq('business_id', selectedBusinessId)
+        ;
 
       if (error) {
         alert('Could not delete transaction. Please try again.');
         return;
       }
 
-      await loadTransactions();
-      notifyTransactionsChanged();
+      await queryClient.invalidateQueries({
+        queryKey: ['transactions', selectedBusinessId],
+      });
     } catch {
       alert('Could not delete transaction. Please try again.');
     }

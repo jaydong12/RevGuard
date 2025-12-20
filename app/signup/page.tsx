@@ -30,12 +30,33 @@ function SignupInner() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
+  async function getSubscriptionStatus(userId: string): Promise<string> {
+    const first = await supabase
+      .from('business')
+      .select('id, subscription_status')
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    // If the row doesn't exist yet (trigger not applied / race), treat as inactive (paywall).
+    if (first.error || !first.data?.id) return 'inactive';
+
+    return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+  }
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      if (data.session) router.replace('/dashboard');
+      if (data.session) {
+        const userId = data.session.user.id;
+        const status = await getSubscriptionStatus(userId);
+
+        if (status !== 'active') router.replace('/pricing');
+        else router.replace(next);
+      }
     })();
     return () => {
       mounted = false;
@@ -62,36 +83,12 @@ function SignupInner() {
 
       // If email confirmation is off, we get a session immediately.
       if (data.session) {
-        // Ensure the single business exists immediately so the app never gates
-        // actions behind "select a business" after signup.
-        try {
-          const userId = data.session.user.id;
+        // Paywall: if not active, redirect to pricing after signup.
+        const userId = data.session.user.id;
+        const status = await getSubscriptionStatus(userId);
 
-          // Prefer owner-scoped business; fall back if owner_id isn't migrated.
-          const res = await supabase
-            .from('business')
-            .select('id, created_at, owner_id')
-            .eq('owner_id', userId)
-            .order('created_at', { ascending: true });
-
-          if (res.error) throw res.error;
-
-          const rows = (res.data as any[]) ?? [];
-          if (rows.length === 0) {
-            const ins = await supabase
-              .from('business')
-              .insert({ name: 'My Business', owner_id: userId } as any)
-              .select('id')
-              .single();
-
-            if (ins.error) throw ins.error;
-          }
-        } catch (e: any) {
-          // eslint-disable-next-line no-console
-          console.error('SIGNUP_ENSURE_BUSINESS_ERROR', e);
-        }
-
-        router.replace(next);
+        if (status !== 'active') router.replace('/pricing');
+        else router.replace(next);
         return;
       }
 

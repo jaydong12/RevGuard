@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
-import { supabase } from '../../../../utils/supabaseClient';
+import { createClient } from '@supabase/supabase-js';
 import {
   getTransactionsInsights,
   type AIInsightResult,
@@ -51,10 +51,49 @@ export async function POST(request: Request) {
       );
     }
 
+    const authHeader = request.headers.get('authorization') ?? '';
+    const token = authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7)
+      : null;
+
+    if (!token) {
+      return NextResponse.json<AIInsightResult>(
+        {
+          summary: 'Please log in again.',
+          observations: [],
+          actions: [],
+        },
+        { status: 401 }
+      );
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        global: { headers: { Authorization: `Bearer ${token}` } },
+        auth: { persistSession: false, autoRefreshToken: false },
+      }
+    );
+
+    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+    const user = userRes?.user ?? null;
+    if (userErr || !user) {
+      return NextResponse.json<AIInsightResult>(
+        {
+          summary: 'Please log in again.',
+          observations: [],
+          actions: [],
+        },
+        { status: 401 }
+      );
+    }
+
     let query = supabase
       .from('transactions')
       .select('*')
       .eq('business_id', businessId)
+      .eq('user_id', user.id)
       .gte('date', from)
       .lte('date', to);
 

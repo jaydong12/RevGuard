@@ -7,7 +7,7 @@ create table if not exists public.bills (
   id bigserial primary key,
   created_at timestamptz not null default now(),
 
-  -- Link to businesses if you have that table; keep nullable for demo data
+  -- Ownership / scoping
   business_id uuid,
 
   -- Core bill fields
@@ -32,7 +32,72 @@ create table if not exists public.bills (
   reminder_days_before integer default 7
 );
 
--- Disable RLS for now so dev/testing isn't blocked
-alter table public.bills disable row level security;
+-- Backfill safety: ensure business_id exists even if the table pre-dated this file.
+alter table if exists public.bills
+  add column if not exists business_id uuid;
+
+-- Enable RLS + policies (match frontend filters).
+alter table public.bills enable row level security;
+
+drop policy if exists "bills_select_own" on public.bills;
+drop policy if exists "bills_insert_own" on public.bills;
+drop policy if exists "bills_update_own" on public.bills;
+drop policy if exists "bills_delete_own" on public.bills;
+
+create policy "bills_select_own"
+  on public.bills
+  for select
+  using (
+    exists (
+      select 1
+      from public.business b
+      where b.id = bills.business_id
+        and b.owner_id = auth.uid()
+    )
+  );
+
+create policy "bills_insert_own"
+  on public.bills
+  for insert
+  with check (
+    exists (
+      select 1
+      from public.business b
+      where b.id = bills.business_id
+        and b.owner_id = auth.uid()
+    )
+  );
+
+create policy "bills_update_own"
+  on public.bills
+  for update
+  using (
+    exists (
+      select 1
+      from public.business b
+      where b.id = bills.business_id
+        and b.owner_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.business b
+      where b.id = bills.business_id
+        and b.owner_id = auth.uid()
+    )
+  );
+
+create policy "bills_delete_own"
+  on public.bills
+  for delete
+  using (
+    exists (
+      select 1
+      from public.business b
+      where b.id = bills.business_id
+        and b.owner_id = auth.uid()
+    )
+  );
 
 

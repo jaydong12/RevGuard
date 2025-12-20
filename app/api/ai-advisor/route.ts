@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -83,6 +84,22 @@ function ssePack(event: string, data: any) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function getBearerToken(req: Request): string | null {
+  const authHeader = req.headers.get('authorization') ?? '';
+  return authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7) : null;
+}
+
+function isMissingTableError(err: any): boolean {
+  const code = String(err?.code ?? '');
+  const msg = String(err?.message ?? '');
+  // Supabase/Postgres: 42P01 = undefined_table
+  return code === '42P01' || msg.toLowerCase().includes('does not exist');
+}
+
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 // Stream SSE so the frontend can render progressively (and never double-append).
 export async function POST(req: Request) {
   const encoder = new TextEncoder();
@@ -103,7 +120,7 @@ export async function POST(req: Request) {
 
   (async () => {
     try {
-      const { message, businessId, context } = (await req.json()) as {
+      const { message, businessId: _businessId, context } = (await req.json()) as {
         message?: string;
         businessId?: string | null;
         context?: {
@@ -132,7 +149,9 @@ export async function POST(req: Request) {
         return;
       }
 
-      if (!businessId || !String(businessId).trim()) {
+      // Require an authenticated user (bearer token).
+      const token = getBearerToken(req);
+      if (!token) {
         await write('delta', { text: 'Sign in required.' });
         await finish();
         return;
@@ -146,14 +165,143 @@ export async function POST(req: Request) {
         return;
       }
 
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          global: { headers: { Authorization: `Bearer ${token}` } },
+          auth: { persistSession: false, autoRefreshToken: false },
+        }
+      );
+
+      const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+      const user = userRes?.user ?? null;
+      if (userErr || !user) {
+        await write('delta', { text: 'Sign in required.' });
+        await finish();
+        return;
+      }
+
+      // Load the user's single business (scoped by owner_id = auth.uid()).
+      const bizRes = await supabase
+        .from('business')
+        .select('id, name')
+        .eq('owner_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      const business = bizRes.data ?? null;
+      if (bizRes.error || !business?.id) {
+        // If the trigger hasn't created it yet, treat as gated.
+        await write('delta', { text: 'Business not ready yet. Please refresh and try again.' });
+        await finish();
+        return;
+      }
+
+      // If client passed a businessId, enforce scoping by owner: ignore mismatches.
+      // (We do not rely on client-provided businessId for security.)
+      const effectiveBusinessId = String(business.id);
+
+      // -------------------------
+      // Load / create AI memory
+      // -------------------------
+      type MemoryRow = {
+        id: string;
+        business_id: string;
+        memory_text: string | null;
+        facts: any;
+        preferences: any;
+      };
+
+      let memory: MemoryRow | null = null;
+      try {
+        const memRes = await supabase
+          .from('ai_business_memory')
+          .select('id, business_id, memory_text, facts, preferences')
+          .eq('business_id', effectiveBusinessId)
+          .maybeSingle();
+
+        if (memRes.error && !isMissingTableError(memRes.error)) throw memRes.error;
+        memory = (memRes.data as any) ?? null;
+
+        if (!memory?.id && !memRes.error) {
+          const ins = await supabase
+            .from('ai_business_memory')
+            .insert({
+              business_id: effectiveBusinessId,
+              memory_text: '',
+              facts: {},
+              preferences: {},
+            } as any)
+            .select('id, business_id, memory_text, facts, preferences')
+            .single();
+
+          if (ins.error && !isMissingTableError(ins.error)) throw ins.error;
+          memory = (ins.data as any) ?? null;
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_MEMORY_LOAD_ERROR', e);
+        memory = null;
+      }
+
+      // -------------------------
+      // Compute basic KPIs (30d)
+      // -------------------------
+      const today = new Date();
+      const from30 = new Date();
+      from30.setDate(today.getDate() - 30);
+
+      const from30Str = isoDate(from30);
+      const todayStr = isoDate(today);
+
+      let revenue_30d = 0;
+      let expenses_30d = 0;
+      let net_30d = 0;
+      let cash_estimate = 0;
+
+      try {
+        const txRes = await supabase
+          .from('transactions')
+          .select('amount, date')
+          .eq('business_id', effectiveBusinessId)
+          .eq('user_id', user.id)
+          .gte('date', from30Str)
+          .lte('date', todayStr);
+
+        if (txRes.error && !isMissingTableError(txRes.error)) throw txRes.error;
+        const rows = (txRes.data as any[]) ?? [];
+        for (const row of rows) {
+          const amt = Number(row?.amount) || 0;
+          if (amt > 0) revenue_30d += amt;
+          if (amt < 0) expenses_30d += Math.abs(amt);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_KPI_ERROR', e);
+      }
+
+      net_30d = revenue_30d - expenses_30d;
+      // We don't have balances here; this is a conservative simple proxy.
+      cash_estimate = net_30d;
+
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
       const basePolicy = `
 Response policy:
-- Output ONE reply only.
-- Be concise: <= 5 lines total.
-- Max 1 clarifying question, only if absolutely necessary.
-- No filler. No long question lists.
+- You must output JSON only.
+- Tone: friendly, direct, supportive—like a CFO explaining things to a first-time business owner.
+- No giant paragraphs. Use short sentences and bullets.
+- Avoid accounting terms unless necessary. If you use one, define it inline (e.g., "AR = money customers owe you").
+- Plain-English and professional. Default to direct, simple explanations.
+- Do NOT use analogies in most responses.
+- Never use stacked metaphors.
+- Only use an analogy if it clearly improves understanding, and keep it to ONE short analogy max.
+- Throttle analogies: at most ONE analogy every ~10 responses (use the analogy_cooldown preference described below).
+- Round numbers and add commas. Use $ and timeframes (e.g., "last 30 days").
+- If confidence < 0.6, include the exact phrase "This is a best guess" and say what data would improve it.
+- Keep memory updates concise and factual (no speculation).
       `.trim();
 
       const cfoSystem = `
@@ -195,26 +343,226 @@ Keep it <=5 lines.
         summaryError: context?.summaryError ?? null,
       };
 
-      const user =
+      const kpis = {
+        revenue_30d,
+        expenses_30d,
+        net_30d,
+        cash_estimate,
+        from_30d: from30Str,
+        to: todayStr,
+      };
+
+      const memoryForPrompt = {
+        memory_text: String((memory as any)?.memory_text ?? '').slice(0, 1500),
+        facts: (memory as any)?.facts ?? {},
+        preferences: (memory as any)?.preferences ?? {},
+      };
+
+      const promptPayload =
         mode === 'cfo'
-          ? `Business metrics:\n${JSON.stringify(cfoContext)}\n\nUser: ${text}`
-          : `UI context:\n${JSON.stringify(supportContext)}\n\nUser: ${text}`;
+          ? {
+              business: { id: effectiveBusinessId, name: business?.name ?? null },
+              kpis,
+              cfo_context: cfoContext,
+              memory: memoryForPrompt,
+              user_message: text,
+            }
+          : {
+              business: { id: effectiveBusinessId, name: business?.name ?? null },
+              kpis,
+              ui_context: supportContext,
+              memory: memoryForPrompt,
+              user_message: text,
+            };
+
+      const jsonShape = `Return JSON ONLY with this exact shape:
+{
+  "answer": "string",
+  "new_recommendations": ["string", "string"],
+  "memory_patch": {
+    "memory_append": "string",
+    "facts_merge": { },
+    "preferences_merge": { }
+  }
+}
+Rules:
+- The "answer" MUST follow this structure every time (use these headings in this order):
+  1) Summary: 1–2 sentences (no jargon)
+  2) What this means: simple explanation (1–3 short sentences)
+  3) What to do next: up to 3 bullets max, concrete steps
+  4) Numbers (optional): a small section (1–4 short lines), not the whole answer
+- Avoid accounting terms unless necessary; if used, define it inline.
+- No long paragraphs. Keep sentences short.
+- Round numbers and add commas. Use $ and timeframes like "last 30 days".
+- If confidence < 0.6, include the exact phrase "This is a best guess" and suggest what data would improve it.
+- new_recommendations: 0-3 items, each actionable and specific (no duplicates of "What to do next").
+- memory_patch.memory_append: <= 300 chars, factual, no opinions.
+- facts_merge / preferences_merge: only stable facts/preferences; omit unknowns.
+- Analogy throttle (preferences):
+  - Read memory.preferences.analogy_cooldown (number). If missing, assume 0.
+  - If analogy_cooldown > 0: do NOT use analogies, and set preferences_merge.analogy_cooldown to (analogy_cooldown - 1).
+  - If analogy_cooldown == 0: avoid analogies by default; only use ONE short analogy if truly helpful.
+    - If you use an analogy, set preferences_merge.analogy_cooldown to 9.
+    - If you do NOT use an analogy, set preferences_merge.analogy_cooldown to 0.
+`.trim();
 
       const completion = await openai.chat.completions.create({
         model: 'gpt-4.1-mini',
-        stream: true,
         temperature: 0.4,
+        response_format: { type: 'json_object' } as any,
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: user },
+          { role: 'user', content: `${jsonShape}\n\nInput:\n${JSON.stringify(promptPayload)}` },
         ],
       });
 
-      for await (const chunk of completion as any) {
-        const delta = chunk?.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string' && delta.length) {
-          await write('delta', { text: delta });
+      const raw = completion.choices?.[0]?.message?.content ?? '';
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+
+      const answer =
+        typeof parsed?.answer === 'string' && parsed.answer.trim()
+          ? parsed.answer.trim()
+          : raw.toString().trim() || 'AI unavailable. Check API keys.';
+
+      const newRecommendations: string[] = Array.isArray(parsed?.new_recommendations)
+        ? parsed.new_recommendations
+            .filter((x: any) => typeof x === 'string')
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+            .slice(0, 3)
+        : [];
+
+      const memoryPatch = {
+        memory_append:
+          typeof parsed?.memory_patch?.memory_append === 'string'
+            ? parsed.memory_patch.memory_append.trim().slice(0, 300)
+            : '',
+        facts_merge:
+          parsed?.memory_patch?.facts_merge && typeof parsed.memory_patch.facts_merge === 'object'
+            ? parsed.memory_patch.facts_merge
+            : {},
+        preferences_merge:
+          parsed?.memory_patch?.preferences_merge &&
+          typeof parsed.memory_patch.preferences_merge === 'object'
+            ? parsed.memory_patch.preferences_merge
+            : {},
+      };
+
+      // -------------------------
+      // Persist: log, recs, memory, snapshots (best-effort)
+      // -------------------------
+      let adviceLogId: string | null = null;
+
+      try {
+        const ins = await supabase
+          .from('ai_advice_log')
+          .insert({
+            business_id: effectiveBusinessId,
+            user_id: user.id,
+            prompt: text,
+            answer,
+            mode,
+            kpis,
+            new_recommendations: newRecommendations,
+            memory_patch: memoryPatch,
+            model: 'gpt-4.1-mini',
+          } as any)
+          .select('id')
+          .single();
+
+        if (ins.error && !isMissingTableError(ins.error)) throw ins.error;
+        adviceLogId = (ins.data as any)?.id ?? null;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_LOG_INSERT_ERROR', e);
+      }
+
+      try {
+        if (newRecommendations.length) {
+          const rows = newRecommendations.map((rec) => ({
+            business_id: effectiveBusinessId,
+            user_id: user.id,
+            advice_log_id: adviceLogId,
+            recommendation: rec,
+            status: 'new',
+          }));
+
+          const r = await supabase.from('ai_recommendations').insert(rows as any);
+          if (r.error && !isMissingTableError(r.error)) throw r.error;
         }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_RECS_INSERT_ERROR', e);
+      }
+
+      try {
+        if (memory?.id) {
+          const prevText = String((memory as any)?.memory_text ?? '');
+          const append = memoryPatch.memory_append ? `${memoryPatch.memory_append}\n` : '';
+          const nextText = (prevText + append).slice(-6000);
+          const prevFacts = (memory as any)?.facts ?? {};
+          const prevPrefs = (memory as any)?.preferences ?? {};
+
+          const nextFacts =
+            prevFacts && typeof prevFacts === 'object'
+              ? { ...prevFacts, ...(memoryPatch.facts_merge ?? {}) }
+              : { ...(memoryPatch.facts_merge ?? {}) };
+          const nextPrefs =
+            prevPrefs && typeof prevPrefs === 'object'
+              ? { ...prevPrefs, ...(memoryPatch.preferences_merge ?? {}) }
+              : { ...(memoryPatch.preferences_merge ?? {}) };
+
+          const up = await supabase
+            .from('ai_business_memory')
+            .update({
+              memory_text: nextText,
+              facts: nextFacts,
+              preferences: nextPrefs,
+              updated_at: new Date().toISOString(),
+            } as any)
+            .eq('id', memory.id)
+            .eq('business_id', effectiveBusinessId);
+
+          if (up.error && !isMissingTableError(up.error)) throw up.error;
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_MEMORY_UPDATE_ERROR', e);
+      }
+
+      try {
+        const snap = await supabase
+          .from('ai_outcome_snapshots')
+          .upsert(
+            {
+              business_id: effectiveBusinessId,
+              snapshot_date: todayStr,
+              revenue_30d,
+              expenses_30d,
+              net_30d,
+              cash_estimate,
+              kpis,
+            } as any,
+            { onConflict: 'business_id,snapshot_date' }
+          );
+        if (snap.error && !isMissingTableError(snap.error)) throw snap.error;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('AI_ADVISOR_SNAPSHOT_UPSERT_ERROR', e);
+      }
+
+      // -------------------------
+      // Stream answer (keep UI behavior unchanged)
+      // -------------------------
+      // Stream in small chunks to preserve the existing "typing" effect.
+      const chunkSize = 80;
+      for (let i = 0; i < answer.length; i += chunkSize) {
+        await write('delta', { text: answer.slice(i, i + chunkSize) });
       }
 
       await finish();

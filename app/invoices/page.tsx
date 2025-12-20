@@ -5,12 +5,17 @@
 // transactions when invoices are marked as paid.
 
 import React, { useState } from 'react';
-import { useSingleBusinessId } from '../../lib/useSingleBusinessId';
 import InvoiceTab from '../../components/InvoiceTab';
+import { useAppData } from '../../components/AppDataProvider';
 
 export default function InvoicesPage() {
-  const { businessId: selectedBusinessId, loading: businessLoading, error: businessError } =
-    useSingleBusinessId();
+  const {
+    businessId: selectedBusinessId,
+    userId,
+    invoices,
+    loading: businessLoading,
+    error: businessError,
+  } = useAppData();
   const selectedBusinessName = 'This business';
 
   return (
@@ -34,6 +39,10 @@ export default function InvoicesPage() {
           <InvoiceTab
             businessId={selectedBusinessId}
             businessName={selectedBusinessName}
+            invoices={invoices as any}
+            userId={userId}
+            loading={businessLoading}
+            error={businessError}
           />
         </section>
     </main>

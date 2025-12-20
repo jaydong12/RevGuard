@@ -23,8 +23,7 @@ create policy "ai_insight_runs_select_own"
   on public.ai_insight_runs
   for select
   using (
-    auth.uid() = user_id
-    and exists (
+    exists (
       select 1 from public.business b
       where b.id = ai_insight_runs.business_id
         and b.owner_id = auth.uid()
@@ -35,8 +34,7 @@ create policy "ai_insight_runs_insert_own"
   on public.ai_insight_runs
   for insert
   with check (
-    auth.uid() = user_id
-    and exists (
+    exists (
       select 1 from public.business b
       where b.id = ai_insight_runs.business_id
         and b.owner_id = auth.uid()
@@ -46,6 +44,12 @@ create policy "ai_insight_runs_insert_own"
 create policy "ai_insight_runs_delete_own"
   on public.ai_insight_runs
   for delete
-  using (auth.uid() = user_id);
+  using (
+    exists (
+      select 1 from public.business b
+      where b.id = ai_insight_runs.business_id
+        and b.owner_id = auth.uid()
+    )
+  );
 
 
