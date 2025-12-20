@@ -397,7 +397,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               title="Go to dashboard"
             >
               <Image
-                src="/revguard-r.svg"
+                src="/icon.png"
                 alt="RevGuard"
                 width={32}
                 height={32}
@@ -474,7 +474,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             aria-label="Go to dashboard"
           >
             <Image
-              src="/revguard-r.svg"
+              src="/icon.png"
               alt="RevGuard"
               width={28}
               height={28}
