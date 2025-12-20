@@ -21,9 +21,9 @@ export const metadata: Metadata = {
   title: "RevGuard",
   description: "RevGuard — AI-powered accounting and cashflow clarity.",
   icons: {
-    icon: "/icon.png",
-    shortcut: "/favicon.ico",
-    apple: "/icon.png",
+    icon: "/icon.png?v=2",
+    shortcut: "/favicon.ico?v=2",
+    apple: "/icon.png?v=2",
   },
 };
 
