@@ -78,8 +78,6 @@ type ReportPeriodType = 'month' | 'year';
 
 type PeriodMode = 'month' | 'year';
 
-type MonthNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
-
 type SelectedPeriod = {
   mode: PeriodMode; // 'month' or 'year'
   year: number;
@@ -897,9 +895,7 @@ export default function DashboardHome() {
 
   // Year + month navigation for the cash curve
   const [selectedYear, setSelectedYear] = useState<number | 'all'>();
-  const [selectedMonth, setSelectedMonth] = useState<'all' | MonthNumber>(
-    'all'
-  );
+  const [selectedMonth, setSelectedMonth] = useState<'all' | number>('all');
 
   // Unified period selection shared by the cash chart, KPI cards, and
   // financial statements. When null, views fall back to all-time.
@@ -915,10 +911,7 @@ export default function DashboardHome() {
     setSelectedYear(p.year);
     if (p.mode === 'month') {
       if (typeof p.month === 'number') {
-        // `p.month` is 0–11; our UI state is 1–12.
-        const m = p.month + 1;
-        if (m >= 1 && m <= 12) setSelectedMonth(m as MonthNumber);
-        else setSelectedMonth('all');
+        setSelectedMonth(Number(p.month));
       } else {
         setSelectedMonth('all');
       }
@@ -1015,7 +1008,10 @@ export default function DashboardHome() {
     return yearFilteredTxs.filter((tx) => {
       const d = new Date(tx.date);
       if (Number.isNaN(d.getTime())) return false;
-      return d.getMonth() + 1 === selectedMonth;
+      // Support both 0–11 (Date.getMonth()) and 1–12 month conventions.
+      const m0 = d.getMonth(); // 0–11
+      if (selectedMonth >= 0 && selectedMonth <= 11) return m0 === selectedMonth;
+      return m0 + 1 === selectedMonth;
     });
   }, [yearFilteredTxs, selectedMonth]);
 
