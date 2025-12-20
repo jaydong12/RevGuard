@@ -7,7 +7,12 @@
  * We move the build output under `node_modules/.cache/next` which (in practice)
  * is less likely to be aggressively scanned/locked than `.next` in the repo root.
  */
-const distDir = process.platform === 'win32' ? 'node_modules/.cache/next' : '.next';
+const distDir =
+  process.platform === 'win32'
+    ? process.env.NODE_ENV === 'production'
+      ? 'node_modules/.cache/next-build'
+      : 'node_modules/.cache/next-dev'
+    : '.next';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

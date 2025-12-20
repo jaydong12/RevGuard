@@ -145,7 +145,6 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       fetchAllRowsPaged({
         table: 'transactions',
         businessId: businessId!,
-        userId: userId!,
         select: '*',
         orderBy: { column: 'date', ascending: false },
       }),
@@ -182,7 +181,6 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       fetchAllRowsPaged({
         table: 'invoices',
         businessId: businessId!,
-        userId: userId!,
         select:
           'id, business_id, invoice_number, client_name, issue_date, due_date, status, subtotal, tax, total, notes, transaction_id, created_at',
         orderBy: { column: 'created_at', ascending: false },
