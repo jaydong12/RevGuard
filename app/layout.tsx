@@ -3,6 +3,10 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import RootShell from "../components/RootShell";
 
+export const dynamic = "force-dynamic";
+
+console.log("🔥 DEPLOY CHECK:", new Date().toISOString());
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
