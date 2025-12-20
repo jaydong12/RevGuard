@@ -382,13 +382,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       >
         <div className="mb-6">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 min-w-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+              aria-label="Go to dashboard"
+              title="Go to dashboard"
+            >
               <Image
                 src="/revguard-r.svg"
                 alt="RevGuard"
                 width={32}
                 height={32}
                 className="h-8 w-8"
+                priority
               />
               {!sidebarCollapsed ? (
                 <div className="min-w-0">
@@ -400,7 +406,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   </div>
                 </div>
               ) : null}
-            </div>
+            </Link>
 
             <button
               type="button"
@@ -454,14 +460,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Main content */}
       <div className="flex-1 min-w-0 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950">
         <div className="no-print md:hidden sticky top-0 z-40 flex items-center justify-between px-4 py-3 border-b border-slate-800/80 bg-slate-950/95 backdrop-blur">
-          <div>
-            <div className="text-sm font-semibold tracking-tight">
-              RevGuard
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-2 min-w-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+            aria-label="Go to dashboard"
+          >
+            <Image
+              src="/revguard-r.svg"
+              alt="RevGuard"
+              width={28}
+              height={28}
+              className="h-7 w-7"
+              priority
+            />
+            <div className="min-w-0">
+              <div className="text-sm font-semibold tracking-tight truncate">
+                RevGuard
+              </div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400 truncate">
+                AI ACCOUNTING
+              </div>
             </div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-slate-400">
-              AI ACCOUNTING
-            </div>
-          </div>
+          </Link>
           <div className="flex items-center gap-2">
             <Link
               href="/settings"
