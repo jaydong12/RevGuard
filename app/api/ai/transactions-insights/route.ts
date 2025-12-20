@@ -6,6 +6,11 @@ import {
   type AIInsightResult,
 } from '../../../../lib/aiInsights';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
+import {
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+  applyMemoryDirective,
+} from '../../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -188,7 +193,18 @@ export async function POST(request: Request) {
       ...categoryLines,
     ];
 
-    const insights = await getTransactionsInsights(openai, contextLines.join('\n'));
+    const memoryRow = await loadOrCreateBusinessMemory(supabase, businessId);
+    const memoryContext = formatMemoryForPrompt(memoryRow);
+
+    const insights = await getTransactionsInsights(openai, contextLines.join('\n'), memoryContext);
+
+    // Best-effort memory update (only when confidence is high).
+    await applyMemoryDirective({
+      supabase,
+      businessId,
+      current: memoryRow,
+      directive: (insights as any).memory,
+    });
 
     return NextResponse.json<AIInsightResult>(insights, { status: 200 });
   } catch (err) {

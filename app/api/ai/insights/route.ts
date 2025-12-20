@@ -2,6 +2,11 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
+import {
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+  applyMemoryDirective,
+} from '../../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -73,6 +78,9 @@ export async function POST(request: Request) {
         auth: { persistSession: false, autoRefreshToken: false },
       }
     );
+
+    const memoryRow = await loadOrCreateBusinessMemory(supabase, businessId);
+    const memoryContext = formatMemoryForPrompt(memoryRow);
 
     // Pull transactions for the window using the business_id + date range.
     const { data, error } = await supabase
@@ -169,6 +177,8 @@ Here is a quick summary of their numbers:
 
 ${statsTextLines.join('\n')}
 
+${memoryContext ? `\n${memoryContext}\n` : ''}
+
 Respond ONLY with JSON in this exact shape. Do not include any other text:
 {
   "summary": "3–5 short sentences in plain English that tell the money story for this period.",
@@ -180,7 +190,13 @@ Respond ONLY with JSON in this exact shape. Do not include any other text:
   "actions": [
     "3 specific, practical next steps they can take in the next 30 days.",
     "Each action should be short and concrete."
-  ]
+  ],
+  "memory": {
+    "confidence": 0.0,
+    "needs_confirmation": false,
+    "question": null,
+    "update": null
+  }
 }
 `.trim();
 
@@ -209,6 +225,14 @@ Respond ONLY with JSON in this exact shape. Do not include any other text:
         actions: [],
       };
     }
+
+    // Best-effort memory update (only when confidence is high).
+    await applyMemoryDirective({
+      supabase,
+      businessId,
+      current: memoryRow,
+      directive: (parsed as any).memory,
+    });
 
     return NextResponse.json(parsed satisfies MoneyStoryResponse, {
       status: 200,

@@ -1,5 +1,12 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import {
+  getAccessTokenFromRequest,
+  createAuthedSupabaseClient,
+  resolveBusinessIdForUser,
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+} from '../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -38,7 +45,7 @@ export async function POST(request: Request) {
     const client = new OpenAI({ apiKey });
 
     const body = await request.json();
-    const { aiContext } = body as { aiContext: AIContext };
+    const { aiContext, businessId } = body as { aiContext: AIContext; businessId?: string };
 
     if (!aiContext) {
       return NextResponse.json(
@@ -66,10 +73,32 @@ Rules:
 - Max ~180 words total.
 `.trim();
 
+    // Memory Engine v1 (best-effort; if not available, proceed normally)
+    let memoryContext = '';
+    try {
+      const token = getAccessTokenFromRequest(request);
+      if (token) {
+        const supabase = createAuthedSupabaseClient(token);
+        const userRes = await supabase.auth.getUser(token);
+        const userId = userRes?.data?.user?.id ?? null;
+        if (userId) {
+          const bizId = await resolveBusinessIdForUser(supabase, userId, businessId ?? null);
+          if (bizId) {
+            const mem = await loadOrCreateBusinessMemory(supabase, bizId);
+            memoryContext = formatMemoryForPrompt(mem);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     const userPrompt = `
 Here is the business data (aiContext) in JSON:
 
 ${JSON.stringify(aiContext)}
+
+${memoryContext ? `\n${memoryContext}\n` : ''}
 
 Using ONLY this data, write:
 

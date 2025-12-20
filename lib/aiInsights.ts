@@ -7,14 +7,27 @@ export type AIInsightResult = {
   summary: string;
   observations: string[];
   actions: string[];
+  // Optional: RevGuard Memory Engine v1 directive
+  memory?: {
+    confidence?: number; // 0..1
+    needs_confirmation?: boolean;
+    question?: string | null;
+    update?: {
+      business_dna?: any;
+      owner_preferences?: any;
+      ai_assumptions?: any;
+      decision_event?: any;
+    } | null;
+  };
 };
 
 async function callInsightsModel(params: {
   openai: OpenAI;
   systemPrompt: string;
   userContext: string;
+  memoryContext?: string;
 }): Promise<AIInsightResult> {
-  const { openai, systemPrompt, userContext } = params;
+  const { openai, systemPrompt, userContext, memoryContext } = params;
 
   const prompt = `
 ${systemPrompt.trim()}
@@ -22,6 +35,14 @@ ${systemPrompt.trim()}
 Here is the context:
 
 ${userContext.trim()}
+
+${memoryContext ? `\n\n${memoryContext.trim()}\n` : ''}
+
+Memory update policy (RevGuard Memory Engine v1):
+- You MAY include a "memory" object to help personalize future answers.
+- Only auto-update when confidence is high (>= 0.85) and the signal is stable (repeated behavior, explicit preference, consistent overrides).
+- If confidence is medium (0.5–0.84), do NOT auto-update. Instead set memory.needs_confirmation=true and ask: "I’ll remember this — OK?"
+- If confidence is low (<0.5), omit the "memory" field entirely.
 
 Respond ONLY with JSON in this exact shape. Do not include any commentary or markdown:
 {
@@ -35,7 +56,13 @@ Respond ONLY with JSON in this exact shape. Do not include any commentary or mar
     "action 1",
     "action 2",
     "action 3"
-  ]
+  ],
+  "memory": {
+    "confidence": 0.0,
+    "needs_confirmation": false,
+    "question": null,
+    "update": null
+  }
 }
 `.trim();
 
@@ -72,85 +99,99 @@ Respond ONLY with JSON in this exact shape. Do not include any commentary or mar
 
 export async function getDashboardInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant for a small solo business owner. Explain the period in simple, teenager-friendly language. Focus on cash, income, and expenses.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getTransactionsInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant reviewing a list of transactions. Spot spending and income patterns and tell the owner what to fix first.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getInvoicesInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant reviewing accounts receivable. Identify slow-paying customers, concentration risk, and simple actions to improve collections.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getBillsInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant reviewing upcoming bills. Explain upcoming cash pressure and suggest a smart order to pay if money is tight.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getCustomersInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant reviewing customer performance. Identify best and risky customers and suggest simple follow-up actions.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getForecastInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant reviewing a forecast scenario. Explain the risk and reward in plain English and highlight what could go wrong.',
     userContext: context,
+    memoryContext,
   });
 }
 
 export async function getReportInsights(
   openai: OpenAI,
-  context: string
+  context: string,
+  memoryContext?: string
 ): Promise<AIInsightResult> {
   return callInsightsModel({
     openai,
     systemPrompt:
       'You are an AI accountant explaining a financial report. Explain it like you are talking to a 15-year-old running a business. Mention good signs and concerns.',
     userContext: context,
+    memoryContext,
   });
 }
 

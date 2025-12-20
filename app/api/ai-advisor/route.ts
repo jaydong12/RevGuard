@@ -1,5 +1,10 @@
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
+import {
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+  applyMemoryDirective,
+} from '../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -358,6 +363,10 @@ Keep it <=5 lines.
         preferences: (memory as any)?.preferences ?? {},
       };
 
+      // Memory Engine v1 (best-effort)
+      const memoryEngineRow = await loadOrCreateBusinessMemory(supabase, effectiveBusinessId);
+      const memoryEngineContext = formatMemoryForPrompt(memoryEngineRow);
+
       const promptPayload =
         mode === 'cfo'
           ? {
@@ -365,6 +374,7 @@ Keep it <=5 lines.
               kpis,
               cfo_context: cfoContext,
               memory: memoryForPrompt,
+              memory_engine_v1: memoryEngineContext || null,
               user_message: text,
             }
           : {
@@ -372,6 +382,7 @@ Keep it <=5 lines.
               kpis,
               ui_context: supportContext,
               memory: memoryForPrompt,
+              memory_engine_v1: memoryEngineContext || null,
               user_message: text,
             };
 
@@ -452,6 +463,42 @@ Rules:
             ? parsed.memory_patch.preferences_merge
             : {},
       };
+
+      // Map the advisor's stable facts/preferences into Memory Engine v1 (best-effort).
+      // We only auto-update when the response is not explicitly low-confidence.
+      try {
+        const lowConfidence = answer.includes('This is a best guess');
+        const hasPatch =
+          (memoryPatch && Object.keys(memoryPatch.facts_merge || {}).length > 0) ||
+          (memoryPatch && Object.keys(memoryPatch.preferences_merge || {}).length > 0) ||
+          Boolean(memoryPatch.memory_append);
+
+        if (!lowConfidence && hasPatch) {
+          await applyMemoryDirective({
+            supabase,
+            businessId: effectiveBusinessId,
+            current: memoryEngineRow,
+            directive: {
+              confidence: 0.9,
+              needs_confirmation: false,
+              question: null,
+              update: {
+                business_dna: memoryPatch.facts_merge || {},
+                owner_preferences: memoryPatch.preferences_merge || {},
+                decision_event: memoryPatch.memory_append
+                  ? {
+                      at: new Date().toISOString(),
+                      source: 'ai_advisor',
+                      note: memoryPatch.memory_append,
+                    }
+                  : null,
+              },
+            },
+          });
+        }
+      } catch {
+        // ignore
+      }
 
       // -------------------------
       // Persist: log, recs, memory, snapshots (best-effort)

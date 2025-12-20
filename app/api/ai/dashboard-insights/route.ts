@@ -3,6 +3,11 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import { getDashboardInsights } from '../../../../lib/aiInsights';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
+import {
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+  applyMemoryDirective,
+} from '../../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,6 +18,8 @@ type DashboardInsightsResponse = {
   // Kept for backward-compat with older clients
   observations?: string[];
   actions?: string[];
+  // Optional: Memory Engine directive (client may ask for confirmation)
+  memory?: any;
 };
 
 type DashboardInsightsRequest = {
@@ -155,7 +162,18 @@ export async function POST(request: Request) {
       ...categoryLines,
     ];
 
-    const insights = await getDashboardInsights(openai, contextLines.join('\n'));
+    const memoryRow = await loadOrCreateBusinessMemory(supabase, businessId);
+    const memoryContext = formatMemoryForPrompt(memoryRow);
+
+    const insights = await getDashboardInsights(openai, contextLines.join('\n'), memoryContext);
+
+    // Best-effort memory update (only when confidence is high).
+    await applyMemoryDirective({
+      supabase,
+      businessId,
+      current: memoryRow,
+      directive: insights.memory,
+    });
 
     // Return a stable shape for the frontend, while keeping backwards-compat fields.
     return NextResponse.json<DashboardInsightsResponse>(
@@ -164,6 +182,8 @@ export async function POST(request: Request) {
         recommendations: insights.actions ?? [],
         observations: insights.observations ?? [],
         actions: insights.actions ?? [],
+        // Optional memory directive for UI confirmation flows.
+        memory: (insights as any).memory,
       },
       { status: 200 }
     );

@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import {
+  getAccessTokenFromRequest,
+  createAuthedSupabaseClient,
+  resolveBusinessIdForUser,
+  loadOrCreateBusinessMemory,
+  formatMemoryForPrompt,
+  applyMemoryDirective,
+} from '../../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -7,6 +15,7 @@ export const runtime = 'nodejs';
 type CategoryAmount = { category: string; amount: number };
 
 type RunRequest = {
+  businessId?: string; // optional; if missing we'll resolve the user's first business
   businessName?: string;
   from: string; // YYYY-MM-DD
   to: string; // YYYY-MM-DD
@@ -22,6 +31,17 @@ type RunResponse = {
   top_drivers: string[];
   next_actions: string[];
   follow_ups: Array<{ label: string; prompt: string }>;
+  memory?: {
+    confidence?: number;
+    needs_confirmation?: boolean;
+    question?: string | null;
+    update?: {
+      business_dna?: any;
+      owner_preferences?: any;
+      ai_assumptions?: any;
+      decision_event?: any;
+    } | null;
+  };
 };
 
 export async function POST(req: Request) {
@@ -42,6 +62,7 @@ export async function POST(req: Request) {
     }
 
     const payload: RunRequest = {
+      businessId: body.businessId,
       businessName: body.businessName ?? 'My Business',
       from: body.from,
       to: body.to,
@@ -55,6 +76,32 @@ export async function POST(req: Request) {
         : [],
       prompt: body.prompt ?? '',
     };
+
+    // -------------------------
+    // Load Memory Engine v1 (best-effort)
+    // -------------------------
+    let memoryContext = '';
+    let memoryRow: any = null;
+    let supabase: any = null;
+    let resolvedBusinessId: string | null = null;
+
+    try {
+      const token = getAccessTokenFromRequest(req);
+      if (token) {
+        supabase = createAuthedSupabaseClient(token);
+        const userRes = await supabase.auth.getUser(token);
+        const userId = userRes?.data?.user?.id ?? null;
+        if (userId) {
+          resolvedBusinessId = await resolveBusinessIdForUser(supabase, userId, payload.businessId ?? null);
+          if (resolvedBusinessId) {
+            memoryRow = await loadOrCreateBusinessMemory(supabase, resolvedBusinessId);
+            memoryContext = formatMemoryForPrompt(memoryRow);
+          }
+        }
+      }
+    } catch {
+      // ignore memory load errors
+    }
 
     const system = `
 You are RevGuard AI Insights, a premium CFO-style analyst.
@@ -70,6 +117,10 @@ Output policy:
 - Keep each bullet to one short sentence (max ~18 words).
 - Do not ask questions in these sections.
 - Provide 3 follow-up buttons as follow_ups (label + prompt), short and actionable.
+- RevGuard Memory Engine v1:
+  - Use provided memory ONLY to tailor tone/priorities. Never force actions.
+  - Only propose memory updates when confidence is high (>= 0.85) and the signal is stable.
+  - If confidence is medium (0.5–0.84), ask: "I’ll remember this — OK?" and set memory.needs_confirmation=true.
     `.trim();
 
     const user = `
@@ -90,6 +141,8 @@ ${JSON.stringify(payload.topExpenseCategories)}
 
 User follow-up prompt (optional; may be empty):
 ${payload.prompt || '(none)'}
+
+${memoryContext ? `\n${memoryContext}\n` : ''}
     `.trim();
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -140,6 +193,17 @@ ${payload.prompt || '(none)'}
                 minItems: 3,
                 maxItems: 3,
               },
+              memory: {
+                type: 'object',
+                properties: {
+                  confidence: { type: 'number' },
+                  needs_confirmation: { type: 'boolean' },
+                  question: { type: ['string', 'null'] },
+                  update: { type: ['object', 'null'] },
+                },
+                required: ['confidence', 'needs_confirmation', 'question', 'update'],
+                additionalProperties: true,
+              },
             },
             required: ['what_changed', 'top_drivers', 'next_actions', 'follow_ups'],
             additionalProperties: false,
@@ -167,6 +231,20 @@ ${payload.prompt || '(none)'}
         { error: 'Invalid AI response' },
         { status: 500 }
       );
+    }
+
+    // Best-effort memory update (only when confidence is high).
+    try {
+      if (supabase && resolvedBusinessId && memoryRow) {
+        await applyMemoryDirective({
+          supabase,
+          businessId: resolvedBusinessId,
+          current: memoryRow,
+          directive: (parsed as any).memory,
+        });
+      }
+    } catch {
+      // ignore
     }
 
     return NextResponse.json(parsed, { status: 200 });
