@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+const ADMIN_EMAILS = ['jaydongant@gmail.com', 'shannon_g75@yahoo.com'].map((e) =>
+  e.toLowerCase()
+);
+
 export type SubscriptionGateResult =
   | { ok: true; userId: string; status: 'active' }
   | NextResponse;
@@ -30,6 +34,11 @@ export async function requireActiveSubscription(request: Request): Promise<Subsc
   const user = userRes?.user ?? null;
   if (userErr || !user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const email = String(user.email ?? '').trim().toLowerCase();
+  if (email && ADMIN_EMAILS.includes(email)) {
+    return { ok: true, userId: user.id, status: 'active' };
   }
 
   const { data: biz, error: bizErr } = await supabase

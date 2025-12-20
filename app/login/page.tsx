@@ -22,6 +22,10 @@ function setAuthCookie(token: string | null) {
   }
 }
 
+const ADMIN_EMAILS = ['jaydongant@gmail.com', 'shannon_g75@yahoo.com'].map((e) =>
+  e.toLowerCase()
+);
+
 export default function LoginPage() {
   return (
     <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
@@ -71,8 +75,14 @@ function LoginInner() {
       const { data: sess } = await supabase.auth.getSession();
       setAuthCookie(sess.session?.access_token ?? null);
       const userId = sess.session?.user?.id ?? null;
+      const userEmail = String(sess.session?.user?.email ?? '').trim().toLowerCase();
       if (!userId) {
         router.replace('/login?redirect=/pricing');
+        return;
+      }
+
+      if (userEmail && ADMIN_EMAILS.includes(userEmail)) {
+        router.replace('/dashboard');
         return;
       }
 

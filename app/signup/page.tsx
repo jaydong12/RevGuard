@@ -22,6 +22,10 @@ function setAuthCookie(token: string | null) {
   }
 }
 
+const ADMIN_EMAILS = ['jaydongant@gmail.com', 'shannon_g75@yahoo.com'].map((e) =>
+  e.toLowerCase()
+);
+
 export default function SignupPage() {
   return (
     <Suspense fallback={<div className="p-6 text-sm text-slate-400">Loading…</div>}>
@@ -78,6 +82,13 @@ function SignupInner() {
         setAuthCookie(data.session.access_token ?? null);
         // Paywall: if not active, redirect to pricing after signup.
         const userId = data.session.user.id;
+        const userEmail = String(data.session.user.email ?? '').trim().toLowerCase();
+
+        if (userEmail && ADMIN_EMAILS.includes(userEmail)) {
+          router.replace('/dashboard');
+          return;
+        }
+
         const status = await getSubscriptionStatus(userId);
 
         if (status !== 'active') router.replace('/pricing');

@@ -17,6 +17,10 @@ function setAuthCookie(token: string | null) {
   }
 }
 
+const ADMIN_EMAILS = ['jaydongant@gmail.com', 'shannon_g75@yahoo.com'].map((e) =>
+  e.toLowerCase()
+);
+
 export default function BillingSuccessClient() {
   const router = useRouter();
   const params = useSearchParams();
@@ -42,6 +46,15 @@ export default function BillingSuccessClient() {
 
         setAuthCookie(session.access_token ?? null);
         const userId = session.user.id;
+        const userEmail = String(session.user.email ?? '').trim().toLowerCase();
+        if (userEmail && ADMIN_EMAILS.includes(userEmail)) {
+          if (!alive) return;
+          setStatus('active');
+          setDetail('Admin access enabled. Redirecting to your dashboard…');
+          router.refresh();
+          router.replace('/dashboard');
+          return;
+        }
 
         const started = Date.now();
         const timeoutMs = 45_000;

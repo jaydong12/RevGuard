@@ -1,5 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+const ADMIN_EMAILS = ['jaydongant@gmail.com', 'shannon_g75@yahoo.com'].map((e) =>
+  e.toLowerCase()
+);
+
 const PUBLIC_PATHS = new Set<string>([
   '/',
   '/login',
@@ -45,6 +49,35 @@ function decodeJwtPayload(token: string): any | null {
     const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(b64);
     return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+async function getEmailForToken(token: string, payload: any | null): Promise<string | null> {
+  // Fast path: many Supabase JWTs include `email` in the payload.
+  const claimed = String(payload?.email ?? '').trim().toLowerCase();
+  if (claimed) return claimed;
+
+  // Robust path: ask Supabase Auth for the user (works even if JWT lacks `email` claim).
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) return null;
+
+  try {
+    const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      method: 'GET',
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const user = (await res.json().catch(() => null)) as any;
+    const email = String(user?.email ?? '').trim().toLowerCase();
+    return email || null;
   } catch {
     return null;
   }
@@ -128,6 +161,12 @@ export async function middleware(req: NextRequest) {
 
   // Authenticated, but subscription gating is skipped for certain routes.
   if (!isApi && isAuthOnlyNoSubscriptionPath(pathname)) {
+    return NextResponse.next();
+  }
+
+  // Admin bypass: authenticated admin users skip subscription gating.
+  const email = await getEmailForToken(token, payload);
+  if (email && ADMIN_EMAILS.includes(email)) {
     return NextResponse.next();
   }
 
