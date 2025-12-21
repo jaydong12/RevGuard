@@ -95,6 +95,27 @@ create policy "invoices_delete_own"
     )
   );
 
+-- If client forgets to pass business_id, set it to the user's first business (auth.uid()).
+create or replace function public.invoices_set_business_id_default()
+returns trigger as $$
+begin
+  if new.business_id is null then
+    select b.id
+      into new.business_id
+    from public.business b
+    where b.owner_id = auth.uid()
+    order by b.created_at asc
+    limit 1;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists invoices_set_business_id_default on public.invoices;
+create trigger invoices_set_business_id_default
+before insert on public.invoices
+for each row execute procedure public.invoices_set_business_id_default();
+
 drop policy if exists "invoice_items_select_via_invoice" on public.invoice_items;
 drop policy if exists "invoice_items_insert_via_invoice" on public.invoice_items;
 drop policy if exists "invoice_items_update_via_invoice" on public.invoice_items;
