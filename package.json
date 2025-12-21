@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/cleanup-next-overrides.mjs",
+    "prebuild": "node scripts/cleanup-next-overrides.mjs",
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",

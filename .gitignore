@@ -17,6 +17,10 @@
 /.next/
 /out/
 
+# Prevent accidental Next App Router icon overrides from being committed.
+/app/favicon.ico
+/app/icon.*
+
 # production
 /build
 
