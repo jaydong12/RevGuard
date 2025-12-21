@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, FormEvent } from 'react';
+import React, { useEffect, useState, FormEvent } from 'react';
 import clsx from 'clsx';
 import { supabase } from '../utils/supabaseClient';
 import jsPDF from 'jspdf';
@@ -428,6 +428,9 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
   const loading = Boolean(loadingProp);
   const [error, setError] = useState<string | null>(null);
   const userId = userIdProp ?? null;
+  const [resolvedBusinessId, setResolvedBusinessId] = useState<string | null>(
+    businessId ?? null
+  );
 
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -445,6 +448,33 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
   );
 
   const effectiveError = error || errorProp;
+
+  useEffect(() => {
+    // Keep a stable "effective business id" even if the parent is still loading it.
+    if (businessId) setResolvedBusinessId(businessId);
+  }, [businessId]);
+
+  async function requireBusinessIdForUser(): Promise<string> {
+    if (!userId) throw new Error('AUTH_REQUIRED');
+
+    if (resolvedBusinessId) return resolvedBusinessId;
+
+    const { data: biz, error: bizErr } = await supabase
+      .from('business')
+      .select('id')
+      .eq('owner_id', userId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (bizErr || !biz?.id) {
+      throw new Error('No business found for user');
+    }
+
+    const id = String((biz as any).id);
+    setResolvedBusinessId(id);
+    return id;
+  }
 
   // Recalculate subtotal/tax/total from line items (tax is a flat dollar amount)
   const recalcTotalsFromItems = (draftItems: InvoiceItem[], taxValue?: number) => {
@@ -527,19 +557,11 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
     }
 
     // If the active business id isn't ready yet, fall back to the user's first business.
-    let businessIdToUse = businessId ?? null;
-    if (!businessIdToUse) {
-      const firstBiz = await supabase
-        .from('business')
-        .select('id')
-        .eq('owner_id', userId)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      businessIdToUse = (firstBiz.data as any)?.id ?? null;
-    }
-    if (!businessIdToUse) {
-      setError('Select a business first.');
+    let businessIdToUse: string;
+    try {
+      businessIdToUse = await requireBusinessIdForUser();
+    } catch (err: any) {
+      setError(err?.message ?? 'No business found for user');
       return;
     }
 
@@ -620,12 +642,15 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         await queryClient.invalidateQueries({ queryKey: ['invoices', businessIdToUse] });
       } else {
         // CREATE new invoice
+        const payload = { ...basePayload, business_id: businessIdToUse };
+        // eslint-disable-next-line no-console
+        console.log('invoice insert payload', payload);
         const {
           data: inserted,
           error: invError,
         } = await supabase
           .from('invoices')
-          .insert(basePayload)
+          .insert(payload)
           .select('*')
           .single();
 
@@ -974,11 +999,11 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         <button
           onClick={() => {
             setShowForm(true);
-            setNewInvoice(emptyInvoice(businessId));
+            setNewInvoice(emptyInvoice(resolvedBusinessId ?? businessId));
             setItems([emptyItem(), emptyItem()]);
           }}
           className="rounded-lg px-4 py-2 text-sm font-semibold border border-[#2DD4BF]/60 text-[#6EF3C5] hover:bg-[#111A2E] hover:border-[#2DD4BF] transition"
-          disabled={!businessId}
+          disabled={!resolvedBusinessId}
           type="button"
         >
           + New Smart Invoice
@@ -1008,7 +1033,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         </div>
       </div>
 
-      {!businessId && (
+      {!resolvedBusinessId && (
         <p className="text-sm text-red-400">
           Select or create a business first to manage invoices.
         </p>
@@ -1423,7 +1448,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={saving || !businessId}
+            disabled={saving || !resolvedBusinessId}
                 className="rounded-md bg-[#2DD4BF] px-4 py-1 text-xs font-semibold text-black hover:bg-[#14B8A6] shadow-md shadow-[#2DD4BF]/30 disabled:opacity-40"
               >
                 {saving
