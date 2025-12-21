@@ -9,8 +9,13 @@ import { useQueryClient } from '@tanstack/react-query';
 
 function safeLog(...args: any[]) {
   try {
-    // eslint-disable-next-line no-console
-    if (typeof console !== 'undefined' && typeof console.log === 'function') console.log(...args);
+    // Some environments (locked-down browsers / extensions) can throw on console access.
+    // Keep this as a no-op logger that never crashes the UI.
+    const g: any = globalThis as any;
+    const buf: any[] = Array.isArray(g.__revguardDebugLogs) ? g.__revguardDebugLogs : [];
+    buf.push({ level: 'log', at: Date.now(), args });
+    // keep last 50
+    g.__revguardDebugLogs = buf.slice(-50);
   } catch {
     // ignore
   }
@@ -18,8 +23,10 @@ function safeLog(...args: any[]) {
 
 function safeError(...args: any[]) {
   try {
-    // eslint-disable-next-line no-console
-    if (typeof console !== 'undefined' && typeof console.error === 'function') console.error(...args);
+    const g: any = globalThis as any;
+    const buf: any[] = Array.isArray(g.__revguardDebugLogs) ? g.__revguardDebugLogs : [];
+    buf.push({ level: 'error', at: Date.now(), args });
+    g.__revguardDebugLogs = buf.slice(-50);
   } catch {
     // ignore
   }
