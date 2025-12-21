@@ -254,4 +254,18 @@ begin
   end if;
 end $$;
 
+-- Enforce NOT NULL on invoices.business_id once backfilled.
+-- We do this conditionally so this migration is safe on existing data.
+do $$
+declare
+  nulls bigint;
+begin
+  select count(*) into nulls from public.invoices where business_id is null;
+  if nulls = 0 then
+    execute 'alter table public.invoices alter column business_id set not null';
+  else
+    raise notice 'Skipping NOT NULL on public.invoices.business_id: % rows still have NULL business_id', nulls;
+  end if;
+end $$;
+
 
