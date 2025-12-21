@@ -1,10 +1,5 @@
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
-import {
-  loadOrCreateBusinessMemory,
-  formatMemoryForPrompt,
-  applyMemoryDirective,
-} from '../../../lib/memoryEngine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -103,6 +98,51 @@ function isMissingTableError(err: any): boolean {
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+function deepMerge(a: any, b: any): any {
+  if (Array.isArray(a) || Array.isArray(b)) return b ?? a;
+  if (a && typeof a === 'object' && b && typeof b === 'object') {
+    const out: any = { ...a };
+    for (const k of Object.keys(b)) out[k] = deepMerge(a[k], b[k]);
+    return out;
+  }
+  return b ?? a;
+}
+
+function clampList(arr: any, max = 20): any[] {
+  const xs = Array.isArray(arr) ? arr : [];
+  if (xs.length <= max) return xs;
+  return xs.slice(xs.length - max);
+}
+
+function formatLivingBusinessModelForSystem(memory: {
+  memory_text?: string | null;
+  facts?: any;
+  preferences?: any;
+} | null): string {
+  if (!memory) return '';
+  const narrative = String(memory.memory_text ?? '').slice(0, 1400);
+  const facts = memory.facts ?? {};
+  const prefs = memory.preferences ?? {};
+
+  return `Living Business Model (ai_business_memory):
+- narrative (rolling summary): ${JSON.stringify(narrative)}
+- facts (business truths): ${JSON.stringify(facts).slice(0, 1600)}
+- preferences (owner intent): ${JSON.stringify(prefs).slice(0, 1600)}
+Rules:
+- Use this to tailor tone and priorities, but NEVER force actions.
+- If the user's latest message conflicts with memory, follow the latest message.
+- Only treat "facts" as true; treat narrative as a helpful summary that may be incomplete.
+`.trim();
+}
+
+function detectOverrideSignal(userText: string): string | null {
+  const t = String(userText || '').trim();
+  if (!t) return null;
+  if (!/\b(ignore|don['’]t|do not|stop|actually|instead|override|never|skip)\b/i.test(t))
+    return null;
+  return t.slice(0, 220);
 }
 
 // Stream SSE so the frontend can render progressively (and never double-append).
@@ -361,10 +401,7 @@ Keep it <=5 lines.
         facts: (memory as any)?.facts ?? {},
         preferences: (memory as any)?.preferences ?? {},
       };
-
-      // Memory Engine v1 (best-effort)
-      const memoryEngineRow = await loadOrCreateBusinessMemory(supabase, effectiveBusinessId);
-      const memoryEngineContext = formatMemoryForPrompt(memoryEngineRow);
+      const livingModelSystem = formatLivingBusinessModelForSystem(memoryForPrompt);
 
       const promptPayload =
         mode === 'cfo'
@@ -372,32 +409,24 @@ Keep it <=5 lines.
               business: { id: effectiveBusinessId, name: business?.name ?? null },
               kpis,
               cfo_context: cfoContext,
-              memory: memoryForPrompt,
               user_message: text,
             }
           : {
               business: { id: effectiveBusinessId, name: business?.name ?? null },
               kpis,
               ui_context: supportContext,
-              memory: memoryForPrompt,
               user_message: text,
             };
 
       const jsonShape = `Return JSON ONLY with this exact shape:
 {
   "answer": "string",
+  "confidence": 0.0,
   "new_recommendations": ["string", "string"],
   "memory_patch": {
     "memory_append": "string",
     "facts_merge": { },
     "preferences_merge": { }
-  },
-  "memory_update": {
-    "confidence": 0.0,
-    "business_dna_merge": { },
-    "owner_preferences_merge": { },
-    "ai_assumptions_merge": { },
-    "decision_event": null
   }
 }
 Rules:
@@ -413,11 +442,9 @@ Rules:
 - new_recommendations: 0-3 items, each actionable and specific (no duplicates of "What to do next").
 - memory_patch.memory_append: <= 300 chars, factual, no opinions.
 - facts_merge / preferences_merge: only stable facts/preferences; omit unknowns.
-- memory_update:
-  - Only include when confidence >= 0.85 AND the signal is stable (repeated behavior, explicit preference, consistent overrides).
-  - If confidence is 0.5–0.84: DO NOT include memory_update. Keep it silent.
-  - business_dna_merge / owner_preferences_merge / ai_assumptions_merge must be small, flat-ish JSON merges (no giant blobs).
-  - decision_event: either null OR a short string describing an override/decision (<= 220 chars).
+- confidence:
+  - 0.0 to 1.0
+  - If confidence < 0.85: set memory_patch fields to empty and do NOT propose updates (keep it silent).
 - Analogy throttle (preferences):
   - Read memory.preferences.analogy_cooldown (number). If missing, assume 0.
   - If analogy_cooldown > 0: do NOT use analogies, and set preferences_merge.analogy_cooldown to (analogy_cooldown - 1).
@@ -431,10 +458,7 @@ Rules:
         temperature: 0.4,
         response_format: { type: 'json_object' } as any,
         messages: [
-          {
-            role: 'system',
-            content: memoryEngineContext ? `${system}\n\n${memoryEngineContext}` : system,
-          },
+          { role: 'system', content: livingModelSystem ? `${system}\n\n${livingModelSystem}` : system },
           { role: 'user', content: `${jsonShape}\n\nInput:\n${JSON.stringify(promptPayload)}` },
         ],
       });
@@ -475,84 +499,84 @@ Rules:
             ? parsed.memory_patch.preferences_merge
             : {},
       };
+      const confidenceRaw = Number(parsed?.confidence ?? 0);
+      const confidence = Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0;
+      const overrideSignal = detectOverrideSignal(text);
 
-      const memoryUpdate = parsed?.memory_update ?? null;
-
-      // Map the advisor's stable facts/preferences into Memory Engine v1 (best-effort).
-      // We only auto-update when the response is not explicitly low-confidence.
+      // -------------------------
+      // Lightweight memory update step (ai_business_memory)
+      // -------------------------
+      // Only update facts/preferences when confidence is high.
       try {
-        const lowConfidence = answer.includes('This is a best guess');
-        const hasPatch =
-          (memoryPatch && Object.keys(memoryPatch.facts_merge || {}).length > 0) ||
-          (memoryPatch && Object.keys(memoryPatch.preferences_merge || {}).length > 0) ||
-          Boolean(memoryPatch.memory_append);
+        const highConfidence = confidence >= 0.85 && !answer.includes('This is a best guess');
+        if (!highConfidence || !memory?.id) {
+          // Silent unless confidence is low (handled in answer policy); no DB updates here.
+        } else {
+          const prevFacts = (memory as any)?.facts ?? {};
+          const prevPrefs = (memory as any)?.preferences ?? {};
+          const prevText = String((memory as any)?.memory_text ?? '');
 
-        // 1) Model-provided memory_update (preferred): only apply when confidence is high.
-        const conf = Number(memoryUpdate?.confidence ?? 0);
-        const hasModelUpdate =
-          memoryUpdate &&
-          Number.isFinite(conf) &&
-          conf >= 0.85 &&
-          (Object.keys(memoryUpdate?.business_dna_merge ?? {}).length > 0 ||
-            Object.keys(memoryUpdate?.owner_preferences_merge ?? {}).length > 0 ||
-            Object.keys(memoryUpdate?.ai_assumptions_merge ?? {}).length > 0 ||
-            Boolean(memoryUpdate?.decision_event));
+          const nextFacts = deepMerge(prevFacts, memoryPatch.facts_merge ?? {});
+          let nextPrefs = deepMerge(prevPrefs, memoryPatch.preferences_merge ?? {});
 
-        // 2) Fallback: derive a conservative update from memory_patch (existing system).
-        const shouldFallbackUpdate = !hasModelUpdate && !lowConfidence && hasPatch;
+          // Log overrides as learned signals (stored in preferences.learned_overrides)
+          if (overrideSignal) {
+            const existing = (nextPrefs as any)?.learned_overrides;
+            const next = clampList([...(Array.isArray(existing) ? existing : []), overrideSignal], 20);
+            nextPrefs = { ...(nextPrefs as any), learned_overrides: next };
+          }
 
-        // Detect user overrides and log as decision history (server-side heuristic).
-        const userOverrideSignal =
-          typeof text === 'string' &&
-          /\b(ignore|don['’]t|do not|stop|actually|instead|override|never|skip)\b/i.test(text)
-            ? text.trim().slice(0, 220)
-            : null;
+          // Refresh narrative memory text if we materially improve understanding.
+          let nextText = prevText;
+          if (memoryPatch.memory_append) {
+            nextText = `${prevText}\n${memoryPatch.memory_append}`.trim().slice(0, 5000);
+          }
 
-        if (hasModelUpdate) {
-          await applyMemoryDirective({
-            supabase,
-            businessId: effectiveBusinessId,
-            current: memoryEngineRow,
-            directive: {
-              confidence: conf,
-              needs_confirmation: false,
-              question: null,
-              update: {
-                business_dna: memoryUpdate.business_dna_merge ?? {},
-                owner_preferences: memoryUpdate.owner_preferences_merge ?? {},
-                ai_assumptions: memoryUpdate.ai_assumptions_merge ?? {},
-                decision_event: memoryUpdate.decision_event || userOverrideSignal
-                  ? {
-                      at: new Date().toISOString(),
-                      source: 'ai_advisor',
-                      note: String(memoryUpdate.decision_event || userOverrideSignal).slice(0, 220),
-                    }
-                  : null,
-              },
-            },
-          });
-        } else if (shouldFallbackUpdate) {
-          await applyMemoryDirective({
-            supabase,
-            businessId: effectiveBusinessId,
-            current: memoryEngineRow,
-            directive: {
-              confidence: 0.9,
-              needs_confirmation: false,
-              question: null,
-              update: {
-                business_dna: memoryPatch.facts_merge || {},
-                owner_preferences: memoryPatch.preferences_merge || {},
-                decision_event: memoryPatch.memory_append
-                  ? {
-                      at: new Date().toISOString(),
-                      source: 'ai_advisor',
-                      note: memoryPatch.memory_append,
-                    }
-                  : null,
-              },
-            },
-          });
+          // Optional lightweight "refresh summary" step (only when changes are meaningful)
+          const meaningful =
+            Boolean(memoryPatch.memory_append && memoryPatch.memory_append.length >= 80) ||
+            Object.keys(memoryPatch.facts_merge ?? {}).length > 0 ||
+            Object.keys(memoryPatch.preferences_merge ?? {}).length > 0 ||
+            Boolean(overrideSignal);
+
+          if (meaningful && nextText.length > 900) {
+            try {
+              const summarizer = await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                temperature: 0.2,
+                messages: [
+                  {
+                    role: 'system',
+                    content:
+                      'You compress business memory into a factual rolling summary. Keep it concise and stable. No opinions.',
+                  },
+                  {
+                    role: 'user',
+                    content: `Rewrite this memory into <= 900 characters:\n\n${nextText}`,
+                  },
+                ],
+              });
+              const newSummary = summarizer.choices?.[0]?.message?.content ?? '';
+              if (newSummary.trim().length >= 80) {
+                nextText = newSummary.trim().slice(0, 900);
+              }
+            } catch {
+              // ignore summary refresh errors
+            }
+          }
+
+          const up = await supabase
+            .from('ai_business_memory')
+            .update({
+              memory_text: nextText,
+              facts: nextFacts,
+              preferences: nextPrefs,
+              updated_at: new Date().toISOString(),
+            } as any)
+            .eq('id', memory.id)
+            .eq('business_id', effectiveBusinessId);
+
+          if (up.error && !isMissingTableError(up.error)) throw up.error;
         }
       } catch {
         // ignore
@@ -574,7 +598,11 @@ Rules:
             mode,
             kpis,
             new_recommendations: newRecommendations,
-            memory_patch: memoryPatch,
+            memory_patch: {
+              ...memoryPatch,
+              confidence,
+              override_signal: overrideSignal,
+            },
             model: 'gpt-4.1-mini',
           } as any)
           .select('id')
