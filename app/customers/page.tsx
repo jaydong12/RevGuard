@@ -5,6 +5,14 @@ import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
 
+function tryConsoleLog(...args: any[]) {
+  try {
+    (globalThis as any)?.console?.log?.(...args);
+  } catch {
+    // ignore
+  }
+}
+
 type Customer = {
   id: string;
   business_id: string | null;
@@ -67,7 +75,6 @@ const CustomersSection: React.FC = () => {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    let businessIdToUse = selectedBusinessId ?? null;
 
     if (!form.name.trim()) {
       setError('Customer name is required.');
@@ -77,28 +84,58 @@ const CustomersSection: React.FC = () => {
     setSaving(true);
     setError(null);
 
-    const userIdToUse = userId ?? null;
-    if (!userIdToUse) {
+    // HARD PREFLIGHT (always re-check session + business at save time)
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    const authedUser = userData?.user ?? null;
+
+    tryConsoleLog('Customer save preflight user.id', authedUser?.id ?? null);
+
+    if (userErr) {
+      tryConsoleLog('Customer save preflight getUser error', userErr);
+      setError(userErr.message || 'Failed to get session user.');
+      setSaving(false);
+      return;
+    }
+
+    if (!authedUser?.id) {
       setError('Please log in to save customers.');
       setSaving(false);
       return;
     }
 
-    // If the active business id isn't ready yet, fall back to the user's first business.
-    if (!businessIdToUse) {
-      const firstBiz = await supabase
-        .from('business')
-        .select('id')
-        .eq('owner_id', userIdToUse)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      businessIdToUse = (firstBiz.data as any)?.id ?? null;
-    }
-    if (!businessIdToUse) {
-      setError('Loading your business…');
+    let businessIdToUse = selectedBusinessId ?? null;
+
+    // Ensure business exists (fetch-or-create)
+    const { data: biz, error: bizErr } = await supabase
+      .from('business')
+      .select('id')
+      .eq('owner_id', authedUser.id)
+      .maybeSingle();
+
+    if (bizErr) {
+      tryConsoleLog('Customer save preflight business lookup error', bizErr);
+      setError(bizErr.message || 'Failed to load business.');
       setSaving(false);
       return;
+    }
+
+    businessIdToUse = (biz as any)?.id ?? businessIdToUse;
+
+    if (!businessIdToUse) {
+      const { data: created, error: createErr } = await supabase
+        .from('business')
+        .insert({ owner_id: authedUser.id, name: 'My Business' } as any)
+        .select('id')
+        .single();
+
+      if (createErr || !created?.id) {
+        tryConsoleLog('Customer save preflight business create error', createErr);
+        setError(createErr?.message || 'No business found and failed to create one.');
+        setSaving(false);
+        return;
+      }
+
+      businessIdToUse = created.id;
     }
 
     const payload = {
@@ -114,6 +151,9 @@ const CustomersSection: React.FC = () => {
       last_invoice_date: form.last_invoice_date || null,
     };
 
+    // Log payload before write (requirement)
+    tryConsoleLog('Customer save payload', payload);
+
     let res;
     if (editingCustomer) {
       res = await supabase
@@ -128,8 +168,8 @@ const CustomersSection: React.FC = () => {
 
     const { data, error } = res;
     if (error) {
-      // eslint-disable-next-line no-console
-      console.error('Error saving customer', error);
+      // Log full error object (requirement)
+      tryConsoleLog('Error saving customer', error);
       alert('Could not save customer: ' + error.message);
       setSaving(false);
       return;
