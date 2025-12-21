@@ -58,6 +58,20 @@ async function fetchBusinessForOwner(userId: string): Promise<BusinessRow | null
   return (res.data as any) ?? null;
 }
 
+async function ensureBusinessForOwner(userId: string): Promise<BusinessRow | null> {
+  const existing = await fetchBusinessForOwner(userId);
+  if (existing?.id) return existing;
+
+  const created = await supabase
+    .from('business')
+    .insert({ owner_id: userId, name: 'My Business' } as any)
+    .select('id, name, owner_id, subscription_status')
+    .single();
+
+  if (created.error) throw created.error;
+  return (created.data as any) ?? null;
+}
+
 async function ensureProfileAndFetch(userId: string): Promise<ProfileRow | null> {
   // IMPORTANT: Do not insert/upsert here. Some environments enforce RLS rules that
   // block profile inserts. The Settings page will update-only if a row exists.
@@ -126,7 +140,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const businessQ = useQuery({
     queryKey: ['business_by_owner', userId],
     enabled: Boolean(userId),
-    queryFn: () => fetchBusinessForOwner(userId!),
+    queryFn: () => ensureBusinessForOwner(userId!),
   });
 
   const business = businessQ.data ?? null;
@@ -196,9 +210,6 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     billsQ.isLoading ||
     invoicesQ.isLoading;
 
-  const businessMissing =
-    Boolean(userId) && !businessQ.isLoading && !businessQ.error && !businessId;
-
   const errObj =
     sessionQ.error ||
     businessQ.error ||
@@ -206,11 +217,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     customersQ.error ||
     billsQ.error ||
     invoicesQ.error;
-  const error = businessMissing
-    ? 'No business selected. Please finish setup or refresh—your business should be created automatically after signup.'
-    : errObj
-      ? String((errObj as any)?.message ?? errObj)
-      : null;
+  const error = errObj ? String((errObj as any)?.message ?? errObj) : null;
 
   const value: AppData = React.useMemo(
     () => ({
