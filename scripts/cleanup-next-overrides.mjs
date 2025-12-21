@@ -36,6 +36,29 @@ function removeNestedLayouts() {
   }
 }
 
+function removeStaleNextTypes() {
+  // Next can leave stale type stubs in `.next/dev/types/*` that reference files
+  // we intentionally delete (like nested `app/**/layout.tsx`). On Windows/OneDrive,
+  // these can persist and break `next build` with "Cannot find module ... layout.js".
+  const candidates = [
+    path.join('.next', 'dev', 'types'),
+    path.join('.next', 'types'),
+  ];
+
+  let removed = 0;
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        fs.rmSync(p, { recursive: true, force: true });
+        removed += 1;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return removed;
+}
+
 let removed = 0;
 for (const p of candidates) {
   try {
@@ -49,6 +72,7 @@ for (const p of candidates) {
 }
 
 removed += removeNestedLayouts();
+removed += removeStaleNextTypes();
 
 if (removed > 0) {
   // eslint-disable-next-line no-console
