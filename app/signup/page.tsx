@@ -89,6 +89,26 @@ function SignupInner() {
           return;
         }
 
+        // Ensure a business exists (DB trigger should do this, but keep a client fallback).
+        try {
+          const first = await supabase
+            .from('business')
+            .select('id')
+            .eq('owner_id', userId)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (!first.data?.id) {
+            await supabase.from('business').insert({
+              owner_id: userId,
+              name: 'My Business',
+              subscription_status: 'inactive',
+            } as any);
+          }
+        } catch {
+          // ignore
+        }
+
         const status = await getSubscriptionStatus(userId);
 
         if (status !== 'active') router.replace('/pricing');

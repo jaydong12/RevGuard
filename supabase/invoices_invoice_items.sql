@@ -186,5 +186,16 @@ create policy "invoice_items_delete_via_invoice"
 -- If your business table is named something else, replace
 --   public.business(id)
 -- with the correct table + primary key before running this.
+--
+-- Verify trigger + function exist (run in Supabase SQL editor):
+--   select t.tgname, p.proname
+--   from pg_trigger t
+--   join pg_proc p on p.oid = t.tgfoid
+--   where t.tgrelid = 'public.invoices'::regclass
+--     and not t.tgisinternal;
+--
+--   select proname
+--   from pg_proc
+--   where proname = 'invoices_set_business_id_default';
 
 

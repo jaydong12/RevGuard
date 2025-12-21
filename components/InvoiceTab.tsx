@@ -454,18 +454,28 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
     if (businessId) setResolvedBusinessId(businessId);
   }, [businessId]);
 
-  async function requireBusinessIdForUser(): Promise<string> {
-    if (!userId) throw new Error('AUTH_REQUIRED');
+  async function requireBusinessIdForSessionUser(): Promise<{ userId: string; businessId: string }> {
+    const { data: sess } = await supabase.auth.getSession();
+    const user = sess.session?.user ?? null;
 
-    if (resolvedBusinessId) return resolvedBusinessId;
+    // eslint-disable-next-line no-console
+    console.log('invoice insert user.id', user?.id ?? null);
+
+    if (!user?.id) {
+      throw new Error('AUTH_REQUIRED');
+    }
+
+    if (resolvedBusinessId) {
+      return { userId: user.id, businessId: resolvedBusinessId };
+    }
 
     const { data: biz, error: bizErr } = await supabase
       .from('business')
       .select('id')
-      .eq('owner_id', userId)
+      .eq('owner_id', user.id)
       .order('created_at', { ascending: true })
       .limit(1)
-      .maybeSingle();
+      .single();
 
     if (bizErr || !biz?.id) {
       throw new Error('No business found for user');
@@ -473,8 +483,28 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
 
     const id = String((biz as any).id);
     setResolvedBusinessId(id);
-    return id;
+    return { userId: user.id, businessId: id };
   }
+
+  // Resolve business id ASAP so buttons can enable without relying on parent state.
+  useEffect(() => {
+    let alive = true;
+    if (!resolvedBusinessId && userId) {
+      void (async () => {
+        try {
+          const r = await requireBusinessIdForSessionUser();
+          if (!alive) return;
+          setResolvedBusinessId(r.businessId);
+        } catch {
+          // ignore; UI will show "Select or create business"
+        }
+      })();
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, resolvedBusinessId]);
 
   // Recalculate subtotal/tax/total from line items (tax is a flat dollar amount)
   const recalcTotalsFromItems = (draftItems: InvoiceItem[], taxValue?: number) => {
@@ -551,15 +581,10 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
 
   const handleSaveInvoice = async (e: FormEvent) => {
     e.preventDefault();
-    if (!userId) {
-      setError('Please log in to save invoices.');
-      return;
-    }
-
-    // If the active business id isn't ready yet, fall back to the user's first business.
     let businessIdToUse: string;
     try {
-      businessIdToUse = await requireBusinessIdForUser();
+      const r = await requireBusinessIdForSessionUser();
+      businessIdToUse = r.businessId;
     } catch (err: any) {
       setError(err?.message ?? 'No business found for user');
       return;
