@@ -175,15 +175,70 @@ export default function InvoiceTab(_props: Props) {
   async function handleSaveInvoice() {
     setError(null);
 
-    if (!userId) {
+    // HARD PREFLIGHT (always re-check session + business at save time)
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    const user = userData?.user ?? null;
+
+    tryConsoleLog('InvoiceTab preflight user.id', user?.id ?? null);
+    storeDebug('InvoiceTab preflight user.id', user?.id ?? null);
+
+    if (userErr) {
+      tryConsoleLog('InvoiceTab preflight getUser error', userErr);
+      storeDebug('InvoiceTab preflight getUser error', userErr);
+      setError(userErr.message || 'Failed to get session user.');
+      return;
+    }
+
+    if (!user?.id) {
       setError('Please sign in.');
       return;
     }
 
-    if (!businessId) {
-      setError('Business is still loading. Please wait.');
+    // Fetch business with maybeSingle(). If none, create it.
+    const { data: biz, error: bizErr } = await supabase
+      .from('business')
+      .select('id')
+      .eq('owner_id', user.id)
+      .maybeSingle();
+
+    if (bizErr) {
+      tryConsoleLog('InvoiceTab preflight business lookup error', bizErr);
+      storeDebug('InvoiceTab preflight business lookup error', bizErr);
+      setError(bizErr.message || 'Failed to load business.');
       return;
     }
+
+    let businessIdToUse = (biz as any)?.id as string | null | undefined;
+
+    if (!businessIdToUse) {
+      const { data: created, error: createErr } = await supabase
+        .from('business')
+        .insert({ owner_id: user.id, name: 'My Business' })
+        .select('id')
+        .single();
+
+      if (createErr || !created?.id) {
+        tryConsoleLog('InvoiceTab preflight business create error', createErr);
+        storeDebug('InvoiceTab preflight business create error', createErr);
+        setError(createErr?.message || 'No business found and failed to create one.');
+        return;
+      }
+
+      businessIdToUse = created.id;
+    }
+
+    // Final guard for TS/runtime safety
+    if (!businessIdToUse) {
+      setError('No business found.');
+      return;
+    }
+
+    // Keep state updated (helps UI and disables Save correctly on next render)
+    setUserId(user.id);
+    setBusinessId(businessIdToUse ?? null);
+
+    tryConsoleLog('InvoiceTab preflight businessId', businessIdToUse);
+    storeDebug('InvoiceTab preflight businessId', businessIdToUse);
 
     if (!clientName.trim()) {
       setError('Client name is required.');
@@ -198,7 +253,7 @@ export default function InvoiceTab(_props: Props) {
 
     // On save, insert into invoices ALWAYS with business_id: businessId and all fields.
     const payload = {
-      business_id: businessId,
+      business_id: businessIdToUse,
       invoice_number: invNum,
       client_name: clientName.trim(),
       issue_date: issueDate ? issueDate : null,
@@ -210,6 +265,10 @@ export default function InvoiceTab(_props: Props) {
       notes: notes.trim() ? notes.trim() : null,
     };
 
+    // Log payload before insert (requirement)
+    tryConsoleLog('InvoiceTab insert payload', payload);
+    storeDebug('InvoiceTab insert payload', payload);
+
     setSaving(true);
     try {
       const { data: inserted, error: insErr } = await supabase
@@ -219,21 +278,24 @@ export default function InvoiceTab(_props: Props) {
         .single();
 
       if (insErr || !inserted) {
-        // Add console logs for user.id, businessId, and payload if insert fails.
-        tryConsoleLog('Invoice insert failed user.id', userId);
-        tryConsoleLog('Invoice insert failed businessId', businessId);
-        tryConsoleLog('Invoice insert failed payload', payload);
-        storeDebug('Invoice insert failed user.id', userId);
-        storeDebug('Invoice insert failed businessId', businessId);
-        storeDebug('Invoice insert failed payload', payload);
+        // Log full error object (requirement)
+        tryConsoleLog('Invoice insert failed error', insErr);
         storeDebug('Invoice insert failed error', insErr);
+
+        // Add console logs for user.id, businessId, and payload if insert fails.
+        tryConsoleLog('Invoice insert failed user.id', user.id);
+        tryConsoleLog('Invoice insert failed businessId', businessIdToUse);
+        tryConsoleLog('Invoice insert failed payload', payload);
+        storeDebug('Invoice insert failed user.id', user.id);
+        storeDebug('Invoice insert failed businessId', businessIdToUse);
+        storeDebug('Invoice insert failed payload', payload);
 
         setError(insErr?.message || 'Could not save invoice.');
         return;
       }
 
       // After insert, refetch invoices list filtered by business_id.
-      await refetchInvoices(businessId);
+      await refetchInvoices(businessIdToUse);
 
       // Clear form
       setInvoiceNumber('');
