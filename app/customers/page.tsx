@@ -88,7 +88,7 @@ const CustomersSection: React.FC = () => {
     }
 
     const payload = {
-      business_id: selectedBusinessId ?? null,
+      business_id: selectedBusinessId,
       name: form.name.trim(),
       company: form.company.trim() || null,
       email: form.email.trim() || null,
