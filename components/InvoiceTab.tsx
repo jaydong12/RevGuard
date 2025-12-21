@@ -7,6 +7,24 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { useQueryClient } from '@tanstack/react-query';
 
+function safeLog(...args: any[]) {
+  try {
+    // eslint-disable-next-line no-console
+    if (typeof console !== 'undefined' && typeof console.log === 'function') console.log(...args);
+  } catch {
+    // ignore
+  }
+}
+
+function safeError(...args: any[]) {
+  try {
+    // eslint-disable-next-line no-console
+    if (typeof console !== 'undefined' && typeof console.error === 'function') console.error(...args);
+  } catch {
+    // ignore
+  }
+}
+
 type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 
 export type Invoice = {
@@ -463,8 +481,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         const { data } = await supabase.auth.getUser();
         const user = data.user ?? null;
 
-        // eslint-disable-next-line no-console
-        console.log('invoice insert user.id', user?.id ?? null);
+        safeLog('invoice insert user.id', user?.id ?? null);
 
         if (!user?.id) return;
 
@@ -491,8 +508,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
   async function requireBizIdBeforeSave(): Promise<{ userId: string; bizId: string }> {
     const { data } = await supabase.auth.getUser();
     const user = data.user ?? null;
-    // eslint-disable-next-line no-console
-    console.log('invoice insert user.id', user?.id ?? null);
+    safeLog('invoice insert user.id', user?.id ?? null);
     if (!user?.id) throw new Error('AUTH_REQUIRED');
 
     if (bizId) return { userId: user.id, bizId };
@@ -628,8 +644,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           .single();
 
         if (invError || !updated) {
-          // eslint-disable-next-line no-console
-          console.error('Error updating invoice', invError);
+          safeError('Error updating invoice', invError);
           setError(invError?.message || 'Could not update invoice');
           return;
         }
@@ -640,8 +655,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           .delete()
           .eq('invoice_id', editingInvoiceId);
         if (delError) {
-          // eslint-disable-next-line no-console
-          console.error('Error clearing invoice items', delError);
+          safeError('Error clearing invoice items', delError);
         }
 
         const itemsToInsert = items
@@ -664,8 +678,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
             .from('invoice_items')
             .insert(itemsToInsert);
           if (itemsError) {
-            // eslint-disable-next-line no-console
-            console.error('Error updating invoice items', itemsError);
+            safeError('Error updating invoice items', itemsError);
           }
         }
 
@@ -673,8 +686,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
       } else {
         // CREATE new invoice
         const payload = { ...invoiceData, business_id: businessIdToUse };
-        // eslint-disable-next-line no-console
-        console.log('invoice payload', payload);
+        safeLog('invoice payload', payload);
         const {
           data: inserted,
           error: invError,
@@ -685,8 +697,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           .single();
 
         if (invError || !inserted) {
-          // eslint-disable-next-line no-console
-          console.error('Error creating invoice', invError);
+          safeError('Error creating invoice', invError);
           setError(invError?.message || 'Could not create invoice');
           return;
         }
@@ -713,8 +724,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
             .from('invoice_items')
             .insert(itemsToInsert);
           if (itemsError) {
-            // eslint-disable-next-line no-console
-            console.error('Error creating invoice items', itemsError);
+            safeError('Error creating invoice items', itemsError);
           }
         }
 
@@ -742,8 +752,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
       .order('id', { ascending: true });
 
     if (itemError) {
-      // eslint-disable-next-line no-console
-      console.error('Error loading invoice items for edit', itemError);
+      safeError('Error loading invoice items for edit', itemError);
     }
 
     const loadedItems: InvoiceItem[] =
@@ -843,8 +852,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         .single();
 
       if (invError || !updatedInvoice) {
-        // eslint-disable-next-line no-console
-        console.error('Error updating invoice status', invError);
+        safeError('Error updating invoice status', invError);
         setError(invError?.message || 'Could not mark invoice as paid.');
         return;
       }
@@ -870,8 +878,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
         .insert(txPayload);
 
       if (txError) {
-        // eslint-disable-next-line no-console
-        console.error('Error creating transaction for paid invoice', txError);
+        safeError('Error creating transaction for paid invoice', txError);
         setError(
           txError.message ||
             'Invoice marked as paid, but failed to create matching transaction.'
@@ -975,8 +982,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
   async function downloadInvoicePDF(invoice: Invoice) {
     const element = document.getElementById(`invoice-print-${invoice.id}`);
     if (!element) {
-      // eslint-disable-next-line no-console
-      console.error('No print element found for invoice', invoice.id);
+      safeError('No print element found for invoice', invoice.id);
       return;
     }
 
@@ -1003,8 +1009,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
       pdf.addImage(imgData, 'PNG', 0, 0, width, height);
       pdf.save(`invoice-${invoice.invoice_number}.pdf`);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('PDF export failed:', err);
+      safeError('PDF export failed:', err);
       setError('PDF export failed. Please try again.');
     }
   }
