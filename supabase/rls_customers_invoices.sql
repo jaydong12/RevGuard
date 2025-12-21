@@ -242,9 +242,12 @@ begin
       and table_name = 'invoices'
       and column_name = 'user_id'
   ) then
+    -- Backfill NULL business_id for all invoices using the invoice's user_id -> business.owner_id.
+    -- If a user has multiple businesses, we attach to their earliest created business.
     update public.invoices i
     set business_id = (
-      select b.id from public.business b
+      select b.id
+      from public.business b
       where b.owner_id = i.user_id
       order by b.created_at asc
       limit 1
@@ -267,5 +270,14 @@ begin
     raise notice 'Skipping NOT NULL on public.invoices.business_id: % rows still have NULL business_id', nulls;
   end if;
 end $$;
+
+-- Manual backfill snippet (single owner) if you want to run it directly:
+-- NOTE: `auth.uid()` is not set when running as the SQL editor "postgres" role.
+-- Prefer using a concrete UUID here, e.g. owner_id = '00000000-0000-0000-0000-000000000000':
+-- update public.invoices i
+-- set business_id = b.id
+-- from public.business b
+-- where i.business_id is null
+--   and b.owner_id = 'YOUR_USER_UUID_HERE';
 
 
