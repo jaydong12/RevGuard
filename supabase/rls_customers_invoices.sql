@@ -85,6 +85,27 @@ create policy "customers_delete_own"
     )
   );
 
+-- If client forgets to pass business_id, set it to the user's first business.
+create or replace function public.customers_set_business_id_default()
+returns trigger as $$
+begin
+  if new.business_id is null then
+    select b.id
+      into new.business_id
+    from public.business b
+    where b.owner_id = auth.uid()
+    order by b.created_at asc
+    limit 1;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists customers_set_business_id_default on public.customers;
+create trigger customers_set_business_id_default
+before insert on public.customers
+for each row execute procedure public.customers_set_business_id_default();
+
 -- Optional backfill (only if you have a user_id column on customers):
 -- If a customer row has NULL business_id, and the user owns exactly one business,
 -- attach the row to that business.
@@ -189,6 +210,27 @@ create policy "invoices_delete_own"
         and b.owner_id = auth.uid()
     )
   );
+
+-- If client forgets to pass business_id, set it to the user's first business.
+create or replace function public.invoices_set_business_id_default()
+returns trigger as $$
+begin
+  if new.business_id is null then
+    select b.id
+      into new.business_id
+    from public.business b
+    where b.owner_id = auth.uid()
+    order by b.created_at asc
+    limit 1;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists invoices_set_business_id_default on public.invoices;
+create trigger invoices_set_business_id_default
+before insert on public.invoices
+for each row execute procedure public.invoices_set_business_id_default();
 
 -- Optional backfill (only if you have a user_id column on invoices):
 do $$

@@ -521,12 +521,25 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
 
   const handleSaveInvoice = async (e: FormEvent) => {
     e.preventDefault();
-    if (!businessId) {
-      setError('Select a business first.');
-      return;
-    }
     if (!userId) {
       setError('Please log in to save invoices.');
+      return;
+    }
+
+    // If the active business id isn't ready yet, fall back to the user's first business.
+    let businessIdToUse = businessId ?? null;
+    if (!businessIdToUse) {
+      const firstBiz = await supabase
+        .from('business')
+        .select('id')
+        .eq('owner_id', userId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      businessIdToUse = (firstBiz.data as any)?.id ?? null;
+    }
+    if (!businessIdToUse) {
+      setError('Select a business first.');
       return;
     }
 
@@ -545,7 +558,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
       tax: Number(newInvoice.tax || 0),
       total: Number(newInvoice.total || 0),
       notes: newInvoice.notes || null,
-      business_id: businessId,
+      business_id: businessIdToUse,
     };
 
     try {
@@ -558,7 +571,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           .from('invoices')
           .update(basePayload)
           .eq('id', editingInvoiceId)
-          .eq('business_id', businessId)
+          .eq('business_id', businessIdToUse)
           .select('*')
           .single();
 
@@ -604,7 +617,7 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           }
         }
 
-        await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
+        await queryClient.invalidateQueries({ queryKey: ['invoices', businessIdToUse] });
       } else {
         // CREATE new invoice
         const {
@@ -650,13 +663,13 @@ const InvoiceTab: React.FC<InvoiceTabProps> = ({
           }
         }
 
-        await queryClient.invalidateQueries({ queryKey: ['invoices', businessId] });
+        await queryClient.invalidateQueries({ queryKey: ['invoices', businessIdToUse] });
       }
 
       // Reset form after save
       setEditingInvoiceId(null);
       setShowForm(false);
-      setNewInvoice(emptyInvoice(businessId));
+      setNewInvoice(emptyInvoice(businessIdToUse));
       setItems([emptyItem(), emptyItem()]);
     } finally {
       setSaving(false);

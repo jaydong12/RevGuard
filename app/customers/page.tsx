@@ -67,10 +67,7 @@ const CustomersSection: React.FC = () => {
 
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBusinessId) {
-      setError('Loading your business…');
-      return;
-    }
+    let businessIdToUse = selectedBusinessId ?? null;
 
     if (!form.name.trim()) {
       setError('Customer name is required.');
@@ -87,8 +84,25 @@ const CustomersSection: React.FC = () => {
       return;
     }
 
+    // If the active business id isn't ready yet, fall back to the user's first business.
+    if (!businessIdToUse) {
+      const firstBiz = await supabase
+        .from('business')
+        .select('id')
+        .eq('owner_id', userIdToUse)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      businessIdToUse = (firstBiz.data as any)?.id ?? null;
+    }
+    if (!businessIdToUse) {
+      setError('Loading your business…');
+      setSaving(false);
+      return;
+    }
+
     const payload = {
-      business_id: selectedBusinessId,
+      business_id: businessIdToUse,
       name: form.name.trim(),
       company: form.company.trim() || null,
       email: form.email.trim() || null,
@@ -106,7 +120,7 @@ const CustomersSection: React.FC = () => {
         .from('customers')
         .update(payload)
         .eq('id', editingCustomer.id)
-        .eq('business_id', selectedBusinessId)
+        .eq('business_id', businessIdToUse)
         .select('*');
     } else {
       res = await supabase.from('customers').insert(payload).select('*');
@@ -121,7 +135,7 @@ const CustomersSection: React.FC = () => {
       return;
     }
 
-    await queryClient.invalidateQueries({ queryKey: ['customers', selectedBusinessId] });
+    await queryClient.invalidateQueries({ queryKey: ['customers', businessIdToUse] });
 
     setEditingCustomer(null);
     setForm({
