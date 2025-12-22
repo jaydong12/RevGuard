@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabaseClient';
+import { getOrCreateBusinessId } from '../lib/getOrCreateBusinessId';
 
 type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 
@@ -55,6 +56,7 @@ export default function InvoiceTab(_props: Props) {
   const [booting, setBooting] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastSupabaseError, setLastSupabaseError] = useState<any | null>(null);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [businessId, setBusinessId] = useState<string | null>(null);
@@ -174,69 +176,21 @@ export default function InvoiceTab(_props: Props) {
 
   async function handleSaveInvoice() {
     setError(null);
+    setLastSupabaseError(null);
 
-    // HARD PREFLIGHT (always re-check session + business at save time)
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
-    const user = userData?.user ?? null;
-
-    tryConsoleLog('InvoiceTab preflight user.id', user?.id ?? null);
-    storeDebug('InvoiceTab preflight user.id', user?.id ?? null);
-
-    if (userErr) {
-      tryConsoleLog('InvoiceTab preflight getUser error', userErr);
-      storeDebug('InvoiceTab preflight getUser error', userErr);
-      setError(userErr.message || 'Failed to get session user.');
-      return;
-    }
-
-    if (!user?.id) {
-      setError('Please sign in.');
-      return;
-    }
-
-    // Fetch business with maybeSingle(). If none, create it.
-    const { data: biz, error: bizErr } = await supabase
-      .from('business')
-      .select('id')
-      .eq('owner_id', user.id)
-      .maybeSingle();
-
-    if (bizErr) {
-      tryConsoleLog('InvoiceTab preflight business lookup error', bizErr);
-      storeDebug('InvoiceTab preflight business lookup error', bizErr);
-      setError(bizErr.message || 'Failed to load business.');
-      return;
-    }
-
-    let businessIdToUse = (biz as any)?.id as string | null | undefined;
-
-    if (!businessIdToUse) {
-      const { data: created, error: createErr } = await supabase
-        .from('business')
-        .insert({ owner_id: user.id, name: 'My Business' })
-        .select('id')
-        .single();
-
-      if (createErr || !created?.id) {
-        tryConsoleLog('InvoiceTab preflight business create error', createErr);
-        storeDebug('InvoiceTab preflight business create error', createErr);
-        setError(createErr?.message || 'No business found and failed to create one.');
-        return;
-      }
-
-      businessIdToUse = created.id;
-    }
-
-    // Final guard for TS/runtime safety
-    if (!businessIdToUse) {
-      setError('No business found.');
+    // get-or-create business id (always fresh at save time)
+    let businessIdToUse: string;
+    try {
+      businessIdToUse = await getOrCreateBusinessId(supabase);
+    } catch (e: any) {
+      tryConsoleLog('InvoiceTab preflight failed', e);
+      storeDebug('InvoiceTab preflight failed', e);
+      setError(e?.message || 'Not signed in');
       return;
     }
 
     // Keep state updated (helps UI and disables Save correctly on next render)
-    setUserId(user.id);
-    setBusinessId(businessIdToUse ?? null);
-
+    setBusinessId(businessIdToUse);
     tryConsoleLog('InvoiceTab preflight businessId', businessIdToUse);
     storeDebug('InvoiceTab preflight businessId', businessIdToUse);
 
@@ -281,16 +235,26 @@ export default function InvoiceTab(_props: Props) {
         // Log full error object (requirement)
         tryConsoleLog('Invoice insert failed error', insErr);
         storeDebug('Invoice insert failed error', insErr);
+        setLastSupabaseError(insErr ?? { message: 'Unknown insert failure' });
 
         // Add console logs for user.id, businessId, and payload if insert fails.
-        tryConsoleLog('Invoice insert failed user.id', user.id);
+        tryConsoleLog('Invoice insert failed user.id', userId);
         tryConsoleLog('Invoice insert failed businessId', businessIdToUse);
         tryConsoleLog('Invoice insert failed payload', payload);
-        storeDebug('Invoice insert failed user.id', user.id);
+        storeDebug('Invoice insert failed user.id', userId);
         storeDebug('Invoice insert failed businessId', businessIdToUse);
         storeDebug('Invoice insert failed payload', payload);
 
-        setError(insErr?.message || 'Could not save invoice.');
+        // Show full details in UI (code/message/details) instead of generic message
+        const code = (insErr as any)?.code ?? null;
+        const msg = (insErr as any)?.message ?? 'Could not save invoice.';
+        const details = (insErr as any)?.details ?? null;
+        setError(
+          `Invoice save failed.\n` +
+            `code: ${code ?? 'n/a'}\n` +
+            `message: ${msg}\n` +
+            `details: ${details ?? 'n/a'}`
+        );
         return;
       }
 
@@ -325,7 +289,24 @@ export default function InvoiceTab(_props: Props) {
 
       {error ? (
         <div className="rounded-xl border border-rose-900/50 bg-rose-950/40 p-3 text-sm text-rose-200">
-          {error}
+          <pre className="whitespace-pre-wrap break-words">{error}</pre>
+          {lastSupabaseError ? (
+            <div className="mt-2 rounded-lg border border-rose-900/40 bg-black/20 p-2 text-[11px] text-rose-100/90">
+              <div className="font-semibold">Supabase error (raw)</div>
+              <pre className="mt-1 whitespace-pre-wrap break-words">
+                {JSON.stringify(
+                  {
+                    code: (lastSupabaseError as any)?.code ?? null,
+                    message: (lastSupabaseError as any)?.message ?? null,
+                    details: (lastSupabaseError as any)?.details ?? null,
+                    hint: (lastSupabaseError as any)?.hint ?? null,
+                  },
+                  null,
+                  2
+                )}
+              </pre>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
