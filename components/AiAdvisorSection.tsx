@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { formatCurrency } from '../lib/formatCurrency';
 import { useAppData } from './AppDataProvider';
+import { ArrowUp, Sparkles } from 'lucide-react';
 
 type AdvisorMessageRole = 'user' | 'assistant';
 
@@ -163,6 +164,12 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
 
     const baseMessages = [...messages, userMessage];
 
+    const lastAssistantReply =
+      [...messages]
+        .reverse()
+        .find((m) => m.role === 'assistant' && m.content && m.content !== 'Thinking…')
+        ?.content?.slice(0, 2000) ?? null;
+
     // Optimistically show "Thinking..." placeholder
     setMessages([
       ...baseMessages,
@@ -202,6 +209,7 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
         body: JSON.stringify({
           businessId: effectiveBusinessId,
           message: content,
+          lastAssistantReply,
           context: {
             revenueLast365: summary.totalIncomeLast365,
             expensesLast365: summary.totalExpensesLast365,
@@ -314,6 +322,13 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
   };
   return (
     <div className="space-y-4">
+      <style>{`
+@keyframes rgFadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rg-msg-in { animation: rgFadeUp 180ms ease-out; }
+      `}</style>
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-3">
@@ -349,7 +364,7 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
       </div>
 
       {/* Chat area */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 flex flex-col gap-3 min-h-[260px]">
+      <div className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-950/70 to-slate-900/40 p-4 flex flex-col gap-3 min-h-[260px] shadow-[0_0_0_1px_rgba(148,163,184,0.06)]">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-slate-100">
@@ -382,17 +397,14 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
           </p>
         )}
 
-        <div className="flex-1 min-h-[140px] max-h-[360px] overflow-y-auto space-y-3 text-sm mt-1">
+        <div className="flex-1 min-h-[140px] max-h-[360px] overflow-y-auto space-y-3 text-sm mt-1 pr-1">
           {messages.length === 0 && (
-            <div className="text-[11px] text-slate-500">
-              Start by asking a question like{' '}
-              <span className="text-emerald-300">
-                &quot;Where am I overspending?&quot;
+            <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2 text-slate-200">
+                <Sparkles className="h-3.5 w-3.5 text-emerald-300" />
+                Try:
               </span>{' '}
-              or{' '}
-              <span className="text-emerald-300">
-                &quot;How did I do over the last year?&quot;
-              </span>
+              “Where am I overspending?” or “How did I do over the last year?”
             </div>
           )}
           {messages.map((msg, index) => {
@@ -400,21 +412,16 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
             return (
               <div
                 key={index}
-                className={`flex ${
-                  isUser ? 'justify-end' : 'justify-start'
-                }`}
+                className={`flex rg-msg-in ${isUser ? 'justify-end' : 'justify-start'}`}
               >
-                <div className="max-w-[80%] w-full">
+                <div className={`max-w-[86%] ${isUser ? 'text-right' : 'text-left'}`}>
                   <div
-                    className={`rounded-2xl px-3 py-2 text-sm shadow-sm ${
+                    className={`rounded-xl px-4 py-2.5 text-sm leading-relaxed shadow-sm backdrop-blur ${
                       isUser
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-800 text-slate-100 border border-slate-700'
+                        ? 'bg-gradient-to-b from-emerald-500 to-emerald-400 text-slate-950 shadow-emerald-500/10'
+                        : 'bg-slate-950/35 text-slate-100 border border-slate-800 shadow-slate-950/20'
                     }`}
                   >
-                    <p className="text-[10px] uppercase tracking-wide mb-1 opacity-70">
-                      {isUser ? 'You' : 'RevGuard AI'}
-                    </p>
                     <p className="whitespace-pre-wrap">{msg.content}</p>
                   </div>
 
@@ -520,33 +527,34 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
             void handleSend();
           }}
         >
-          <textarea
-            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            rows={3}
-            placeholder="Ask RevGuard AI anything about your numbers…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void handleSend();
-              }
-            }}
-          />
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] text-slate-500">
-              {businessId
-                ? 'RevGuard will use your recent income and expenses to tailor its advice.'
-                : 'Sign in required.'}
-            </span>
-            <button
-              type="submit"
-              disabled={sending || !input.trim() || !businessId}
-              className="rounded-xl bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {sending ? 'Sending…' : 'Send'}
-            </button>
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/50 px-3 py-2 shadow-sm focus-within:ring-2 focus-within:ring-emerald-500/40">
+            <div className="flex items-end gap-2">
+              <textarea
+                className="min-h-[40px] w-full resize-none bg-transparent px-1 py-1 text-sm text-slate-100 outline-none placeholder:text-slate-500 leading-relaxed"
+                rows={1}
+                placeholder="Message RevGuard AI…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSend();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                aria-label="Send"
+                disabled={sending || !input.trim() || !businessId}
+                className="mb-0.5 inline-flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500 text-slate-950 shadow-sm hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+            </div>
           </div>
+          <span className="text-[10px] text-slate-500">
+            {businessId ? 'Ask for a breakdown if you want detail.' : 'Sign in required.'}
+          </span>
         </form>
       </div>
     </div>

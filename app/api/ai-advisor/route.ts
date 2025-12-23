@@ -243,7 +243,7 @@ export async function POST(req: Request) {
 
   (async () => {
     try {
-      const { message, businessId: _businessId, context } = (await req.json()) as {
+      const { message, businessId: _businessId, context, lastAssistantReply } = (await req.json()) as {
         message?: string;
         businessId?: string | null;
         context?: {
@@ -259,6 +259,7 @@ export async function POST(req: Request) {
           lastError?: string | null;
           summaryError?: string | null;
         };
+        lastAssistantReply?: string | null;
       };
 
       const text = (message ?? '').toString();
@@ -419,6 +420,8 @@ Response policy:
 - Default length: 2–3 plain-language sentences.
 - Default ending: exactly ONE follow-up question (end the answer with a single "?").
 - Do NOT use section headings by default (no "Summary:", no "Top drivers:", etc.).
+- Avoid repeating previously stated metrics or conclusions. Only add new insight; reference prior info briefly if needed.
+- If the input includes last_assistant_reply, assume the user saw it; do NOT restate the same metrics/summary unless they explicitly asked for a breakdown.
 - The input includes "intent" (one of: check_in, concern, optimize, deep_dive) and "depth_requested" (boolean).
 - Only go long / structured if (input.intent == "deep_dive") OR (input.depth_requested == true).
 - If input.intent != "deep_dive": keep it short, chatty, and practical.
@@ -501,6 +504,7 @@ Default response is conversational and short.
               cfo_context: cfoContext,
               intent,
               depth_requested: depthRequested,
+              last_assistant_reply: String(lastAssistantReply ?? '').slice(0, 2000) || null,
               user_message: text,
             }
           : {
@@ -509,6 +513,7 @@ Default response is conversational and short.
               ui_context: supportContext,
               intent,
               depth_requested: depthRequested,
+              last_assistant_reply: String(lastAssistantReply ?? '').slice(0, 2000) || null,
               user_message: text,
             };
 
@@ -528,6 +533,8 @@ Rules:
   - 2–3 plain-language sentences
   - NO headings/sections by default
   - End with exactly ONE follow-up question (end with a single "?")
+- Avoid repeating previously stated metrics or conclusions. Only add new insight; reference prior info briefly if needed.
+- If input.last_assistant_reply is provided, do NOT repeat the same numbers/summary unless the user asked for detail.
 - If (input.intent == "deep_dive") OR (input.depth_requested == true), then the answer may be longer and structured, proportional to the request.
   - Still end with exactly ONE follow-up question.
 - Avoid accounting terms unless necessary; if used, define it inline.
