@@ -1341,7 +1341,11 @@ function buildMonthlySeries(txs: Transaction[]) {
     const key = (tx.date || '').slice(0, 7);
     if (!/^\d{4}-\d{2}$/.test(key)) continue;
     if (!map.has(key)) {
-      const d = new Date(`${key}-01T00:00:00Z`);
+      // IMPORTANT: Do NOT parse as UTC (`${key}-01T00:00:00Z`) because that can
+      // shift the date to the previous day in local timezones (e.g. PST),
+      // causing month labels like Dec -> Nov. Use local numeric constructor.
+      const [yy, mm] = key.split('-').map((x) => parseInt(x, 10));
+      const d = new Date(yy, (mm ?? 1) - 1, 1);
       const label = d.toLocaleString('en-US', { month: 'short' });
       map.set(key, { month: key, label, income: 0, expenses: 0, net: 0 });
     }
