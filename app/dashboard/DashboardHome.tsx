@@ -23,6 +23,7 @@ import { CashFlowCard } from '../../components/CashFlowCard';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
+import { ArrowDownRight, ArrowUpRight, Droplet, Sparkles } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -943,6 +944,167 @@ export default function DashboardHome() {
   // Transactions are loaded once in `AppDataProvider` (React Query) and cached by `business_id`.
 
   // ---------- core derived data ----------
+
+  function dayKey(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')}`;
+  }
+
+  function parseTxDateSafe(s: string): Date | null {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const { todayKey, yesterdayKey, netToday, netYesterday, healthScore, moneyMoves, lowData } =
+    useMemo(() => {
+      const now = new Date();
+      const tKey = dayKey(now);
+      const y = new Date(now);
+      y.setDate(now.getDate() - 1);
+      const yKey = dayKey(y);
+
+      // Partition by day (today/yesterday) and build a 30d window for the health meter.
+      let todayNet = 0;
+      let yesterdayNet = 0;
+      const last30Start = new Date(now);
+      last30Start.setDate(now.getDate() - 30);
+      let revenue30 = 0;
+      let expenses30 = 0;
+      const activeDays = new Set<string>();
+
+      const todayTxs: Transaction[] = [];
+
+      for (const tx of transactions) {
+        const amt = Number((tx as any)?.amount) || 0;
+        const d = parseTxDateSafe(String((tx as any)?.date ?? ''));
+        if (!d) continue;
+        const k = dayKey(d);
+        if (k === tKey) {
+          todayNet += amt;
+          todayTxs.push(tx);
+        }
+        if (k === yKey) yesterdayNet += amt;
+
+        if (d >= last30Start && d <= now) {
+          activeDays.add(k);
+          if (amt >= 0) revenue30 += amt;
+          else expenses30 += Math.abs(amt);
+        }
+      }
+
+      // "Business health" is a small, friendly proxy signal (0–100) based on:
+      // - activity consistency (days with transactions in last 30)
+      // - profitability in last 30 (net margin)
+      const activityScore = Math.min(20, Math.round((activeDays.size / 20) * 20)); // 20 days ~ full points
+      const net30 = revenue30 - expenses30;
+      const margin = revenue30 > 0 ? net30 / revenue30 : 0;
+      const marginScore = Math.max(-30, Math.min(30, Math.round(margin * 60))); // -30..+30
+
+      const hasAnyRecent = activeDays.size > 0;
+      const low = !hasAnyRecent || transactions.length < 3;
+      const score = low ? 18 : Math.max(0, Math.min(100, 50 + activityScore + marginScore));
+
+      // Today's Money Moves (1–3 bullets) from TODAY only.
+      const byCategory: Record<string, { net: number; in: number; out: number }> = {};
+      let biggestAbs: Transaction | null = null;
+      for (const tx of todayTxs) {
+        const amt = Number((tx as any)?.amount) || 0;
+        const cat = String((tx as any)?.category ?? 'Uncategorized') || 'Uncategorized';
+        byCategory[cat] = byCategory[cat] ?? { net: 0, in: 0, out: 0 };
+        byCategory[cat].net += amt;
+        if (amt >= 0) byCategory[cat].in += amt;
+        else byCategory[cat].out += Math.abs(amt);
+        if (!biggestAbs || Math.abs(amt) > Math.abs(biggestAbs.amount)) biggestAbs = tx;
+      }
+
+      const topIn = Object.entries(byCategory)
+        .filter(([, v]) => v.in > 0)
+        .sort((a, b) => b[1].in - a[1].in)[0];
+      const topOut = Object.entries(byCategory)
+        .filter(([, v]) => v.out > 0)
+        .sort((a, b) => b[1].out - a[1].out)[0];
+
+      const bullets: string[] = [];
+      if (topIn) bullets.push(`In: ${formatCurrency(topIn[1].in)} • ${topIn[0]}`);
+      if (topOut) bullets.push(`Out: ${formatCurrency(topOut[1].out)} • ${topOut[0]}`);
+      if (biggestAbs && bullets.length < 3) {
+        const label = String((biggestAbs as any)?.description ?? '').trim();
+        const short = label.length > 42 ? `${label.slice(0, 42)}…` : label;
+        bullets.push(
+          `Largest: ${formatCurrency(Number((biggestAbs as any)?.amount) || 0)}${
+            short ? ` • ${short}` : ''
+          }`
+        );
+      }
+
+      return {
+        todayKey: tKey,
+        yesterdayKey: yKey,
+        netToday: todayNet,
+        netYesterday: yesterdayNet,
+        healthScore: score,
+        moneyMoves: bullets.slice(0, 3),
+        lowData: low,
+      };
+    }, [transactions]);
+
+  const [waterStreak, setWaterStreak] = useState<number>(0);
+  const [lastWateredKey, setLastWateredKey] = useState<string | null>(null);
+  const [wateredJustNow, setWateredJustNow] = useState(false);
+
+  useEffect(() => {
+    setWateredJustNow(false);
+    if (!selectedBusinessId) {
+      setWaterStreak(0);
+      setLastWateredKey(null);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(`revguard:water:${selectedBusinessId}`);
+      if (!raw) {
+        setWaterStreak(0);
+        setLastWateredKey(null);
+        return;
+      }
+      const parsed = JSON.parse(raw) as { streak?: number; lastDayKey?: string | null };
+      setWaterStreak(Number(parsed?.streak) || 0);
+      setLastWateredKey(typeof parsed?.lastDayKey === 'string' ? parsed.lastDayKey : null);
+    } catch {
+      setWaterStreak(0);
+      setLastWateredKey(null);
+    }
+  }, [selectedBusinessId]);
+
+  function handleWaterBusiness() {
+    if (!selectedBusinessId) return;
+    setWateredJustNow(false);
+    const already = lastWateredKey === todayKey;
+    if (already) return;
+
+    const next =
+      lastWateredKey === yesterdayKey
+        ? Math.max(1, (waterStreak || 0) + 1)
+        : 1;
+
+    setWaterStreak(next);
+    setLastWateredKey(todayKey);
+    setWateredJustNow(true);
+
+    try {
+      localStorage.setItem(
+        `revguard:water:${selectedBusinessId}`,
+        JSON.stringify({ streak: next, lastDayKey: todayKey })
+      );
+    } catch {
+      // ignore
+    }
+    try {
+      window.setTimeout(() => setWateredJustNow(false), 1400);
+    } catch {
+      // ignore
+    }
+  }
 
   const filteredTransactions = useMemo(
     () => getFilteredTransactions(transactions, range),
@@ -2232,6 +2394,17 @@ export default function DashboardHome() {
 
   return (
     <div>
+      <style>{`
+@keyframes rgFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rg-enter { animation: rgFadeUp 260ms ease-out both; }
+.rg-d1 { animation-delay: 60ms; }
+.rg-d2 { animation-delay: 120ms; }
+.rg-lift { transition: transform 160ms ease, box-shadow 160ms ease; }
+.rg-lift:hover { transform: translateY(-2px); box-shadow: 0 18px 40px rgba(0,0,0,0.25); }
+      `}</style>
         {importToast && (
           <div className="fixed top-4 right-4 z-[60]">
             <div
@@ -2281,6 +2454,213 @@ export default function DashboardHome() {
             className="hidden"
           />
         </div>
+
+        {/* Daily Growth (minimal) */}
+        <section className="mb-8">
+          <div className="grid gap-6 lg:grid-cols-2 items-stretch">
+            {/* Business Health Meter */}
+            <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    Business health
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
+                    Daily pulse
+                  </div>
+                  <div className="mt-1 text-sm text-slate-300 leading-relaxed">
+                    {lowData
+                      ? 'Add transactions to see your daily pulse.'
+                      : 'A quick read based on recent activity + margins.'}
+                  </div>
+                </div>
+
+                <div className="relative h-20 w-20 shrink-0">
+                  {(() => {
+                    const size = 80;
+                    const stroke = 9;
+                    const r = (size - stroke) / 2;
+                    const c = 2 * Math.PI * r;
+                    const pct = Math.max(0, Math.min(100, Math.round(healthScore)));
+                    const dash = (pct / 100) * c;
+                    return (
+                      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                        <defs>
+                          <linearGradient id="rgHealthGrad" x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0" stopColor="rgba(16,185,129,0.95)" />
+                            <stop offset="0.6" stopColor="rgba(56,189,248,0.85)" />
+                            <stop offset="1" stopColor="rgba(59,130,246,0.85)" />
+                          </linearGradient>
+                        </defs>
+                        <circle
+                          cx={size / 2}
+                          cy={size / 2}
+                          r={r}
+                          fill="transparent"
+                          stroke="rgba(255,255,255,0.10)"
+                          strokeWidth={stroke}
+                        />
+                        <circle
+                          cx={size / 2}
+                          cy={size / 2}
+                          r={r}
+                          fill="transparent"
+                          stroke="url(#rgHealthGrad)"
+                          strokeWidth={stroke}
+                          strokeLinecap="round"
+                          strokeDasharray={`${dash} ${c - dash}`}
+                          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+                        />
+                      </svg>
+                    );
+                  })()}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <div className="text-lg font-semibold text-slate-50 leading-none">
+                      {lowData ? '—' : `${Math.round(healthScore)}%`}
+                    </div>
+                    <div className="mt-1 text-[10px] text-slate-400">today</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between">
+                <div className="text-xs text-slate-300">
+                  {selectedBusinessId ? (
+                    <span className="text-slate-400">
+                      Compared to yesterday:{' '}
+                      <span className="text-slate-200 font-semibold">
+                        {formatCurrency(netToday - netYesterday)}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">Sign in to see your daily pulse.</span>
+                  )}
+                </div>
+                <div
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] ${
+                    netToday >= netYesterday
+                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                      : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                  }`}
+                >
+                  {netToday >= netYesterday ? (
+                    <ArrowUpRight className="h-3.5 w-3.5" />
+                  ) : (
+                    <ArrowDownRight className="h-3.5 w-3.5" />
+                  )}
+                  <span>{netToday >= netYesterday ? 'Up today' : 'Down today'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Streak */}
+            <div className="rg-enter rg-d1 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    Daily streak
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
+                    Water the business
+                  </div>
+                  <div className="mt-1 text-sm text-slate-300 leading-relaxed">
+                    One tap to stay consistent—no extra setup.
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-semibold text-slate-50 leading-none">
+                    {selectedBusinessId ? waterStreak : '—'}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-400">day streak</div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={handleWaterBusiness}
+                  disabled={!selectedBusinessId || lastWateredKey === todayKey}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Droplet className="h-4 w-4" />
+                  {lastWateredKey === todayKey ? 'Watered today' : wateredJustNow ? 'Watered ✓' : 'Water today'}
+                </button>
+                <div className="text-[11px] text-slate-400">
+                  {selectedBusinessId ? (
+                    lastWateredKey === todayKey ? (
+                      <span>Keep it going tomorrow.</span>
+                    ) : (
+                      <span>Tap once per day.</span>
+                    )
+                  ) : (
+                    <span>Sign in to track your streak.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* AI Insights (Today) */}
+          <div className="mt-6 rg-enter rg-d2 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                  <Sparkles className="h-4 w-4 text-emerald-300" />
+                  AI insights
+                </div>
+                <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
+                  Today’s Money Moves
+                </div>
+                <div className="mt-1 text-sm text-slate-300 leading-relaxed">
+                  {selectedBusinessId ? 'A quick snapshot from today’s activity.' : 'Sign in to see today’s moves.'}
+                </div>
+              </div>
+
+              {/* 1 action chip */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedBusinessId) return;
+                  if (transactions.length === 0) {
+                    handleAddFilesClick();
+                    return;
+                  }
+                  // Keep it minimal: route to transactions for review.
+                  router.push('/transactions');
+                }}
+                disabled={!selectedBusinessId}
+                className="self-start inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {transactions.length === 0 ? 'Import transactions' : 'Review transactions'}
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {!selectedBusinessId ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                  Sign in to unlock insights.
+                </div>
+              ) : lowData ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                  Add transactions to unlock insights.
+                </div>
+              ) : moneyMoves.length === 0 ? (
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                  No moves yet today — check back after activity.
+                </div>
+              ) : (
+                <ul className="space-y-2 text-sm text-slate-200">
+                  {moneyMoves.slice(0, 3).map((t) => (
+                    <li key={t} className="flex items-start gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-300/90" />
+                      <span className="leading-relaxed">{t}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
 
         {/* Scenario + chart */}
         <section className="mb-8">
