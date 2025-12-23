@@ -635,7 +635,7 @@ export default function TransactionsPage() {
                 <input
                   type="number"
                   inputMode="decimal"
-                  placeholder="Min"
+                  placeholder="Min Price"
                   value={amountMin}
                   onChange={(e) => {
                     setAmountMin(e.target.value);
@@ -646,7 +646,7 @@ export default function TransactionsPage() {
                 <input
                   type="number"
                   inputMode="decimal"
-                  placeholder="Max"
+                  placeholder="Max Price"
                   value={amountMax}
                   onChange={(e) => {
                     setAmountMax(e.target.value);
@@ -654,6 +654,7 @@ export default function TransactionsPage() {
                   }}
                   className="h-10 w-[96px] rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 />
+                <span className="text-[11px] text-slate-400">Filter by amount.</span>
               </div>
             </div>
           </div>

@@ -18,6 +18,11 @@ type BusinessRow = {
   city?: string | null;
   state?: string | null;
   zip?: string | null;
+  tax_entity_type?: string | null;
+  tax_state?: string | null;
+  tax_filing_status?: string | null;
+  tax_state_rate?: number | null;
+  tax_include_self_employment?: boolean | null;
 };
 
 type ProfileRow = {

@@ -5,7 +5,7 @@ import { ReportLayout } from '../../components/ReportLayout';
 import { supabase } from '../../utils/supabaseClient';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { computeStatements } from '../../lib/financialStatements';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
 import {
   ResponsiveContainer,
@@ -80,6 +80,28 @@ type ReportKind =
 type ReportCategory = 'Overview' | 'Sales' | 'Expenses' | 'Taxes' | 'Cash';
 type Basis = 'cash' | 'accrual';
 type Preset = 'this_month' | 'ytd' | 'last_year';
+
+type TaxEntityType =
+  | 'sole_prop'
+  | 'llc_single'
+  | 'llc_multi'
+  | 's_corp'
+  | 'c_corp'
+  | 'partnership';
+
+type TaxFilingStatus =
+  | 'single'
+  | 'married_joint'
+  | 'married_separate'
+  | 'head_of_household';
+
+type TaxCategoryTreatment =
+  | 'deductible'
+  | 'partial_50'
+  | 'non_deductible'
+  | 'non_taxable_income'
+  | 'capitalized'
+  | 'review';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
@@ -871,10 +893,125 @@ function buildExpensesByVendorRows(txs: Transaction[]) {
   return { rows, total, usedVendorField };
 }
 
-function buildTaxSummaryRows(txs: Transaction[]) {
-  // Placeholder rates (not tax advice). Keep these simple & explicit in the UI.
-  const FEDERAL_RATE = 0.24;
-  const STATE_RATE = 0.05;
+function buildTaxSummaryRows(
+  txs: Transaction[],
+  opts?: {
+    taxProfile?: {
+      entity_type?: TaxEntityType | null;
+      filing_status?: TaxFilingStatus | null;
+      state_rate?: number | null; // 0..1
+      include_self_employment?: boolean | null;
+    } | null;
+    categoryRulesByKey?: Record<
+      string,
+      { treatment: TaxCategoryTreatment; deduction_pct: number | null }
+    >;
+  }
+) {
+  const entityType: TaxEntityType =
+    (opts?.taxProfile?.entity_type as any) ?? 'sole_prop';
+  const filingStatus: TaxFilingStatus =
+    (opts?.taxProfile?.filing_status as any) ?? 'single';
+  const includeSE = Boolean(opts?.taxProfile?.include_self_employment ?? true);
+  const stateRate = Number(opts?.taxProfile?.state_rate ?? 0);
+  const rules = opts?.categoryRulesByKey ?? {};
+
+  function clamp01(n: number) {
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(1, n));
+  }
+
+  function getStandardDeduction2024(status: TaxFilingStatus): number {
+    // 2024 standard deduction (USD) – used for a more realistic estimate.
+    if (status === 'married_joint') return 29200;
+    if (status === 'head_of_household') return 21900;
+    if (status === 'married_separate') return 14600;
+    return 14600; // single
+  }
+
+  function getBrackets2024(status: TaxFilingStatus): Array<{ upto: number; rate: number }> {
+    // 2024 federal income tax brackets (ordinary income)
+    // Note: this is for estimation; it does not include credits, AMT, NIIT, QBI, etc.
+    if (status === 'married_joint') {
+      return [
+        { upto: 23200, rate: 0.10 },
+        { upto: 94300, rate: 0.12 },
+        { upto: 201050, rate: 0.22 },
+        { upto: 383900, rate: 0.24 },
+        { upto: 487450, rate: 0.32 },
+        { upto: 731200, rate: 0.35 },
+        { upto: Infinity, rate: 0.37 },
+      ];
+    }
+    if (status === 'head_of_household') {
+      return [
+        { upto: 16550, rate: 0.10 },
+        { upto: 63100, rate: 0.12 },
+        { upto: 100500, rate: 0.22 },
+        { upto: 191950, rate: 0.24 },
+        { upto: 243700, rate: 0.32 },
+        { upto: 609350, rate: 0.35 },
+        { upto: Infinity, rate: 0.37 },
+      ];
+    }
+    if (status === 'married_separate') {
+      return [
+        { upto: 11600, rate: 0.10 },
+        { upto: 47150, rate: 0.12 },
+        { upto: 100525, rate: 0.22 },
+        { upto: 191950, rate: 0.24 },
+        { upto: 243725, rate: 0.32 },
+        { upto: 365600, rate: 0.35 },
+        { upto: Infinity, rate: 0.37 },
+      ];
+    }
+    // single
+    return [
+      { upto: 11600, rate: 0.10 },
+      { upto: 47150, rate: 0.12 },
+      { upto: 100525, rate: 0.22 },
+      { upto: 191950, rate: 0.24 },
+      { upto: 243725, rate: 0.32 },
+      { upto: 609350, rate: 0.35 },
+      { upto: Infinity, rate: 0.37 },
+    ];
+  }
+
+  function computeProgressiveTax(income: number, brackets: Array<{ upto: number; rate: number }>) {
+    const x = Math.max(0, Number(income) || 0);
+    let remaining = x;
+    let prev = 0;
+    let tax = 0;
+    for (const b of brackets) {
+      const band = Math.min(remaining, b.upto - prev);
+      if (band <= 0) break;
+      tax += band * b.rate;
+      remaining -= band;
+      prev = b.upto;
+      if (remaining <= 0) break;
+    }
+    return tax;
+  }
+
+  function computeSelfEmploymentTax2024(
+    netBusinessProfit: number,
+    status: TaxFilingStatus
+  ): { tax: number; halfDeduction: number } {
+    const profit = Math.max(0, Number(netBusinessProfit) || 0);
+    // IRS SE tax uses 92.35% of net earnings
+    const netEarnings = profit * 0.9235;
+    const ssWageBase = 168600; // 2024 Social Security wage base
+    const ssTaxable = Math.min(netEarnings, ssWageBase);
+    const ss = ssTaxable * 0.124;
+    const medicare = netEarnings * 0.029;
+
+    const addlThreshold =
+      status === 'married_joint' ? 250000 : status === 'married_separate' ? 125000 : 200000;
+    const addl = Math.max(0, netEarnings - addlThreshold) * 0.009;
+    const tax = ss + medicare + addl;
+    // Half of SE tax is deductible for federal income tax purposes.
+    return { tax, halfDeduction: tax / 2 };
+  }
 
   const nonTaxableIncomeMatchers = [
     'owner investment',
@@ -935,27 +1072,55 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     return tx.tax_status === 'taxed' ? 'taxed' : 'not_taxed';
   }
 
+  function getRuleForCategory(cleanedCat: string) {
+    const key = String(cleanedCat ?? '').trim().toLowerCase();
+    return key ? rules[key] ?? null : null;
+  }
+
   function incomeClassification(tx: Transaction, cleanedCat: string) {
-    // Primary source of truth: tax_category field (default is 'taxable').
-    const override = String(tx.tax_category || 'taxable').toLowerCase();
-    if (override === 'non_taxable') return 'non_taxable' as const;
+    // Highest priority: explicit per-transaction tax_category.
+    const override = String(tx.tax_category || '').toLowerCase().trim();
+    if (override === 'non_taxable' || override === 'non_taxable_income') return 'non_taxable' as const;
+    if (override === 'taxable') return 'taxable' as const;
+
+    // Next: per-category business rules.
+    const rule = getRuleForCategory(cleanedCat);
+    if (rule?.treatment === 'non_taxable_income') return 'non_taxable' as const;
+
+    // Fallback: heuristics.
+    const inferred = taxTreatmentForCategory(cleanedCat).label.toLowerCase();
+    if (inferred.includes('non-taxable income')) return 'non_taxable' as const;
     return 'taxable' as const;
   }
 
-  function expenseClassification(tx: Transaction, cleanedCat: string) {
-    // Optional overrides: allow explicit tax_category values to control deductibility.
-    const override = String(tx.tax_category || '').toLowerCase();
-    if (override === 'partial_deductible') return 'partial_deductible' as const;
-    if (override === 'capitalized') return 'capitalized' as const;
-    if (override === 'non_deductible') return 'non_deductible' as const;
-    if (override === 'deductible') return 'deductible' as const;
+  function expenseDeductionPct(tx: Transaction, cleanedCat: string): { pct: number; treatment: TaxCategoryTreatment } {
+    // Highest priority: explicit per-transaction tax_category.
+    const override = String(tx.tax_category || '').toLowerCase().trim();
+    if (override === 'deductible') return { pct: 1, treatment: 'deductible' };
+    if (override === 'partial_deductible' || override === 'partial_50') return { pct: 0.5, treatment: 'partial_50' };
+    if (override === 'non_deductible') return { pct: 0, treatment: 'non_deductible' };
+    if (override === 'capitalized') return { pct: 0, treatment: 'capitalized' };
 
+    // Next: per-category business rules.
+    const rule = getRuleForCategory(cleanedCat);
+    if (rule) {
+      const pct = rule.deduction_pct !== null && rule.deduction_pct !== undefined
+        ? clamp01(Number(rule.deduction_pct))
+        : rule.treatment === 'deductible'
+          ? 1
+          : rule.treatment === 'partial_50'
+            ? 0.5
+            : 0;
+      return { pct, treatment: rule.treatment };
+    }
+
+    // Fallback: heuristics.
     const t = taxTreatmentForCategory(cleanedCat).label.toLowerCase();
-    if (t.includes('partially deductible')) return 'partial_deductible' as const;
-    if (t.includes('often capitalized')) return 'capitalized' as const;
-    if (t.includes('non-deductible')) return 'non_deductible' as const;
-    if (t.includes('tax-deductible')) return 'deductible' as const;
-    return 'review' as const;
+    if (t.includes('partially deductible')) return { pct: 0.5, treatment: 'partial_50' };
+    if (t.includes('often capitalized')) return { pct: 0, treatment: 'capitalized' };
+    if (t.includes('non-deductible')) return { pct: 0, treatment: 'non_deductible' };
+    if (t.includes('tax-deductible')) return { pct: 1, treatment: 'deductible' };
+    return { pct: 0, treatment: 'review' };
   }
 
   const map = new Map<
@@ -970,12 +1135,12 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     }
   >();
 
-  // Tax-focused breakdown (driven by explicit tx.tax_category values).
+  // Tax-focused breakdown (category-level treatments, with optional tx overrides).
   const taxMap = new Map<
     string,
     {
       category: string;
-      taxCategories: Map<string, number>;
+      treatments: Map<string, number>;
       taxableIncome: number;
       deductibleExpenses: number;
     }
@@ -1015,16 +1180,23 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     if (!taxMap.has(cleanedCat)) {
       taxMap.set(cleanedCat, {
         category: cleanedCat,
-        taxCategories: new Map(),
+        treatments: new Map(),
         taxableIncome: 0,
         deductibleExpenses: 0,
       });
     }
     const tr = taxMap.get(cleanedCat)!;
-    const rawTaxCategory = String(tx.tax_category || 'taxable').toLowerCase();
-    tr.taxCategories.set(rawTaxCategory, (tr.taxCategories.get(rawTaxCategory) ?? 0) + 1);
-    if (amt > 0 && rawTaxCategory === 'taxable') tr.taxableIncome += amt;
-    if (amt < 0 && rawTaxCategory === 'deductible') tr.deductibleExpenses += Math.abs(amt);
+    const incomeCls = amt >= 0 ? incomeClassification(tx, cleanedCat) : null;
+    const exp = amt < 0 ? expenseDeductionPct(tx, cleanedCat) : null;
+    const treatLabel =
+      amt >= 0
+        ? incomeCls === 'non_taxable'
+          ? 'non_taxable_income'
+          : 'taxable'
+        : exp?.treatment ?? 'review';
+    tr.treatments.set(treatLabel, (tr.treatments.get(treatLabel) ?? 0) + 1);
+    if (amt > 0 && incomeCls !== 'non_taxable') tr.taxableIncome += amt;
+    if (amt < 0 && exp && exp.pct > 0) tr.deductibleExpenses += Math.abs(amt) * exp.pct;
 
     if (amt >= 0) {
       row.income += amt;
@@ -1044,22 +1216,15 @@ function buildTaxSummaryRows(txs: Transaction[]) {
       row.expenses += out;
       totalExpenses += out;
 
-      const cls = expenseClassification(tx, cleanedCat);
+      const exp = expenseDeductionPct(tx, cleanedCat);
       const status = getTaxStatus(tx);
-      if (cls === 'partial_deductible') {
-        deductibleExpenses += out * 0.5;
-        nonDeductibleExpenses += out * 0.5;
-        if (status === 'taxed') deductibleExpensesTaxed += out * 0.5;
-        else deductibleExpensesNotTaxed += out * 0.5;
-      } else if (cls === 'deductible') {
-        deductibleExpenses += out;
-        if (status === 'taxed') deductibleExpensesTaxed += out;
-        else deductibleExpensesNotTaxed += out;
-      } else if (cls === 'non_deductible' || cls === 'capitalized') {
-        nonDeductibleExpenses += out;
-      } else {
-        // Unknown: don’t count as deductible until reviewed.
-        nonDeductibleExpenses += out;
+      const d = out * (exp?.pct ?? 0);
+      const nd = out - d;
+      deductibleExpenses += d;
+      nonDeductibleExpenses += nd;
+      if (d > 0) {
+        if (status === 'taxed') deductibleExpensesTaxed += d;
+        else deductibleExpensesNotTaxed += d;
       }
     }
     row.net = row.income - row.expenses;
@@ -1087,26 +1252,38 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     return isNonDeductible ? sum : sum + r.expenses;
   }, 0);
 
-  const rateSum = FEDERAL_RATE + STATE_RATE;
-  const estimatedTaxableProfit = Math.max(0, taxableIncome - deductibleExpenses);
-  const estimatedTaxableProfitRemaining = Math.max(
+  const taxableBusinessProfit = Math.max(0, taxableIncome - deductibleExpenses);
+  const standardDeduction = entityType === 'c_corp' ? 0 : getStandardDeduction2024(filingStatus);
+  const se =
+    includeSE && (entityType === 'sole_prop' || entityType === 'llc_single')
+      ? computeSelfEmploymentTax2024(taxableBusinessProfit, filingStatus)
+      : { tax: 0, halfDeduction: 0 };
+  const taxableIncomeForFederal = Math.max(
     0,
-    taxableIncomeNotTaxed - deductibleExpensesNotTaxed
+    taxableBusinessProfit - standardDeduction - se.halfDeduction
   );
 
-  const estFederal = estimatedTaxableProfit * FEDERAL_RATE;
-  const estState = estimatedTaxableProfit * STATE_RATE;
-  const estTotal = estimatedTaxableProfit * rateSum;
+  const estFederal =
+    entityType === 'c_corp'
+      ? taxableBusinessProfit * 0.21
+      : computeProgressiveTax(taxableIncomeForFederal, getBrackets2024(filingStatus));
+  const estState = taxableBusinessProfit * clamp01(stateRate);
+  const estSelfEmployment = se.tax;
+  const estTotal = estFederal + estState + estSelfEmployment;
 
-  const estFederalRemaining = estimatedTaxableProfitRemaining * FEDERAL_RATE;
-  const estStateRemaining = estimatedTaxableProfitRemaining * STATE_RATE;
-  const estTotalRemaining = estimatedTaxableProfitRemaining * rateSum;
+  // We no longer split "remaining" vs "taxed" in the estimate; show a single CFO-level estimate
+  // based on taxable net income for the selected window.
+  const estimatedTaxableProfit = taxableBusinessProfit;
+  const estimatedTaxableProfitRemaining = taxableBusinessProfit;
+  const estFederalRemaining = estFederal;
+  const estStateRemaining = estState;
+  const estTotalRemaining = estTotal;
 
   const taxRows = Array.from(taxMap.values())
     .map((r) => {
-      const distinct = Array.from(r.taxCategories.keys()).filter(Boolean);
+      const distinct = Array.from(r.treatments.keys()).filter(Boolean);
       const tax_category =
-        distinct.length === 1 ? distinct[0] : distinct.length === 0 ? 'taxable' : 'mixed';
+        distinct.length === 1 ? distinct[0] : distinct.length === 0 ? 'review' : 'mixed';
       return {
         category: r.category,
         tax_category,
@@ -1132,6 +1309,7 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     estimatedTaxableProfitRemaining,
     estFederal,
     estState,
+    estSelfEmployment,
     estTotal,
     estFederalRemaining,
     estStateRemaining,
@@ -1140,7 +1318,16 @@ function buildTaxSummaryRows(txs: Transaction[]) {
     taxableIncomeNotTaxed,
     deductibleExpensesTaxed,
     deductibleExpensesNotTaxed,
-    rates: { federal: FEDERAL_RATE, state: STATE_RATE },
+    rates: { state: clamp01(stateRate) },
+    profile: {
+      entityType,
+      filingStatus,
+      standardDeduction,
+      taxableIncomeForFederal,
+      stateRate: clamp01(stateRate),
+      includeSE,
+      seHalfDeduction: se.halfDeduction,
+    },
   };
 }
 
@@ -1239,6 +1426,7 @@ export default function ReportsPage() {
   const {
     businessId: selectedBusinessId,
     userId,
+    business,
     transactions: allTransactionsRaw,
     customers: customersRaw,
     loading: businessLoading,
@@ -1391,7 +1579,112 @@ export default function ReportsPage() {
     () => buildExpensesByVendorRows(effectiveTxs),
     [effectiveTxs]
   );
-  const taxSummary = useMemo(() => buildTaxSummaryRows(effectiveTxs), [effectiveTxs]);
+
+  const taxRulesQ = useQuery({
+    queryKey: ['business_tax_category_rules', selectedBusinessId],
+    enabled: Boolean(selectedBusinessId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('business_tax_category_rules')
+        .select('category,treatment,deduction_pct')
+        .eq('business_id', selectedBusinessId!);
+      if (error) throw error;
+      return (data as any[]) ?? [];
+    },
+  });
+
+  const taxRulesByKey = useMemo(() => {
+    const out: Record<string, { treatment: TaxCategoryTreatment; deduction_pct: number | null }> = {};
+    for (const r of (taxRulesQ.data ?? []) as any[]) {
+      const k = String(r.category ?? '').trim().toLowerCase();
+      if (!k) continue;
+      out[k] = {
+        treatment: (String(r.treatment ?? 'review') as any) ?? 'review',
+        deduction_pct: r.deduction_pct === null || r.deduction_pct === undefined ? null : Number(r.deduction_pct),
+      };
+    }
+    return out;
+  }, [taxRulesQ.data]);
+
+  const taxProfile = useMemo(() => {
+    const b: any = business ?? null;
+    return {
+      entity_type: (b?.tax_entity_type as any) ?? 'sole_prop',
+      filing_status: (b?.tax_filing_status as any) ?? 'single',
+      state_rate: b?.tax_state_rate === null || b?.tax_state_rate === undefined ? 0 : Number(b.tax_state_rate),
+      include_self_employment: b?.tax_include_self_employment ?? true,
+    };
+  }, [business]);
+
+  const [taxProfileDraft, setTaxProfileDraft] = useState(() => taxProfile);
+  const [taxProfileSaving, setTaxProfileSaving] = useState(false);
+  useEffect(() => {
+    setTaxProfileDraft(taxProfile);
+  }, [taxProfile]);
+
+  async function saveTaxProfile() {
+    if (!selectedBusinessId) return;
+    setTaxProfileSaving(true);
+    try {
+      const payload: any = {
+        tax_entity_type: taxProfileDraft.entity_type ?? 'sole_prop',
+        tax_filing_status: taxProfileDraft.filing_status ?? 'single',
+        tax_state_rate: Number(taxProfileDraft.state_rate) || 0,
+        tax_include_self_employment: Boolean(taxProfileDraft.include_self_employment),
+      };
+      const { error } = await supabase
+        .from('business')
+        .update(payload)
+        .eq('id', selectedBusinessId);
+      if (error) throw error;
+      await queryClient.invalidateQueries({ queryKey: ['business_by_owner', userId] });
+      setToast({ message: 'Tax profile saved.', tone: 'ok' });
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('TAX_PROFILE_SAVE_ERROR', e);
+      setToast({ message: e?.message ?? 'Could not save tax profile.', tone: 'error' });
+    } finally {
+      setTaxProfileSaving(false);
+    }
+  }
+
+  async function upsertTaxRule(category: string, treatment: TaxCategoryTreatment) {
+    if (!selectedBusinessId) return;
+    const cat = String(category ?? '').trim();
+    if (!cat) return;
+    const deduction_pct =
+      treatment === 'deductible' ? 1 : treatment === 'partial_50' ? 0.5 : null;
+    try {
+      const { error } = await supabase
+        .from('business_tax_category_rules')
+        .upsert(
+          {
+            business_id: selectedBusinessId,
+            category: cat,
+            treatment,
+            deduction_pct,
+          } as any,
+          { onConflict: 'business_id,category' }
+        );
+      if (error) throw error;
+      await queryClient.invalidateQueries({
+        queryKey: ['business_tax_category_rules', selectedBusinessId],
+      });
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('TAX_RULE_UPSERT_ERROR', e);
+      setToast({ message: e?.message ?? 'Could not save category rule.', tone: 'error' });
+    }
+  }
+
+  const taxSummary = useMemo(
+    () =>
+      buildTaxSummaryRows(effectiveTxs, {
+        taxProfile,
+        categoryRulesByKey: taxRulesByKey,
+      }),
+    [effectiveTxs, taxProfile, taxRulesByKey]
+  );
 
   const activeReport = useMemo(() => {
     return REPORT_LIBRARY.find((r) => r.id === activeReportId) ?? REPORT_LIBRARY[0];
@@ -2036,43 +2329,66 @@ export default function ReportsPage() {
 
                     {activeReport.kind === 'tax_summary' && (
                       <>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Estimated taxes owed
-                          </div>
-                          <div className="mt-1 text-3xl font-semibold text-blue-200">
-                            {formatCurrency(taxSummary.estTotalRemaining)}
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            Placeholder rates: {(taxSummary.rates.federal * 100).toFixed(0)}% federal +{' '}
-                            {(taxSummary.rates.state * 100).toFixed(0)}% state
-                          </div>
-                          <div className="mt-2 text-[11px] text-slate-400">
-                            Taxed: {formatCurrency(taxSummary.taxableIncomeTaxed)} • Not yet taxed:{' '}
-                            {formatCurrency(taxSummary.taxableIncomeNotTaxed)}
-                          </div>
-                        </div>
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Estimated taxable income
+                            Gross
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency(taxSummary.estimatedTaxableProfitRemaining)}
+                            {formatCurrency(taxSummary.totalIncome)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Remaining taxable income {formatCurrency(taxSummary.taxableIncomeNotTaxed)} − remaining deductible expenses{' '}
-                            {formatCurrency(-taxSummary.deductibleExpensesNotTaxed)}
+                            Income in this window (before deductions).
                           </div>
                         </div>
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Non-taxable / needs review
+                            Deductions
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-emerald-300">
-                            {formatCurrency(taxSummary.nonTaxableIncome)}
+                            {formatCurrency(-taxSummary.deductibleExpenses)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Non-taxable income (deposits/transfers/owner funds). Review categories below.
+                            Deductible + partially deductible expenses.
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                            Taxable income
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-slate-100">
+                            {formatCurrency(taxSummary.profile?.taxableIncomeForFederal ?? 0)}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            After deductions
+                            {taxSummary.profile?.standardDeduction
+                              ? ` and standard deduction (${formatCurrency(-taxSummary.profile.standardDeduction)})`
+                              : ''}
+                            {taxSummary.profile?.seHalfDeduction
+                              ? ` and SE half deduction (${formatCurrency(-taxSummary.profile.seHalfDeduction)})`
+                              : ''}
+                            .
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                            Est. tax
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-blue-200">
+                            {formatCurrency(taxSummary.estTotal)}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Federal + state{taxSummary.estSelfEmployment ? ' + SE' : ''}.
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                            Net after tax
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-slate-100">
+                            {formatCurrency((taxSummary.net || 0) - (taxSummary.estTotal || 0))}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Net (income − expenses) minus estimated tax.
                           </div>
                         </div>
                       </>
@@ -2082,15 +2398,152 @@ export default function ReportsPage() {
                   {activeReport.kind === 'tax_summary' && (
                     <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                       <div className="text-[11px] text-slate-300">
-                        Based on current data, you may owe{' '}
-                        <span className="font-semibold text-slate-100">
-                          ~{formatCurrency(taxSummary.estTotalRemaining)}
-                        </span>{' '}
-                        in taxes if nothing changes.
+                        Estimate improves as data is completed.
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500">
-                        This is an estimate for planning only. It assumes simple taxable income (revenue minus deductible
-                        expenses) and placeholder rates.
+                        Uses taxable net income (income − deductible expenses), filing status brackets, and your category treatments.
+                      </div>
+                    </div>
+                  )}
+
+                  {activeReport.kind === 'tax_summary' && (
+                    <div className="mb-4 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Business Tax Profile
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Entity, filing status, and state rate.
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void saveTaxProfile()}
+                            disabled={!selectedBusinessId || taxProfileSaving}
+                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+                          >
+                            {taxProfileSaving ? 'Saving…' : 'Save'}
+                          </button>
+                        </div>
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          <label className="text-[11px] text-slate-400">
+                            Entity
+                            <select
+                              value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
+                              onChange={(e) =>
+                                setTaxProfileDraft((p: any) => ({
+                                  ...p,
+                                  entity_type: e.target.value as any,
+                                }))
+                              }
+                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                            >
+                              <option value="sole_prop">Sole prop</option>
+                              <option value="llc_single">Single-member LLC</option>
+                              <option value="llc_multi">Multi-member LLC</option>
+                              <option value="partnership">Partnership</option>
+                              <option value="s_corp">S-Corp</option>
+                              <option value="c_corp">C-Corp</option>
+                            </select>
+                          </label>
+
+                          <label className="text-[11px] text-slate-400">
+                            Filing status
+                            <select
+                              value={String(taxProfileDraft.filing_status ?? 'single')}
+                              onChange={(e) =>
+                                setTaxProfileDraft((p: any) => ({
+                                  ...p,
+                                  filing_status: e.target.value as any,
+                                }))
+                              }
+                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                            >
+                              <option value="single">Single</option>
+                              <option value="married_joint">Married (joint)</option>
+                              <option value="married_separate">Married (separate)</option>
+                              <option value="head_of_household">Head of household</option>
+                            </select>
+                          </label>
+
+                          <label className="text-[11px] text-slate-400">
+                            State rate (%)
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              step="0.1"
+                              value={String((Number(taxProfileDraft.state_rate) || 0) * 100)}
+                              onChange={(e) => {
+                                const pct = Number(e.target.value);
+                                setTaxProfileDraft((p: any) => ({
+                                  ...p,
+                                  state_rate: Number.isFinite(pct) ? pct / 100 : 0,
+                                }));
+                              }}
+                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                              placeholder="e.g. 5"
+                            />
+                          </label>
+                        </div>
+
+                        <label className="mt-3 flex items-center gap-2 text-[11px] text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(taxProfileDraft.include_self_employment ?? true)}
+                            onChange={(e) =>
+                              setTaxProfileDraft((p: any) => ({
+                                ...p,
+                                include_self_employment: e.target.checked,
+                              }))
+                            }
+                          />
+                          Include self-employment tax (sole prop / single-member LLC).
+                        </label>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                          Category treatments
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-400">
+                          Mark top categories as deductible / partial / non-deductible.
+                        </div>
+
+                        <div className="mt-3 space-y-2">
+                          {taxSummary.taxRows.slice(0, 8).map((r) => {
+                            const key = String(r.category ?? '').trim().toLowerCase();
+                            const current = (taxRulesByKey[key]?.treatment as any) ?? 'review';
+                            return (
+                              <div key={r.category} className="flex items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-[11px] text-slate-200 truncate">
+                                    {r.category}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    Net taxable: {formatCurrency(r.netTaxable)}
+                                  </div>
+                                </div>
+                                <select
+                                  value={String(current)}
+                                  onChange={(e) =>
+                                    void upsertTaxRule(r.category, e.target.value as any)
+                                  }
+                                  className="rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                                >
+                                  <option value="review">Review</option>
+                                  <option value="deductible">Deductible (100%)</option>
+                                  <option value="partial_50">Partial (50%)</option>
+                                  <option value="non_deductible">Non-deductible</option>
+                                  <option value="capitalized">Capitalized</option>
+                                  <option value="non_taxable_income">Non-taxable income</option>
+                                </select>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2158,11 +2611,11 @@ export default function ReportsPage() {
                             <PremiumBarChart
                               data={[
                                 { label: 'Gross income', value: taxSummary.totalIncome },
-                                { label: 'Est. taxes', value: taxSummary.estTotalRemaining },
+                                { label: 'Est. taxes', value: taxSummary.estTotal },
                                 {
                                   label: 'Net after tax',
                                   value:
-                                    (taxSummary.net || 0) - (taxSummary.estTotalRemaining || 0),
+                                    (taxSummary.net || 0) - (taxSummary.estTotal || 0),
                                 },
                               ]}
                               variant="blue"
