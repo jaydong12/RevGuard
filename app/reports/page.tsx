@@ -2432,6 +2432,7 @@ export default function ReportsPage() {
                           <label className="text-[11px] text-slate-400">
                             Entity
                             <select
+                              style={{ colorScheme: 'dark' }}
                               value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
                               onChange={(e) =>
                                 setTaxProfileDraft((p: any) => ({
@@ -2439,20 +2440,21 @@ export default function ReportsPage() {
                                   entity_type: e.target.value as any,
                                 }))
                               }
-                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                             >
-                              <option value="sole_prop">Sole prop</option>
-                              <option value="llc_single">Single-member LLC</option>
-                              <option value="llc_multi">Multi-member LLC</option>
-                              <option value="partnership">Partnership</option>
-                              <option value="s_corp">S-Corp</option>
-                              <option value="c_corp">C-Corp</option>
+                              <option value="sole_prop" className="bg-slate-950 text-slate-100">Sole prop</option>
+                              <option value="llc_single" className="bg-slate-950 text-slate-100">Single-member LLC</option>
+                              <option value="llc_multi" className="bg-slate-950 text-slate-100">Multi-member LLC</option>
+                              <option value="partnership" className="bg-slate-950 text-slate-100">Partnership</option>
+                              <option value="s_corp" className="bg-slate-950 text-slate-100">S-Corp</option>
+                              <option value="c_corp" className="bg-slate-950 text-slate-100">C-Corp</option>
                             </select>
                           </label>
 
                           <label className="text-[11px] text-slate-400">
                             Filing status
                             <select
+                              style={{ colorScheme: 'dark' }}
                               value={String(taxProfileDraft.filing_status ?? 'single')}
                               onChange={(e) =>
                                 setTaxProfileDraft((p: any) => ({
@@ -2460,12 +2462,12 @@ export default function ReportsPage() {
                                   filing_status: e.target.value as any,
                                 }))
                               }
-                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                             >
-                              <option value="single">Single</option>
-                              <option value="married_joint">Married (joint)</option>
-                              <option value="married_separate">Married (separate)</option>
-                              <option value="head_of_household">Head of household</option>
+                              <option value="single" className="bg-slate-950 text-slate-100">Single</option>
+                              <option value="married_joint" className="bg-slate-950 text-slate-100">Married (joint)</option>
+                              <option value="married_separate" className="bg-slate-950 text-slate-100">Married (separate)</option>
+                              <option value="head_of_household" className="bg-slate-950 text-slate-100">Head of household</option>
                             </select>
                           </label>
 
@@ -2527,18 +2529,19 @@ export default function ReportsPage() {
                                   </div>
                                 </div>
                                 <select
+                                  style={{ colorScheme: 'dark' }}
                                   value={String(current)}
                                   onChange={(e) =>
                                     void upsertTaxRule(r.category, e.target.value as any)
                                   }
-                                  className="rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                                  className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                                 >
-                                  <option value="review">Review</option>
-                                  <option value="deductible">Deductible (100%)</option>
-                                  <option value="partial_50">Partial (50%)</option>
-                                  <option value="non_deductible">Non-deductible</option>
-                                  <option value="capitalized">Capitalized</option>
-                                  <option value="non_taxable_income">Non-taxable income</option>
+                                  <option value="review" className="bg-slate-950 text-slate-100">Review</option>
+                                  <option value="deductible" className="bg-slate-950 text-slate-100">Deductible (100%)</option>
+                                  <option value="partial_50" className="bg-slate-950 text-slate-100">Partial (50%)</option>
+                                  <option value="non_deductible" className="bg-slate-950 text-slate-100">Non-deductible</option>
+                                  <option value="capitalized" className="bg-slate-950 text-slate-100">Capitalized</option>
+                                  <option value="non_taxable_income" className="bg-slate-950 text-slate-100">Non-taxable income</option>
                                 </select>
                               </div>
                             );

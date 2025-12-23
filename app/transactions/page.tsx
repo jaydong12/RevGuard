@@ -614,16 +614,19 @@ export default function TransactionsPage() {
               {/* Category */}
               <div className="w-[220px]">
                 <select
+                  style={{ colorScheme: 'dark' }}
                   value={categoryFilter}
                   onChange={(e) => {
                     setCategoryFilter(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 hover:bg-slate-950/80 hover:border-white/20"
                 >
-                  <option value="">All categories</option>
+                  <option value="" className="bg-slate-950 text-slate-100">
+                    All categories
+                  </option>
                   {categoryOptions.map((c) => (
-                    <option key={c} value={c}>
+                    <option key={c} value={c} className="bg-slate-950 text-slate-100">
                       {c}
                     </option>
                   ))}
@@ -790,16 +793,17 @@ export default function TransactionsPage() {
                 <div>
                   Rows per page:
                   <select
+                    style={{ colorScheme: 'dark' }}
                     value={pageSize}
                     onChange={(e) => {
                       setPageSize(Number(e.target.value));
                       setCurrentPage(1);
                     }}
-                    className="ml-2 rounded bg-slate-800 px-2 py-1 border border-slate-700"
+                    className="ml-2 rounded-lg bg-slate-950/60 px-2 py-1 border border-white/10 text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                   >
-                    <option value={10}>10</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
+                    <option value={10} className="bg-slate-950 text-slate-100">10</option>
+                    <option value={25} className="bg-slate-950 text-slate-100">25</option>
+                    <option value={50} className="bg-slate-950 text-slate-100">50</option>
                   </select>
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
@@ -897,23 +901,24 @@ export default function TransactionsPage() {
                     Category
                   </label>
                   <select
+                    style={{ colorScheme: 'dark' }}
                     value={formValues.category}
                     onChange={(e) => handleFormChange('category', e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-100"
+                    className="w-full bg-slate-950/70 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                   >
-                    <option value="">Uncategorized</option>
+                    <option value="" className="bg-slate-950 text-slate-100">Uncategorized</option>
                     {/* Preserve any legacy category values without overwriting on edit */}
                     {formValues.category &&
                       formValues.category.trim() &&
                       !(CATEGORIES as readonly string[]).includes(
                         formValues.category.trim()
                       ) && (
-                        <option value={formValues.category}>
+                        <option value={formValues.category} className="bg-slate-950 text-slate-100">
                           {formValues.category} (Legacy)
                         </option>
                       )}
                     {CATEGORIES.map((c) => (
-                      <option key={c} value={c}>
+                      <option key={c} value={c} className="bg-slate-950 text-slate-100">
                         {c}
                       </option>
                     ))}
@@ -928,11 +933,12 @@ export default function TransactionsPage() {
                     Customer
                   </label>
                   <select
+                    style={{ colorScheme: 'dark' }}
                     value={formValues.customer_id}
                     onChange={(e) =>
                       handleFormChange('customer_id', e.target.value)
                     }
-                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-100"
+                    className="w-full bg-slate-950/70 border border-white/10 rounded-lg px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                     disabled={!selectedBusinessId || customersLoading}
                   >
                     <option value="">
@@ -942,7 +948,7 @@ export default function TransactionsPage() {
                       }
                     </option>
                     {customers.map((c) => (
-                      <option key={c.id} value={c.id}>
+                      <option key={c.id} value={c.id} className="bg-slate-950 text-slate-100">
                         {c.name}
                       </option>
                     ))}
