@@ -100,6 +100,84 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+type AdvisorIntent = 'check_in' | 'concern' | 'optimize' | 'deep_dive';
+
+function detectAdvisorIntent(raw: string): { intent: AdvisorIntent; depthRequested: boolean } {
+  const t = String(raw ?? '').toLowerCase();
+
+  const hasAny = (needles: string[]) => needles.some((n) => t.includes(n));
+  const hasRe = (re: RegExp) => re.test(t);
+
+  // Explicit depth requests: prioritize over everything else.
+  const depthRequested =
+    hasAny([
+      'more detail',
+      'more details',
+      'breakdown',
+      'show numbers',
+      'show me numbers',
+      'numbers',
+      'step by step',
+      'step-by-step',
+      'deep dive',
+      'go deeper',
+      'go deep',
+      'explain why',
+      'explain how',
+      'walk me through',
+      'detailed',
+    ]) || hasRe(/\bwhy\b|\bhow\b/);
+
+  if (depthRequested) return { intent: 'deep_dive', depthRequested: true };
+
+  // Concern: user is worried, blocked, or reporting a problem.
+  const concern =
+    hasAny([
+      'worried',
+      'concern',
+      'scared',
+      'stress',
+      'problem',
+      'issue',
+      'broken',
+      'not working',
+      'error',
+      'failing',
+      'failed',
+      "can't",
+      'cannot',
+      'stuck',
+      'blocked',
+      'help',
+      'urgent',
+    ]) || hasRe(/\bwtf\b|\buh oh\b|\bcrash\b/);
+
+  if (concern) return { intent: 'concern', depthRequested: false };
+
+  // Optimize: user wants to improve something.
+  const optimize = hasAny([
+    'optimize',
+    'improve',
+    'increase',
+    'grow',
+    'boost',
+    'reduce',
+    'cut',
+    'save',
+    'margin',
+    'profit',
+    'efficiency',
+    'pricing',
+    'budget',
+    'plan',
+  ]);
+
+  if (optimize) return { intent: 'optimize', depthRequested: false };
+
+  // Default: check-in / quick status.
+  return { intent: 'check_in', depthRequested: false };
+}
+
 function deepMerge(a: any, b: any): any {
   if (Array.isArray(a) || Array.isArray(b)) return b ?? a;
   if (a && typeof a === 'object' && b && typeof b === 'object') {
@@ -331,6 +409,7 @@ export async function POST(req: Request) {
       cash_estimate = net_30d;
 
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+      const { intent, depthRequested } = detectAdvisorIntent(text);
 
       const basePolicy = `
 Response policy:
@@ -340,9 +419,15 @@ Response policy:
 - Default length: 2–3 plain-language sentences.
 - Default ending: exactly ONE follow-up question (end the answer with a single "?").
 - Do NOT use section headings by default (no "Summary:", no "Top drivers:", etc.).
-- Only go long / structured if the user explicitly asks for more detail.
-- "Explicitly asks for more detail" includes phrases like: "more detail", "breakdown", "show numbers", "explain why/how", "step-by-step", "deep dive", "go deeper".
-- If user asks for more detail: you may use bullets, sections, numbers, and deeper analysis proportional to the request — but still end with exactly ONE follow-up question.
+- The input includes "intent" (one of: check_in, concern, optimize, deep_dive) and "depth_requested" (boolean).
+- Only go long / structured if (input.intent == "deep_dive") OR (input.depth_requested == true).
+- If input.intent != "deep_dive": keep it short, chatty, and practical.
+- If input.intent == "deep_dive": go as detailed as requested (breakdowns, numbers, insights) but still end with exactly ONE follow-up question.
+- Tailor the single follow-up question to intent:
+  - check_in: ask what goal they want to prioritize next.
+  - concern: ask what outcome they want or what changed right before the issue.
+  - optimize: ask what constraint matters most (time, cash, risk).
+  - deep_dive: ask which dimension to drill into next (revenue, expenses, cash, pricing, customers).
 - Avoid accounting terms unless necessary. If you use one, define it inline (e.g., "AR = money customers owe you").
 - Plain-English and professional. Default to direct, simple explanations.
 - Do NOT use analogies in most responses.
@@ -358,7 +443,7 @@ Response policy:
 You are a friendly, premium CFO for a small business owner.
 Use the provided business metrics by default. If something is missing, make smart, conservative assumptions and say so briefly.
 Default response is conversational and short.
-Only produce structured breakdowns (drivers, actions, numbers) if the user asks for more detail.
+Only produce structured breakdowns (drivers, actions, numbers) if input.intent == "deep_dive" or the user explicitly asks for more detail.
       `.trim();
 
       const supportSystem = `
@@ -414,12 +499,16 @@ Default response is conversational and short.
               business: { id: effectiveBusinessId, name: business?.name ?? null },
               kpis,
               cfo_context: cfoContext,
+              intent,
+              depth_requested: depthRequested,
               user_message: text,
             }
           : {
               business: { id: effectiveBusinessId, name: business?.name ?? null },
               kpis,
               ui_context: supportContext,
+              intent,
+              depth_requested: depthRequested,
               user_message: text,
             };
 
@@ -439,7 +528,7 @@ Rules:
   - 2–3 plain-language sentences
   - NO headings/sections by default
   - End with exactly ONE follow-up question (end with a single "?")
-- If and only if the user explicitly asks for more detail/breakdown/numbers, then the answer may be longer and structured, proportional to the request.
+- If (input.intent == "deep_dive") OR (input.depth_requested == true), then the answer may be longer and structured, proportional to the request.
   - Still end with exactly ONE follow-up question.
 - Avoid accounting terms unless necessary; if used, define it inline.
 - No long paragraphs.
