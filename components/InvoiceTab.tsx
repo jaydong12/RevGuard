@@ -33,6 +33,15 @@ type InvoiceRow = {
   created_at: string;
 };
 
+type InvoiceItemRow = {
+  id?: any;
+  invoice_id: any;
+  description: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  line_total: number | null;
+};
+
 type BusinessInfo = {
   id: string;
   owner_id?: string | null;
@@ -112,107 +121,18 @@ function safeDate(d: string | null) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function buildPrintHtml(biz: BusinessInfo | null, inv: InvoiceRow) {
-  const name = biz?.name || 'My Business';
+function money(n: any) {
+  const num = Number(n);
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatAddr(b: BusinessInfo | null) {
   const lines: string[] = [];
-  if (biz?.address1) lines.push(biz.address1);
-  if (biz?.address2) lines.push(biz.address2);
-  const cityLine = [biz?.city, biz?.state, biz?.zip].filter(Boolean).join(', ');
+  if (b?.address1) lines.push(b.address1);
+  if (b?.address2) lines.push(b.address2);
+  const cityLine = [b?.city, b?.state, b?.zip].filter(Boolean).join(', ');
   if (cityLine) lines.push(cityLine);
-
-  const contact = [biz?.email, biz?.phone].filter(Boolean).join(' • ');
-  const website = biz?.website ? String(biz.website) : '';
-
-  const issue = inv.issue_date ? inv.issue_date : '—';
-  const due = inv.due_date ? inv.due_date : '—';
-
-  const esc = (s: any) =>
-    String(s ?? '')
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;');
-
-  const logo = biz?.logo_url ? String(biz.logo_url) : '';
-
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Invoice ${esc(inv.invoice_number)}</title>
-  <style>
-    @page { margin: 16mm; }
-    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; color: #0f172a; }
-    .row { display:flex; justify-content:space-between; gap:24px; }
-    .muted { color:#475569; font-size: 12px; }
-    .h1 { font-size: 22px; font-weight: 800; margin:0; }
-    .h2 { font-size: 14px; font-weight: 700; margin:0; }
-    .card { border:1px solid #e2e8f0; border-radius: 12px; padding: 14px; }
-    table { width:100%; border-collapse: collapse; margin-top: 12px; }
-    th { text-align:left; font-size: 12px; color:#64748b; padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
-    td { padding: 10px 0; border-bottom: 1px dashed #e2e8f0; font-size: 13px; }
-    .right { text-align:right; }
-    .total { font-size: 16px; font-weight: 800; }
-    .top { margin-bottom: 16px; }
-  </style>
-</head>
-<body>
-  <div class="top row">
-    <div>
-      ${logo ? `<div style="margin-bottom:10px;"><img src="${esc(logo)}" alt="${esc(name)}" style="max-height:44px; max-width:240px; object-fit:contain;" /></div>` : ''}
-      <p class="h1">${esc(name)}</p>
-      ${contact ? `<div class="muted">${esc(contact)}</div>` : ''}
-      ${website ? `<div class="muted">${esc(website)}</div>` : ''}
-      ${lines.length ? `<div class="muted">${lines.map(esc).join('<br/>')}</div>` : ''}
-    </div>
-    <div style="text-align:right;">
-      <p class="h1">Invoice</p>
-      <div class="muted"># ${esc(inv.invoice_number)}</div>
-      <div class="muted">Issue: ${esc(issue)}</div>
-      <div class="muted">Due: ${esc(due)}</div>
-      <div class="muted" style="text-transform:capitalize;">Status: ${esc(inv.status)}</div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="row">
-      <div>
-        <p class="h2">Bill To</p>
-        <div style="margin-top:6px; font-size: 14px; font-weight: 700;">${esc(inv.client_name)}</div>
-      </div>
-    </div>
-
-    <table>
-      <thead>
-        <tr>
-          <th>Description</th>
-          <th class="right">Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Services</td>
-          <td class="right">${esc(formatMoney(inv.subtotal))}</td>
-        </tr>
-        <tr>
-          <td>Tax</td>
-          <td class="right">${esc(formatMoney(inv.tax ?? 0))}</td>
-        </tr>
-        <tr>
-          <td class="total">Total</td>
-          <td class="right total">${esc(formatMoney(inv.total))}</td>
-        </tr>
-      </tbody>
-    </table>
-
-    ${
-      inv.notes
-        ? `<div style="margin-top:14px;"><div class="muted" style="font-weight:700;">Notes</div><div style="margin-top:6px; white-space:pre-wrap;">${esc(inv.notes)}</div></div>`
-        : ''
-    }
-  </div>
-</body>
-</html>`;
+  return lines;
 }
 
 export default function InvoiceTab(_props: Props) {
@@ -241,6 +161,11 @@ export default function InvoiceTab(_props: Props) {
   // List expand/collapse + row expansion
   const [listExpanded, setListExpanded] = useState(false); // compact by default
   const [expandedRowId, setExpandedRowId] = useState<any | null>(null);
+
+  // Printing
+  const [printInvoice, setPrintInvoice] = useState<InvoiceRow | null>(null);
+  const [printItems, setPrintItems] = useState<InvoiceItemRow[] | null>(null);
+  const [printing, setPrinting] = useState(false);
 
   // Edit mode
   const [editingId, setEditingId] = useState<any | null>(null);
@@ -382,26 +307,53 @@ export default function InvoiceTab(_props: Props) {
     setNotes(inv.notes ?? '');
   }
 
-  async function handlePrint(inv: InvoiceRow) {
-    const html = buildPrintHtml(businessInfo, inv);
-    const w = window.open('', '_blank', 'noopener,noreferrer');
-    if (!w) {
-      setError('Popup blocked. Allow popups to print.');
-      return;
-    }
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    // Give the browser a tick to render before printing
-    setTimeout(() => {
-      try {
-        w.print();
-      } catch {
-        // ignore
+  async function beginPrint(inv: InvoiceRow) {
+    setError(null);
+    setLastSupabaseError(null);
+
+    setPrinting(true);
+    setPrintInvoice(inv);
+    setPrintItems(null);
+
+    // Attempt to load line items if the table exists; otherwise fall back gracefully.
+    try {
+      const { data, error: itemsErr } = await supabase
+        .from('invoice_items')
+        .select('*')
+        .eq('invoice_id', inv.id)
+        .order('id', { ascending: true });
+      if (itemsErr) {
+        tryConsoleLog('PRINT_ITEMS_ERROR', itemsErr);
+        storeDebug('PRINT_ITEMS_ERROR', itemsErr);
+      } else {
+        setPrintItems(((data ?? []) as any[]) as InvoiceItemRow[]);
       }
-    }, 250);
+    } catch (e: any) {
+      tryConsoleLog('PRINT_ITEMS_THROW', e);
+      storeDebug('PRINT_ITEMS_THROW', e);
+    }
+
+    // Wait for React to render the print DOM, then print.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          window.print();
+        } catch {
+          // ignore
+        }
+      });
+    });
   }
+
+  useEffect(() => {
+    function onAfterPrint() {
+      setPrinting(false);
+      setPrintInvoice(null);
+      setPrintItems(null);
+    }
+    window.addEventListener('afterprint', onAfterPrint);
+    return () => window.removeEventListener('afterprint', onAfterPrint);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -610,9 +562,151 @@ export default function InvoiceTab(_props: Props) {
   const bizMeta = [businessInfo?.email, businessInfo?.phone, businessInfo?.website]
     .filter(Boolean)
     .join(' • ');
+  const addrLines = formatAddr(businessInfo);
+
+  const itemsToPrint = (printItems ?? []).filter((it) => (it.description ?? '').trim());
+  const showItems = itemsToPrint.length > 0;
+  const printSubtotal = printInvoice ? money(printInvoice.subtotal) : 0;
+  const printTax = printInvoice ? money(printInvoice.tax ?? 0) : 0;
+  const printTotal = printInvoice ? money(printInvoice.total) : 0;
 
   return (
     <div className="space-y-4">
+      {/* Print-only sheet (never routes away; browser prints current DOM) */}
+      <style>{`
+@media print {
+  body * { visibility: hidden !important; }
+  #rg-print-root, #rg-print-root * { visibility: visible !important; }
+  #rg-print-root { position: absolute; left: 0; top: 0; width: 100%; }
+}
+      `}</style>
+
+      <div id="rg-print-root" className={printing && printInvoice ? 'block' : 'hidden'}>
+        {printInvoice ? (
+          <div className="mx-auto w-full max-w-[800px] bg-white px-10 py-10 text-slate-900">
+            <div className="flex items-start justify-between gap-10">
+              <div className="min-w-0">
+                {businessInfo?.logo_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={businessInfo.logo_url}
+                    alt={bizTitle}
+                    className="mb-4 h-12 max-w-[240px] object-contain"
+                  />
+                ) : null}
+                <div className="text-2xl font-extrabold tracking-tight">{bizTitle}</div>
+                {bizMeta ? <div className="mt-1 text-sm text-slate-600">{bizMeta}</div> : null}
+                {addrLines.length ? (
+                  <div className="mt-1 text-sm text-slate-600">
+                    {addrLines.map((l) => (
+                      <div key={l}>{l}</div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="text-right">
+                <div className="text-3xl font-extrabold tracking-tight">Invoice</div>
+                <div className="mt-2 text-sm text-slate-700">
+                  <div>
+                    <span className="font-semibold">#</span> {printInvoice.invoice_number}
+                  </div>
+                  <div>
+                    <span className="font-semibold">Issue:</span> {printInvoice.issue_date || '—'}
+                  </div>
+                  <div>
+                    <span className="font-semibold">Due:</span> {printInvoice.due_date || '—'}
+                  </div>
+                  <div className="capitalize">
+                    <span className="font-semibold">Status:</span> {printInvoice.status}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 rounded-xl border border-slate-200 p-5">
+              <div className="text-sm font-semibold text-slate-700">Bill To</div>
+              <div className="mt-1 text-base font-bold">{printInvoice.client_name}</div>
+
+              <div className="mt-6">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200">
+                      <th className="py-2 text-left text-xs font-semibold text-slate-500">
+                        Item
+                      </th>
+                      <th className="py-2 text-right text-xs font-semibold text-slate-500">
+                        Qty
+                      </th>
+                      <th className="py-2 text-right text-xs font-semibold text-slate-500">
+                        Unit
+                      </th>
+                      <th className="py-2 text-right text-xs font-semibold text-slate-500">
+                        Amount
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {showItems ? (
+                      itemsToPrint.map((it, idx) => {
+                        const qty = money(it.quantity ?? 0);
+                        const unit = money(it.unit_price ?? 0);
+                        const amt = money(it.line_total ?? qty * unit);
+                        return (
+                          <tr key={String(it.id ?? idx)} className="border-b border-slate-100">
+                            <td className="py-3 text-sm">{it.description}</td>
+                            <td className="py-3 text-right text-sm">{qty}</td>
+                            <td className="py-3 text-right text-sm">{formatMoney(unit)}</td>
+                            <td className="py-3 text-right text-sm font-semibold">
+                              {formatMoney(amt)}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr className="border-b border-slate-100">
+                        <td className="py-3 text-sm">Services</td>
+                        <td className="py-3 text-right text-sm">1</td>
+                        <td className="py-3 text-right text-sm">{formatMoney(printSubtotal)}</td>
+                        <td className="py-3 text-right text-sm font-semibold">
+                          {formatMoney(printSubtotal)}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-6 flex justify-end">
+                <div className="w-full max-w-[320px] space-y-2 text-sm">
+                  <div className="flex items-center justify-between text-slate-700">
+                    <span>Subtotal</span>
+                    <span className="font-semibold">{formatMoney(printSubtotal)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-700">
+                    <span>Tax</span>
+                    <span className="font-semibold">{formatMoney(printTax)}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-2 text-base">
+                    <span className="font-extrabold">Total</span>
+                    <span className="font-extrabold">{formatMoney(printTotal)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {printInvoice.notes ? (
+                <div className="mt-6">
+                  <div className="text-sm font-semibold text-slate-700">Notes</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-700">
+                    {printInvoice.notes}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
       {booting ? <div className="text-xs text-slate-400">Loading…</div> : null}
 
       {error ? (
@@ -1009,7 +1103,7 @@ export default function InvoiceTab(_props: Props) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handlePrint(inv);
+                              void beginPrint(inv);
                             }}
                             className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
                           >
@@ -1072,7 +1166,7 @@ export default function InvoiceTab(_props: Props) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handlePrint(inv);
+                              void beginPrint(inv);
                             }}
                             className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
                           >
