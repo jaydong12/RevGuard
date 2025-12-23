@@ -9,6 +9,15 @@ import React, { useMemo, useState } from 'react';
 import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
+import { formatCurrency } from '../../lib/formatCurrency';
+import {
+  Calendar,
+  FilterX,
+  Pencil,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+} from 'lucide-react';
 
 const CATEGORIES = [
   // Income
@@ -93,6 +102,11 @@ export default function TransactionsPage() {
 
   // Simple client-side search by description.
   const [search, setSearch] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
 
   // Client-side sort state.
   const [sortKey, setSortKey] = useState<SortKey>('date');
@@ -310,18 +324,68 @@ export default function TransactionsPage() {
 
   // ---------- client-side filter + sort + pagination ----------
 
-  // 1) Apply search + income/expense filter
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of CATEGORIES) set.add(c);
+    for (const tx of transactions) {
+      const v = String(tx.category ?? '').trim();
+      if (v) set.add(v);
+    }
+    return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
+  }, [transactions]);
+
+  const hasActiveFilters =
+    Boolean(search.trim()) ||
+    Boolean(dateFrom) ||
+    Boolean(dateTo) ||
+    Boolean(flowFilter !== 'all') ||
+    Boolean(categoryFilter.trim()) ||
+    Boolean(amountMin.trim()) ||
+    Boolean(amountMax.trim());
+
+  function clearFilters() {
+    setSearch('');
+    setDateFrom('');
+    setDateTo('');
+    setFlowFilter('all');
+    setCategoryFilter('');
+    setAmountMin('');
+    setAmountMax('');
+    setCurrentPage(1);
+  }
+
+  // 1) Apply filters
   const filteredTransactions = transactions.filter((tx) => {
-    const matchesSearch = tx.description
-      .toLowerCase()
-      .includes(search.toLowerCase());
+    const hay = `${tx.description ?? ''} ${tx.category ?? ''}`.toLowerCase();
+    const matchesSearch = !search.trim() || hay.includes(search.trim().toLowerCase());
 
     const matchesFlow =
       flowFilter === 'all' ||
       (flowFilter === 'income' && tx.amount > 0) ||
       (flowFilter === 'expenses' && tx.amount < 0);
 
-    return matchesSearch && matchesFlow;
+    const matchesCategory =
+      !categoryFilter.trim() ||
+      String(tx.category ?? '').trim().toLowerCase() === categoryFilter.trim().toLowerCase();
+
+    const matchesDateFrom = !dateFrom || (tx.date ?? '') >= dateFrom;
+    const matchesDateTo = !dateTo || (tx.date ?? '') <= dateTo;
+
+    const absAmt = Math.abs(Number(tx.amount) || 0);
+    const min = Number(amountMin);
+    const max = Number(amountMax);
+    const matchesMin = !amountMin.trim() || (!Number.isNaN(min) && absAmt >= min);
+    const matchesMax = !amountMax.trim() || (!Number.isNaN(max) && absAmt <= max);
+
+    return (
+      matchesSearch &&
+      matchesFlow &&
+      matchesCategory &&
+      matchesDateFrom &&
+      matchesDateTo &&
+      matchesMin &&
+      matchesMax
+    );
   });
 
   // 2) Sort the filtered list client-side
@@ -380,7 +444,7 @@ export default function TransactionsPage() {
   // ---------- render ----------
 
   return (
-    <main className="space-y-5">
+    <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         {/* Header */}
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1">
@@ -396,58 +460,158 @@ export default function TransactionsPage() {
         {businessError && <div className="text-xs text-rose-300">{businessError}</div>}
         {businessLoading && <div className="text-xs text-slate-400">Loading business…</div>}
 
-        {/* Toolbar: New button + search + income/expense chips */}
-        <section className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <button
-            type="button"
-            onClick={openCreateForm}
-            className="inline-flex items-center justify-center px-3 py-2 rounded-lg bg-emerald-500 text-slate-950 text-xs font-semibold hover:bg-emerald-400"
-          >
-            + New Transaction
-          </button>
+        {/* Filter bar */}
+        <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400 flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-slate-400" />
+                  Filters
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateForm}
+                  className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+                >
+                  + New
+                </button>
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  disabled={!hasActiveFilters}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <FilterX className="h-4 w-4" />
+                  Clear
+                </button>
+              </div>
+            </div>
 
-          <div className="flex-1 flex flex-col sm:flex-row sm:items-center gap-2">
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Search description..."
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500"
-            />
-
-            {/* Simple All / Income / Expenses filter chips */}
-            <div className="flex items-center gap-1 text-[11px]">
-              {(['all', 'income', 'expenses'] as FlowFilter[]).map((f) => {
-                const label =
-                  f === 'all' ? 'All' : f === 'income' ? 'Income' : 'Expenses';
-                const active = flowFilter === f;
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    onClick={() => {
-                      setFlowFilter(f);
+            <div className="grid gap-3 md:grid-cols-12">
+              {/* Search */}
+              <div className="md:col-span-4">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
                       setCurrentPage(1);
                     }}
-                    className={`px-2.5 py-1 rounded-full border text-[11px] ${
-                      active
-                        ? 'bg-slate-700 text-slate-50 border-slate-500'
-                        : 'bg-slate-900 text-slate-200 border-slate-700 hover:border-emerald-400'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+                    placeholder="Search description or category…"
+                    className="w-full rounded-xl border border-white/10 bg-white/5 px-9 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  />
+                </div>
+              </div>
+
+              {/* Date range */}
+              <div className="md:col-span-3 grid grid-cols-2 gap-2">
+                <div className="relative">
+                  <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => {
+                      setDateFrom(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    aria-label="From date"
+                  />
+                </div>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => {
+                    setDateTo(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  aria-label="To date"
+                />
+              </div>
+
+              {/* Income/Expense */}
+              <div className="md:col-span-2">
+                <div className="grid grid-cols-3 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px]">
+                  {(['all', 'income', 'expenses'] as FlowFilter[]).map((f) => {
+                    const label = f === 'all' ? 'All' : f === 'income' ? 'Income' : 'Expense';
+                    const active = flowFilter === f;
+                    return (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => {
+                          setFlowFilter(f);
+                          setCurrentPage(1);
+                        }}
+                        className={`rounded-lg py-1.5 font-semibold transition ${
+                          active
+                            ? 'bg-white/10 text-slate-50'
+                            : 'text-slate-300 hover:bg-white/5'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Category */}
+              <div className="md:col-span-2">
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => {
+                    setCategoryFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                >
+                  <option value="">All categories</option>
+                  {categoryOptions.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Amount range */}
+              <div className="md:col-span-1 grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Min"
+                  value={amountMin}
+                  onChange={(e) => {
+                    setAmountMin(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Max"
+                  value={amountMax}
+                  onChange={(e) => {
+                    setAmountMax(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
             </div>
           </div>
         </section>
 
         {/* Table / list */}
-        <section className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3 text-xs">
+        <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
           {loading ? (
             <p className="text-slate-400">Loading transactions...</p>
           ) : error ? (
@@ -461,11 +625,11 @@ export default function TransactionsPage() {
             <>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-left">
-                  <thead className="bg-slate-900 text-slate-300">
+                  <thead className="bg-slate-950/60 text-slate-300 sticky top-0 z-10 backdrop-blur border-b border-white/10">
                     <tr>
                       <th
                         onClick={() => handleSort('date')}
-                        className="cursor-pointer select-none px-3 py-2 text-left text-[11px] font-semibold text-slate-200"
+                        className="cursor-pointer select-none px-4 py-3 text-left text-[11px] font-semibold text-slate-200"
                       >
                         Date{' '}
                         {sortKey === 'date' &&
@@ -473,7 +637,7 @@ export default function TransactionsPage() {
                       </th>
                       <th
                         onClick={() => handleSort('description')}
-                        className="cursor-pointer select-none px-3 py-2 text-left text-[11px] font-semibold text-slate-200"
+                        className="cursor-pointer select-none px-4 py-3 text-left text-[11px] font-semibold text-slate-200"
                       >
                         Description{' '}
                         {sortKey === 'description' &&
@@ -481,7 +645,7 @@ export default function TransactionsPage() {
                       </th>
                       <th
                         onClick={() => handleSort('category')}
-                        className="cursor-pointer select-none px-3 py-2 text-left text-[11px] font-semibold text-slate-200"
+                        className="cursor-pointer select-none px-4 py-3 text-left text-[11px] font-semibold text-slate-200"
                       >
                         Category{' '}
                         {sortKey === 'category' &&
@@ -489,13 +653,13 @@ export default function TransactionsPage() {
                       </th>
                       <th
                         onClick={() => handleSort('amount')}
-                        className="cursor-pointer select-none px-3 py-2 text-right text-[11px] font-semibold text-slate-200"
+                        className="cursor-pointer select-none px-4 py-3 text-right text-[11px] font-semibold text-slate-200"
                       >
                         Amount{' '}
                         {sortKey === 'amount' &&
                           (sortDirection === 'asc' ? '▲' : '▼')}
                       </th>
-                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-slate-200">
+                      <th className="px-4 py-3 text-right text-[11px] font-semibold text-slate-200">
                         Actions
                       </th>
                     </tr>
@@ -503,50 +667,65 @@ export default function TransactionsPage() {
                   <tbody>
                     {paginatedTransactions.map((tx, idx) => {
                     const isNegative = tx.amount < 0;
-                    const amountClass = isNegative
-                      ? 'text-rose-300'
-                      : 'text-emerald-300';
-                    const rowBg =
-                      idx % 2 === 0
-                        ? 'bg-slate-950'
-                        : 'bg-slate-900/80';
+                    const amountClass = isNegative ? 'text-rose-300' : 'text-emerald-300';
+                    const rowBg = idx % 2 === 0 ? 'bg-white/[0.02]' : 'bg-white/[0.04]';
+                    const cat = String(tx.category ?? '').trim() || 'Uncategorized';
+                    const dateObj = new Date(tx.date);
+                    const dateLabel = Number.isNaN(dateObj.getTime())
+                      ? tx.date
+                      : dateObj.toLocaleDateString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          year: 'numeric',
+                        });
 
                       return (
                         <tr
                           key={tx.id}
-                          className={`${rowBg} border-t border-slate-800 hover:bg-slate-800/80`}
+                          className={`group ${rowBg} border-t border-white/10 hover:bg-white/[0.06] transition-colors`}
                         >
-                          <td className="px-3 py-2 align-top whitespace-nowrap">
-                            {tx.date}
+                          <td className="px-4 py-3 align-top whitespace-nowrap text-slate-300">
+                            <div className="text-[11px]">{dateLabel}</div>
                           </td>
-                          <td className="px-3 py-2 align-top">
-                            <div className="max-w-xs truncate">
-                              {tx.description}
+                          <td className="px-4 py-3 align-top">
+                            <div className="max-w-[520px]">
+                              <div className="text-sm font-semibold text-slate-100 truncate">
+                                {tx.description || '—'}
+                              </div>
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                {isNegative ? 'Expense' : 'Income'}
+                              </div>
                             </div>
                           </td>
-                          <td className="px-3 py-2 align-top">
-                            {tx.category || '—'}
-                          </td>
-                          <td className="px-3 py-2 align-top text-right">
-                            <span className={amountClass}>
-                              {isNegative ? '-' : '+'}$
-                              {Math.abs(tx.amount).toFixed(2)}
+                          <td className="px-4 py-3 align-top">
+                            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-200">
+                              {cat}
                             </span>
                           </td>
-                          <td className="px-3 py-2 align-top text-right space-x-2">
+                          <td className="px-4 py-3 align-top text-right whitespace-nowrap">
+                            <div className={`text-sm font-semibold ${amountClass}`}>
+                              {isNegative ? '-' : '+'}
+                              {formatCurrency(Math.abs(tx.amount))}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 align-top text-right">
                             <button
                               type="button"
                               onClick={() => openEditForm(tx)}
-                              className="text-[11px] text-sky-300 hover:text-sky-100"
+                              className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 opacity-0 group-hover:opacity-100 hover:bg-white/10 transition"
+                              aria-label="Edit"
+                              title="Edit"
                             >
-                              Edit
+                              <Pencil className="h-4 w-4" />
                             </button>
                             <button
                               type="button"
                               onClick={() => void handleDelete(tx)}
-                              className="text-[11px] text-rose-300 hover:text-rose-100"
+                              className="ml-2 inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-rose-200 opacity-0 group-hover:opacity-100 hover:bg-white/10 transition"
+                              aria-label="Delete"
+                              title="Delete"
                             >
-                              Delete
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           </td>
                         </tr>
@@ -818,12 +997,3 @@ export default function TransactionsPage() {
     </main>
   );
 }
-
-// How to use:
-// - Navigate to /transactions (the sidebar link in AppLayout already points here).
-// - Click "+ New Transaction" to open the form, fill in the fields, and hit "Create".
-// - Use the "Edit" button in a row to change an existing transaction and save.
-// - Use the "Delete" button to remove a transaction after confirming in the dialog.
-
-
-
