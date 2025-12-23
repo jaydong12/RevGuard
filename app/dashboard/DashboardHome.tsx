@@ -964,6 +964,7 @@ export default function DashboardHome() {
     healthScore,
     healthState,
     healthReason,
+    moneyMovesTakeaway,
     moneyMoves,
     lowData,
   } =
@@ -1025,8 +1026,8 @@ export default function DashboardHome() {
 
       const reason = (() => {
         if (low) return 'Not enough recent activity to score health reliably.';
-        if (state === 'Healthy') return 'Consistent activity with solid margins recently.';
-        if (state === 'Stable') return 'Mixed activity or margins — keep an eye on spend.';
+        if (state === 'Healthy') return 'Performance has been solid recently.';
+        if (state === 'Stable') return 'Performance has been steady recently.';
         return 'Low activity or margin pressure in the last 30 days.';
       })();
 
@@ -1063,6 +1064,33 @@ export default function DashboardHome() {
         );
       }
 
+      const takeaway = (() => {
+        if (low) return null;
+        if (todayTxs.length === 0) return null;
+        const inAmt = topIn?.[1]?.in ?? 0;
+        const outAmt = topOut?.[1]?.out ?? 0;
+        const biggestAmt = Number((biggestAbs as any)?.amount) || 0;
+        const outCat = topOut?.[0] ?? null;
+        const inCat = topIn?.[0] ?? null;
+
+        if (todayNet < 0) {
+          // Prefer explaining the drop as spend-driven when we have meaningful outflows.
+          if (outCat && outAmt > 0 && outAmt >= Math.max(1, inAmt)) {
+            return `What this means: today’s drop was mainly due to ${outCat}, not lower revenue.`;
+          }
+          if (biggestAmt < 0 && outCat) {
+            return `What this means: today’s drop was driven by a large ${outCat} payment.`;
+          }
+          return `What this means: today’s drop was driven mostly by expenses, not lower revenue.`;
+        }
+
+        if (todayNet > 0 && inCat) {
+          return `What this means: today’s gain was mainly driven by ${inCat}.`;
+        }
+
+        return null;
+      })();
+
       return {
         todayKey: tKey,
         yesterdayKey: yKey,
@@ -1071,6 +1099,7 @@ export default function DashboardHome() {
         healthScore: score,
         healthState: state,
         healthReason: reason,
+        moneyMovesTakeaway: takeaway,
         moneyMoves: bullets.slice(0, 3),
         lowData: low,
       };
@@ -2483,7 +2512,7 @@ export default function DashboardHome() {
                   </div>
                   <div className="mt-2 flex items-center gap-2">
                     <div className="text-lg font-semibold text-slate-50 tracking-tight">
-                      {healthState}
+                      {healthState} <span className="text-slate-300 font-medium">(rolling)</span>
                     </div>
                     <div
                       className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] ${
@@ -2494,11 +2523,13 @@ export default function DashboardHome() {
                           : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
                       }`}
                     >
-                      Rolling
+                      Trend
                     </div>
                   </div>
                   <div className="mt-2 text-sm text-slate-300 leading-relaxed">
-                    {lowData ? 'Add a few transactions to unlock health.' : healthReason}
+                    {lowData
+                      ? 'Add a few transactions to unlock health.'
+                      : `${healthReason} ${netToday < 0 ? 'Even though today was down.' : netToday > 0 ? 'Even though today was up.' : ''}`.trim()}
                   </div>
                 </div>
 
@@ -2555,15 +2586,21 @@ export default function DashboardHome() {
                     <span className="text-slate-400">Sign in to see daily changes.</span>
                   ) : (
                     (() => {
-                      const delta = netToday - netYesterday;
-                      const dir = delta >= 0 ? 'Up' : 'Down';
+                      const delta = netToday;
+                      const dir = delta > 0 ? 'Up' : delta < 0 ? 'Down' : 'Flat';
                       return (
                         <span className="text-slate-400">
-                          {dir}{' '}
-                          <span className="text-slate-200 font-semibold">
-                            {formatCurrency(Math.abs(delta))}
-                          </span>{' '}
-                          vs yesterday
+                          {dir === 'Flat' ? (
+                            <>Flat today</>
+                          ) : (
+                            <>
+                              {dir}{' '}
+                              <span className="text-slate-200 font-semibold">
+                                {formatCurrency(Math.abs(delta))}
+                              </span>{' '}
+                              today
+                            </>
+                          )}
                         </span>
                       );
                     })()
@@ -2661,14 +2698,21 @@ export default function DashboardHome() {
                   No moves yet today — check back after activity.
                 </div>
               ) : (
-                <ul className="space-y-2 text-sm text-slate-200">
-                  {moneyMoves.slice(0, 3).map((t) => (
-                    <li key={t} className="flex items-start gap-2">
-                      <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-300/90" />
-                      <span className="leading-relaxed">{t}</span>
-                    </li>
-                  ))}
-                </ul>
+                <div className="space-y-3">
+                  <ul className="space-y-2 text-sm text-slate-200">
+                    {moneyMoves.slice(0, 3).map((t) => (
+                      <li key={t} className="flex items-start gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-300/90" />
+                        <span className="leading-relaxed">{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {moneyMovesTakeaway && (
+                    <div className="text-sm text-slate-300 leading-relaxed">
+                      {moneyMovesTakeaway}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
