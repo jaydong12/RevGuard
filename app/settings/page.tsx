@@ -6,6 +6,57 @@ import { supabase } from '../../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone } from 'lucide-react';
 
+function digitsOnly(s: string) {
+  return (s || '').replace(/\D/g, '');
+}
+
+function formatPhoneDisplay(input: string) {
+  const d = digitsOnly(input).slice(0, 10);
+  const len = d.length;
+  if (len === 0) return '';
+  if (len < 4) return `(${d}`;
+  if (len < 7) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
+
+function normalizePhoneForDb(input: string) {
+  return digitsOnly(input).slice(0, 10);
+}
+
+function formatZipDisplay(input: string) {
+  const d = digitsOnly(input).slice(0, 9);
+  if (d.length <= 5) return d;
+  return `${d.slice(0, 5)}-${d.slice(5)}`;
+}
+
+function normalizeZipForDb(input: string) {
+  return digitsOnly(input).slice(0, 9);
+}
+
+function normalizeStateForDb(input: string) {
+  const v = (input || '').replace(/[^a-z]/gi, '').slice(0, 2).toUpperCase();
+  return v;
+}
+
+function normalizeEmailForDb(input: string) {
+  return (input || '').trim().toLowerCase();
+}
+
+function isValidEmail(input: string) {
+  const v = normalizeEmailForDb(input);
+  if (!v) return false;
+  // pragmatic validation
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+function normalizeWebsiteForDb(input: string) {
+  let v = (input || '').trim().toLowerCase();
+  if (!v) return '';
+  // If user typed a domain, store a usable URL.
+  if (!/^https?:\/\//.test(v)) v = `https://${v}`;
+  return v;
+}
+
 type ProfileRow = {
   id: string;
   full_name: string | null;
@@ -50,6 +101,7 @@ export default function SettingsPage() {
   const [bizCity, setBizCity] = useState('');
   const [bizState, setBizState] = useState('');
   const [bizZip, setBizZip] = useState('');
+  const [bizEmailInvalid, setBizEmailInvalid] = useState(false);
 
   // Profile form state
   const [fullName, setFullName] = useState('');
@@ -113,15 +165,16 @@ export default function SettingsPage() {
           } else {
             const b: any = bizRow ?? null;
             setBizName(b?.name ?? '');
-            setBizEmail(b?.email ?? '');
-            setBizPhone(b?.phone ?? '');
-            setBizWebsite(b?.website ?? '');
+            setBizEmail((b?.email ?? '').toString());
+            setBizEmailInvalid(Boolean(b?.email) && !isValidEmail(String(b?.email)));
+            setBizPhone(formatPhoneDisplay(b?.phone ?? ''));
+            setBizWebsite((b?.website ?? '').toString());
             setBizLogoUrl(b?.logo_url ?? '');
             setBizAddress1(b?.address1 ?? '');
             setBizAddress2(b?.address2 ?? '');
             setBizCity(b?.city ?? '');
-            setBizState(b?.state ?? '');
-            setBizZip(b?.zip ?? '');
+            setBizState(String(b?.state ?? '').toUpperCase());
+            setBizZip(formatZipDisplay(b?.zip ?? ''));
           }
         } catch (e: any) {
           if (!mounted) return;
@@ -285,7 +338,21 @@ export default function SettingsPage() {
       return;
     }
 
-    if (!bizEmail.trim() && !bizPhone.trim()) {
+    const normalizedEmail = normalizeEmailForDb(bizEmail);
+    const normalizedPhone = normalizePhoneForDb(bizPhone);
+    const normalizedWebsite = normalizeWebsiteForDb(bizWebsite);
+    const normalizedZip = normalizeZipForDb(bizZip);
+    const normalizedState = normalizeStateForDb(bizState);
+
+    if (normalizedEmail && !isValidEmail(normalizedEmail)) {
+      const msg = 'Please enter a valid email address.';
+      setBizEmailInvalid(true);
+      setBizError(msg);
+      showToast('error', msg);
+      return;
+    }
+
+    if (!normalizedEmail && !normalizedPhone) {
       const msg = 'Add at least an email or phone number.';
       setBizError(msg);
       showToast('error', msg);
@@ -300,15 +367,16 @@ export default function SettingsPage() {
       const payload: any = {
         owner_id: sessionUserId,
         name: bizName.trim(),
-        email: bizEmail.trim() || null,
-        phone: bizPhone.trim() || null,
-        website: bizWebsite.trim() || null,
+        // store normalized (no formatting)
+        email: normalizedEmail || null,
+        phone: normalizedPhone || null,
+        website: normalizedWebsite || null,
         logo_url: bizLogoUrl.trim() || null,
         address1: bizAddress1.trim() || null,
         address2: bizAddress2.trim() || null,
         city: bizCity.trim() || null,
-        state: bizState.trim() || null,
-        zip: bizZip.trim() || null,
+        state: normalizedState || null,
+        zip: normalizedZip || null,
       };
 
       const { error } = await supabase
@@ -323,6 +391,14 @@ export default function SettingsPage() {
         showToast('error', msg);
         return;
       }
+
+      // Refresh displayed formatting from normalized values
+      setBizEmail(normalizedEmail);
+      setBizEmailInvalid(false);
+      setBizPhone(formatPhoneDisplay(normalizedPhone));
+      setBizWebsite(normalizedWebsite);
+      setBizState(normalizedState);
+      setBizZip(formatZipDisplay(normalizedZip));
 
       showToast('success', 'Business profile saved.');
     } finally {
@@ -525,11 +601,23 @@ export default function SettingsPage() {
             </label>
             <input
               value={bizEmail}
-              onChange={(e) => setBizEmail(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setBizEmail(v);
+                const normalized = normalizeEmailForDb(v);
+                setBizEmailInvalid(Boolean(normalized) && !isValidEmail(normalized));
+              }}
               placeholder="billing@mybusiness.com"
               disabled={!sessionUserId || bizLoading}
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+              className={`w-full rounded-xl border bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 ${
+                bizEmailInvalid
+                  ? 'border-rose-500/60 focus:ring-rose-500'
+                  : 'border-slate-700 focus:ring-indigo-500'
+              }`}
             />
+            {bizEmailInvalid ? (
+              <div className="text-[11px] text-rose-300">Enter a valid email.</div>
+            ) : null}
           </div>
 
           <div className="space-y-1">
@@ -541,7 +629,7 @@ export default function SettingsPage() {
             </label>
             <input
               value={bizPhone}
-              onChange={(e) => setBizPhone(e.target.value)}
+              onChange={(e) => setBizPhone(formatPhoneDisplay(e.target.value))}
               placeholder="(555) 555-5555"
               disabled={!sessionUserId || bizLoading}
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
@@ -558,7 +646,11 @@ export default function SettingsPage() {
             <input
               value={bizWebsite}
               onChange={(e) => setBizWebsite(e.target.value)}
-              placeholder="https://mybusiness.com"
+              onBlur={() => {
+                const normalized = normalizeWebsiteForDb(bizWebsite);
+                setBizWebsite(normalized);
+              }}
+              placeholder="mybusiness.com"
               disabled={!sessionUserId || bizLoading}
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -601,7 +693,7 @@ export default function SettingsPage() {
             <input
               value={bizAddress2}
               onChange={(e) => setBizAddress2(e.target.value)}
-              placeholder="Suite 200"
+              placeholder="Suite, unit, etc. (optional)"
               disabled={!sessionUserId || bizLoading}
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
             />
@@ -622,7 +714,7 @@ export default function SettingsPage() {
             <label className="block text-[11px] text-slate-400">State</label>
             <input
               value={bizState}
-              onChange={(e) => setBizState(e.target.value)}
+              onChange={(e) => setBizState(normalizeStateForDb(e.target.value))}
               placeholder="TX"
               disabled={!sessionUserId || bizLoading}
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
@@ -633,8 +725,8 @@ export default function SettingsPage() {
             <label className="block text-[11px] text-slate-400">ZIP</label>
             <input
               value={bizZip}
-              onChange={(e) => setBizZip(e.target.value)}
-              placeholder="78701"
+              onChange={(e) => setBizZip(formatZipDisplay(e.target.value))}
+              placeholder="12345 or 12345-6789"
               disabled={!sessionUserId || bizLoading}
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
             />
