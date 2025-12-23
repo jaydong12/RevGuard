@@ -110,9 +110,10 @@ export default function WeeklyOverviewChart({
 }) {
   const data = useMemo<Row[]>(() => {
     const now = new Date();
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const start = new Date(end);
-    start.setDate(end.getDate() - 6);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // Week starts Sunday (0) and ends Saturday (6).
+    const start = new Date(today);
+    start.setDate(today.getDate() - today.getDay());
 
     const days: Date[] = [];
     for (let i = 0; i < 7; i++) {
@@ -155,7 +156,7 @@ export default function WeeklyOverviewChart({
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold text-slate-100">{title}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Last 7 days</div>
+          <div className="mt-1 text-[11px] text-slate-400">This week (Sun–Sat)</div>
         </div>
       </div>
 
