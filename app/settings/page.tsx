@@ -6,6 +6,15 @@ import { supabase } from '../../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone } from 'lucide-react';
 
+function safeConsoleError(err: any) {
+  try {
+    // eslint-disable-next-line no-console
+    console.error(err);
+  } catch {
+    // ignore (some environments can throw on console access)
+  }
+}
+
 function digitsOnly(s: string) {
   return (s || '').replace(/\D/g, '');
 }
@@ -169,6 +178,7 @@ export default function SettingsPage() {
           if (!mounted) return;
 
           if (bizErr) {
+            safeConsoleError(bizErr);
             setBizError(bizErr.message || 'Could not load business profile.');
           } else {
             const b: any = bizRow ?? null;
@@ -187,6 +197,7 @@ export default function SettingsPage() {
           }
         } catch (e: any) {
           if (!mounted) return;
+          safeConsoleError(e);
           setBizError(e?.message || 'Could not load business profile.');
         } finally {
           if (mounted) setBizLoading(false);
@@ -394,6 +405,7 @@ export default function SettingsPage() {
         await supabase.from('business').update(p).eq('id', ensuredBizId).eq('owner_id', sessionUserId);
 
       let { error } = await attempt(payload);
+      if (error) safeConsoleError(error);
 
       const errMsg = String((error as any)?.message ?? '').toLowerCase();
       const missingAddress1 =
@@ -409,6 +421,7 @@ export default function SettingsPage() {
 
         const res2 = await attempt(payload2);
         error = res2.error;
+        if (error) safeConsoleError(error);
 
         const errMsg2 = String((error as any)?.message ?? '').toLowerCase();
         const missingAddressLine =
@@ -423,11 +436,12 @@ export default function SettingsPage() {
           payload3.address = [bizAddress1.trim(), bizAddress2.trim()].filter(Boolean).join('\n') || null;
           const res3 = await attempt(payload3);
           error = res3.error;
+          if (error) safeConsoleError(error);
         }
       }
 
       if (error) {
-        const msg = error.message || 'Could not save business profile.';
+        const msg = (error as any)?.message || String(error) || 'Could not save business profile.';
         setBizError(msg);
         showToast('error', msg);
         return;
