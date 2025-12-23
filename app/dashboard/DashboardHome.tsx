@@ -21,7 +21,9 @@ import { IncomeStatementCard } from '../../components/IncomeStatementCard';
 import { BalanceSheetCard } from '../../components/BalanceSheetCard';
 import { CashFlowCard } from '../../components/CashFlowCard';
 import WeeklyOverviewChart from '../../components/WeeklyOverviewChart';
+import BusinessHealthSystemCard from '../../components/BusinessHealthSystemCard';
 import { formatCurrency } from '../../lib/formatCurrency';
+import { computeHealthSystem } from '../../lib/healthSystem';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
 import { Sparkles } from 'lucide-react';
@@ -769,11 +771,15 @@ export default function DashboardHome() {
     businessId: selectedBusinessId,
     userId,
     transactions: transactionsRaw,
+    bills: billsRaw,
+    invoices: invoicesRaw,
     loading: businessLoading,
     error: businessError,
   } = useAppData();
 
   const transactions = (transactionsRaw as any[]) as Transaction[];
+  const bills = (billsRaw as any[]) ?? [];
+  const invoices = (invoicesRaw as any[]) ?? [];
   const [range, setRange] = useState<Range>('30d');
   const [selectedBreakdown, setSelectedBreakdown] =
     useState<BreakdownKind | null>(null);
@@ -962,9 +968,6 @@ export default function DashboardHome() {
     yesterdayKey,
     netToday,
     netYesterday,
-    healthScore,
-    healthState,
-    healthReason,
     moneyMovesTakeaway,
     moneyMoves,
     lowData,
@@ -976,13 +979,11 @@ export default function DashboardHome() {
       y.setDate(now.getDate() - 1);
       const yKey = dayKey(y);
 
-      // Partition by day (today/yesterday) and build a 30d window for the health meter.
+      // Partition by day (today/yesterday) and build a 30d window for lightweight UX signals.
       let todayNet = 0;
       let yesterdayNet = 0;
       const last30Start = new Date(now);
       last30Start.setDate(now.getDate() - 30);
-      let revenue30 = 0;
-      let expenses30 = 0;
       const activeDays = new Set<string>();
 
       const todayTxs: Transaction[] = [];
@@ -1000,37 +1001,11 @@ export default function DashboardHome() {
 
         if (d >= last30Start && d <= now) {
           activeDays.add(k);
-          if (amt >= 0) revenue30 += amt;
-          else expenses30 += Math.abs(amt);
         }
       }
 
-      // "Business health" is a small, friendly proxy signal (0–100) based on:
-      // - activity consistency (days with transactions in last 30)
-      // - profitability in last 30 (net margin)
-      const activityScore = Math.min(20, Math.round((activeDays.size / 20) * 20)); // 20 days ~ full points
-      const net30 = revenue30 - expenses30;
-      const margin = revenue30 > 0 ? net30 / revenue30 : 0;
-      const marginScore = Math.max(-30, Math.min(30, Math.round(margin * 60))); // -30..+30
-
       const hasAnyRecent = activeDays.size > 0;
       const low = !hasAnyRecent || transactions.length < 3;
-      const score = low ? 18 : Math.max(0, Math.min(100, 50 + activityScore + marginScore));
-
-      const state = low
-        ? 'Needs attention'
-        : score >= 70
-        ? 'Healthy'
-        : score >= 45
-        ? 'Stable'
-        : 'Needs attention';
-
-      const reason = (() => {
-        if (low) return 'Not enough recent activity to score health reliably.';
-        if (state === 'Healthy') return 'Performance has been solid recently.';
-        if (state === 'Stable') return 'Performance has been steady recently.';
-        return 'Low activity or margin pressure in the last 30 days.';
-      })();
 
       // Today's Money Moves (1–3 bullets) from TODAY only.
       const byCategory: Record<string, { net: number; in: number; out: number }> = {};
@@ -1097,14 +1072,19 @@ export default function DashboardHome() {
         yesterdayKey: yKey,
         netToday: todayNet,
         netYesterday: yesterdayNet,
-        healthScore: score,
-        healthState: state,
-        healthReason: reason,
         moneyMovesTakeaway: takeaway,
         moneyMoves: bullets.slice(0, 3),
         lowData: low,
       };
     }, [transactions]);
+
+  const health = useMemo(() => {
+    return computeHealthSystem({
+      transactions: transactions as any,
+      bills,
+      invoices,
+    });
+  }, [transactions, bills, invoices]);
 
   const [lastReviewedKey, setLastReviewedKey] = useState<string | null>(null);
   const [reviewedJustNow, setReviewedJustNow] = useState(false);
@@ -2505,110 +2485,7 @@ export default function DashboardHome() {
         <section className="mb-8">
           <div className="grid gap-6 lg:grid-cols-2 items-stretch">
             {/* Business Health */}
-            <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                    Business health
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <div className="text-lg font-semibold text-slate-50 tracking-tight">
-                      {healthState} <span className="text-slate-300 font-medium">(rolling)</span>
-                    </div>
-                    <div
-                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] ${
-                        healthState === 'Healthy'
-                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                          : healthState === 'Stable'
-                          ? 'border-sky-500/30 bg-sky-500/10 text-sky-200'
-                          : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-                      }`}
-                    >
-                      Trend
-                    </div>
-                  </div>
-                  <div className="mt-2 text-sm text-slate-300 leading-relaxed">
-                    {lowData
-                      ? 'Add a few transactions to unlock health.'
-                      : `${healthReason} ${netToday < 0 ? 'Even though today was down.' : netToday > 0 ? 'Even though today was up.' : ''}`.trim()}
-                  </div>
-                </div>
-
-                <div className="relative h-20 w-20 shrink-0">
-                  {(() => {
-                    const size = 80;
-                    const stroke = 9;
-                    const r = (size - stroke) / 2;
-                    const c = 2 * Math.PI * r;
-                    const pct = Math.max(0, Math.min(100, Math.round(healthScore)));
-                    const dash = (pct / 100) * c;
-                    return (
-                      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-                        <defs>
-                          <linearGradient id="rgHealthGrad" x1="0" y1="0" x2="1" y2="1">
-                            <stop offset="0" stopColor="rgba(16,185,129,0.95)" />
-                            <stop offset="0.6" stopColor="rgba(56,189,248,0.85)" />
-                            <stop offset="1" stopColor="rgba(59,130,246,0.85)" />
-                          </linearGradient>
-                        </defs>
-                        <circle
-                          cx={size / 2}
-                          cy={size / 2}
-                          r={r}
-                          fill="transparent"
-                          stroke="rgba(255,255,255,0.10)"
-                          strokeWidth={stroke}
-                        />
-                        <circle
-                          cx={size / 2}
-                          cy={size / 2}
-                          r={r}
-                          fill="transparent"
-                          stroke="url(#rgHealthGrad)"
-                          strokeWidth={stroke}
-                          strokeLinecap="round"
-                          strokeDasharray={`${dash} ${c - dash}`}
-                          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-                        />
-                      </svg>
-                    );
-                  })()}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <div className="text-[11px] font-semibold text-slate-200 leading-none text-center px-1">
-                      {lowData ? '—' : healthState}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 flex items-center justify-between">
-                <div className="text-xs text-slate-300">
-                  {!selectedBusinessId ? (
-                    <span className="text-slate-400">Sign in to see daily changes.</span>
-                  ) : (
-                    (() => {
-                      const delta = netToday;
-                      const dir = delta > 0 ? 'Up' : delta < 0 ? 'Down' : 'Flat';
-                      return (
-                        <span className="text-slate-400">
-                          {dir === 'Flat' ? (
-                            <>Flat today</>
-                          ) : (
-                            <>
-                              {dir}{' '}
-                              <span className="text-slate-200 font-semibold">
-                                {formatCurrency(Math.abs(delta))}
-                              </span>{' '}
-                              today
-                            </>
-                          )}
-                        </span>
-                      );
-                    })()
-                  )}
-                </div>
-              </div>
-            </div>
+            <BusinessHealthSystemCard health={health} />
 
             {/* Daily Review */}
             <div className="rg-enter rg-d1 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
