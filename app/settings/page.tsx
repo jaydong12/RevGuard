@@ -400,51 +400,57 @@ export default function SettingsPage() {
       };
 
       // Some deployments use legacy column names (address_line1/address_line2 or a single address).
-      // Try modern columns first, then fall back based on the error.
-      const attempt = async (p: any) =>
-        await supabase.from('business').update(p).eq('id', ensuredBizId).eq('owner_id', sessionUserId);
+      // Try modern columns first, then fall back based on the *raw* Supabase error object.
+      const attemptUpdate = async (p: any) => {
+        const { error } = await supabase
+          .from('business')
+          .update(p)
+          .eq('id', ensuredBizId)
+          .eq('owner_id', sessionUserId);
 
-      let { error } = await attempt(payload);
-      if (error) safeConsoleError(error);
+        if (error) {
+          try {
+            // eslint-disable-next-line no-console
+            console.error('SUPABASE ERROR', error);
+          } catch {
+            // ignore
+          }
+          throw error;
+        }
+      };
 
-      const errMsg = String((error as any)?.message ?? '').toLowerCase();
-      const missingAddress1 =
-        errMsg.includes('address1') && (errMsg.includes('does not exist') || errMsg.includes('schema cache'));
+      try {
+        await attemptUpdate(payload);
+      } catch (e1: any) {
+        const msg1 = String(e1?.message ?? e1 ?? '').toLowerCase();
+        const missingAddress1 =
+          msg1.includes('address1') && (msg1.includes('does not exist') || msg1.includes('schema cache'));
 
-      if (error && missingAddress1) {
+        if (!missingAddress1) throw e1;
+
         // Try legacy address_line1/address_line2
-        const payload2 = { ...payload };
-        delete payload2.address1;
-        delete payload2.address2;
-        payload2.address_line1 = bizAddress1.trim() || null;
-        payload2.address_line2 = bizAddress2.trim() || null;
+        try {
+          const payload2 = { ...payload };
+          delete payload2.address1;
+          delete payload2.address2;
+          payload2.address_line1 = bizAddress1.trim() || null;
+          payload2.address_line2 = bizAddress2.trim() || null;
+          await attemptUpdate(payload2);
+        } catch (e2: any) {
+          const msg2 = String(e2?.message ?? e2 ?? '').toLowerCase();
+          const missingAddressLine =
+            msg2.includes('address_line1') &&
+            (msg2.includes('does not exist') || msg2.includes('schema cache'));
 
-        const res2 = await attempt(payload2);
-        error = res2.error;
-        if (error) safeConsoleError(error);
+          if (!missingAddressLine) throw e2;
 
-        const errMsg2 = String((error as any)?.message ?? '').toLowerCase();
-        const missingAddressLine =
-          errMsg2.includes('address_line1') &&
-          (errMsg2.includes('does not exist') || errMsg2.includes('schema cache'));
-
-        if (error && missingAddressLine) {
           // Final fallback: single `address` column with newlines
           const payload3 = { ...payload };
           delete payload3.address1;
           delete payload3.address2;
           payload3.address = [bizAddress1.trim(), bizAddress2.trim()].filter(Boolean).join('\n') || null;
-          const res3 = await attempt(payload3);
-          error = res3.error;
-          if (error) safeConsoleError(error);
+          await attemptUpdate(payload3);
         }
-      }
-
-      if (error) {
-        const msg = (error as any)?.message || String(error) || 'Could not save business profile.';
-        setBizError(msg);
-        showToast('error', msg);
-        return;
       }
 
       // Refresh displayed formatting from normalized values
