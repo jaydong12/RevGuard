@@ -57,6 +57,14 @@ function normalizeWebsiteForDb(input: string) {
   return v;
 }
 
+function splitLegacyAddress(addr: string) {
+  const parts = String(addr || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  return {
+    line1: parts[0] ?? '',
+    line2: parts.slice(1).join(' ') ?? '',
+  };
+}
+
 type ProfileRow = {
   id: string;
   full_name: string | null;
@@ -170,8 +178,9 @@ export default function SettingsPage() {
             setBizPhone(formatPhoneDisplay(b?.phone ?? ''));
             setBizWebsite((b?.website ?? '').toString());
             setBizLogoUrl(b?.logo_url ?? '');
-            setBizAddress1(b?.address1 ?? '');
-            setBizAddress2(b?.address2 ?? '');
+            const legacy = b?.address ? splitLegacyAddress(String(b.address)) : { line1: '', line2: '' };
+            setBizAddress1(b?.address1 ?? b?.address_line1 ?? legacy.line1 ?? '');
+            setBizAddress2(b?.address2 ?? b?.address_line2 ?? legacy.line2 ?? '');
             setBizCity(b?.city ?? '');
             setBizState(String(b?.state ?? '').toUpperCase());
             setBizZip(formatZipDisplay(b?.zip ?? ''));
@@ -379,11 +388,43 @@ export default function SettingsPage() {
         zip: normalizedZip || null,
       };
 
-      const { error } = await supabase
-        .from('business')
-        .update(payload)
-        .eq('id', ensuredBizId)
-        .eq('owner_id', sessionUserId);
+      // Some deployments use legacy column names (address_line1/address_line2 or a single address).
+      // Try modern columns first, then fall back based on the error.
+      const attempt = async (p: any) =>
+        await supabase.from('business').update(p).eq('id', ensuredBizId).eq('owner_id', sessionUserId);
+
+      let { error } = await attempt(payload);
+
+      const errMsg = String((error as any)?.message ?? '').toLowerCase();
+      const missingAddress1 =
+        errMsg.includes('address1') && (errMsg.includes('does not exist') || errMsg.includes('schema cache'));
+
+      if (error && missingAddress1) {
+        // Try legacy address_line1/address_line2
+        const payload2 = { ...payload };
+        delete payload2.address1;
+        delete payload2.address2;
+        payload2.address_line1 = bizAddress1.trim() || null;
+        payload2.address_line2 = bizAddress2.trim() || null;
+
+        const res2 = await attempt(payload2);
+        error = res2.error;
+
+        const errMsg2 = String((error as any)?.message ?? '').toLowerCase();
+        const missingAddressLine =
+          errMsg2.includes('address_line1') &&
+          (errMsg2.includes('does not exist') || errMsg2.includes('schema cache'));
+
+        if (error && missingAddressLine) {
+          // Final fallback: single `address` column with newlines
+          const payload3 = { ...payload };
+          delete payload3.address1;
+          delete payload3.address2;
+          payload3.address = [bizAddress1.trim(), bizAddress2.trim()].filter(Boolean).join('\n') || null;
+          const res3 = await attempt(payload3);
+          error = res3.error;
+        }
+      }
 
       if (error) {
         const msg = error.message || 'Could not save business profile.';

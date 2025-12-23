@@ -7,8 +7,12 @@ alter table if exists public.business
   add column if not exists phone text,
   add column if not exists website text,
   add column if not exists logo_url text,
+  -- address columns (support both new + legacy naming)
+  add column if not exists address text,
   add column if not exists address1 text,
   add column if not exists address2 text,
+  add column if not exists address_line1 text,
+  add column if not exists address_line2 text,
   add column if not exists city text,
   add column if not exists state text,
   add column if not exists zip text;

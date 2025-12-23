@@ -52,6 +52,10 @@ type BusinessInfo = {
   logo_url?: string | null;
   address1?: string | null;
   address2?: string | null;
+  // legacy fallbacks
+  address?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
   city?: string | null;
   state?: string | null;
   zip?: string | null;
@@ -128,8 +132,19 @@ function money(n: any) {
 
 function formatAddr(b: BusinessInfo | null) {
   const lines: string[] = [];
-  if (b?.address1) lines.push(b.address1);
-  if (b?.address2) lines.push(b.address2);
+  const legacy =
+    b?.address && String(b.address).trim()
+      ? String(b.address)
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+  const a1 = b?.address1 ?? b?.address_line1 ?? legacy[0] ?? null;
+  const a2 = b?.address2 ?? b?.address_line2 ?? legacy.slice(1).join(' ') ?? null;
+
+  if (a1) lines.push(String(a1));
+  if (a2) lines.push(String(a2));
   const cityLine = [b?.city, b?.state, b?.zip].filter(Boolean).join(', ');
   if (cityLine) lines.push(cityLine);
   return lines;

@@ -58,9 +58,8 @@ async function getSessionUser(): Promise<{ id: string | null; email: string | nu
 async function fetchBusinessForOwner(userId: string): Promise<BusinessRow | null> {
   const res = await supabase
     .from('business')
-    .select(
-      'id, name, owner_id, subscription_status, email, phone, website, logo_url, address1, address2, city, state, zip'
-    )
+    // Use '*' so older DBs missing newer columns (e.g. address1) don't throw.
+    .select('*')
     .eq('owner_id', userId)
     .order('created_at', { ascending: true })
     .limit(1)
@@ -76,9 +75,7 @@ async function ensureBusinessForOwner(userId: string): Promise<BusinessRow | nul
   const created = await supabase
     .from('business')
     .insert({ owner_id: userId, name: 'My Business' } as any)
-    .select(
-      'id, name, owner_id, subscription_status, email, phone, website, logo_url, address1, address2, city, state, zip'
-    )
+    .select('*')
     .single();
 
   if (created.error) throw created.error;
