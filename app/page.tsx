@@ -31,16 +31,17 @@ export default function LandingPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 scroll-smooth">
+    <div className="min-h-screen bg-slate-950 text-slate-50 scroll-smooth antialiased">
       {/* Subtle background gradient */}
       <div className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-24 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500/20 via-sky-500/15 to-blue-500/20 blur-3xl" />
+        <div className="absolute -top-24 left-1/2 h-[520px] w-[980px] -translate-x-1/2 rounded-full bg-gradient-to-r from-emerald-500/18 via-sky-500/14 to-blue-500/18 blur-3xl" />
+        <div className="absolute top-[320px] left-[-220px] h-[520px] w-[520px] rounded-full bg-sky-500/10 blur-3xl" />
         <div className="absolute bottom-[-240px] right-[-200px] h-[520px] w-[520px] rounded-full bg-emerald-500/10 blur-3xl" />
       </div>
 
       {/* Navbar */}
       <header className="sticky top-0 z-50 border-b border-slate-800/70 bg-slate-950/70 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Image
               src="/revguard-r.svg"
@@ -96,7 +97,7 @@ export default function LandingPage() {
             mobileOpen ? 'max-h-80 opacity-100' : 'max-h-0 opacity-0'
           }`}
         >
-          <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col gap-3">
+          <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3">
             <div className="flex flex-col gap-2 text-sm text-slate-300">
               {nav.map((n) => (
                 <a
@@ -129,52 +130,53 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="max-w-6xl mx-auto px-4 pt-14 pb-10">
-        <div className="grid gap-10 lg:grid-cols-2 lg:items-center">
+      <section className="max-w-6xl mx-auto px-6 pt-24 pb-20">
+        <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-200">
               <Sparkles className="h-4 w-4" />
               AI Accounting for modern operators
             </div>
 
-            <h1 className="mt-5 text-4xl font-semibold tracking-tight leading-[1.08]">
-              Close your books faster. Catch revenue leaks early.
+            <h1 className="mt-6 text-5xl sm:text-6xl font-semibold tracking-tight leading-[1.04]">
+              Close faster. Catch revenue leaks.
               <span className="text-emerald-300"> Stay audit-ready.</span>
             </h1>
-            <p className="mt-4 text-base text-slate-300 leading-relaxed">
+            <p className="mt-5 text-lg text-slate-300 leading-relaxed max-w-xl">
               RevGuard is a premium, AI-assisted accounting dashboard that turns messy
               transactions into clean reporting—so you always know what changed, why,
               and what to do next.
             </p>
 
-            <div className="mt-7 flex flex-col sm:flex-row gap-3">
+            <div className="mt-8 flex flex-col sm:flex-row gap-3">
               <Link
                 href="/signup"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/10"
               >
                 Start free <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
                 href="/login"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-900/70"
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-6 py-3.5 text-sm font-semibold text-slate-200 hover:bg-slate-900/70"
               >
                 Log in <ChevronRight className="h-4 w-4" />
               </Link>
             </div>
 
-            <div className="mt-8 grid gap-3 sm:grid-cols-3 text-xs text-slate-300">
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-4 py-3">
-                <Timer className="h-4 w-4 text-emerald-300" />
-                <span>Fast, daily insights</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-4 py-3">
-                <BarChart3 className="h-4 w-4 text-sky-300" />
-                <span>Clean reporting</span>
-              </div>
-              <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-4 py-3">
-                <ShieldCheck className="h-4 w-4 text-blue-300" />
-                <span>Security-first</span>
-              </div>
+            <div className="mt-10 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+              {[
+                { icon: <Timer className="h-4 w-4 text-emerald-300" />, label: 'Fast, daily insights' },
+                { icon: <BarChart3 className="h-4 w-4 text-sky-300" />, label: 'Clean reporting' },
+                { icon: <ShieldCheck className="h-4 w-4 text-blue-300" />, label: 'Security-first' },
+              ].map((t) => (
+                <div
+                  key={t.label}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2"
+                >
+                  {t.icon}
+                  <span>{t.label}</span>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -257,10 +259,10 @@ export default function LandingPage() {
       </section>
 
       {/* Features */}
-      <section id="features" className="max-w-6xl mx-auto px-4 py-14">
+      <section id="features" className="max-w-6xl mx-auto px-6 py-20">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Features</h2>
-          <p className="mt-2 text-sm text-slate-400">
+          <h2 className="text-3xl font-semibold tracking-tight">Features</h2>
+          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
             Everything you need for clean numbers, fast decisions, and confident reporting.
           </p>
         </div>
@@ -300,15 +302,15 @@ export default function LandingPage() {
           ].map((f) => (
             <div
               key={f.title}
-              className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 shadow-sm hover:shadow-emerald-500/10 transition"
+              className="group rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm hover:shadow-emerald-500/10 transition"
             >
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950/60">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950/60 shadow-sm">
                   {f.icon}
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-slate-100">{f.title}</div>
-                  <div className="mt-1 text-sm text-slate-400">{f.desc}</div>
+                  <div className="mt-2 text-sm text-slate-400 leading-relaxed">{f.desc}</div>
                 </div>
               </div>
             </div>
@@ -317,10 +319,10 @@ export default function LandingPage() {
       </section>
 
       {/* How it works */}
-      <section id="how" className="max-w-6xl mx-auto px-4 py-14">
+      <section id="how" className="max-w-6xl mx-auto px-6 py-20">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">How it works</h2>
-          <p className="mt-2 text-sm text-slate-400">
+          <h2 className="text-3xl font-semibold tracking-tight">How it works</h2>
+          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
             Three steps to go from “messy ledger” to “clear actions.”
           </p>
         </div>
@@ -345,7 +347,7 @@ export default function LandingPage() {
           ].map((s) => (
             <div
               key={s.n}
-              className="rounded-3xl border border-slate-800 bg-slate-950/60 p-6"
+              className="rounded-3xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
             >
               <div className="flex items-center gap-3">
                 <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200">
@@ -360,12 +362,12 @@ export default function LandingPage() {
       </section>
 
       {/* Security */}
-      <section id="security" className="max-w-6xl mx-auto px-4 py-14">
-        <div className="rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-950/70 via-slate-950/40 to-emerald-950/30 p-7">
+      <section id="security" className="max-w-6xl mx-auto px-6 py-20">
+        <div className="rounded-3xl border border-slate-800/80 bg-gradient-to-br from-slate-950/70 via-slate-950/40 to-emerald-950/25 p-8 shadow-sm">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-semibold tracking-tight">Security</h2>
-              <p className="mt-2 text-sm text-slate-400">
+              <h2 className="text-3xl font-semibold tracking-tight">Security</h2>
+              <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
                 Built with least-privilege defaults and ownership checks.
               </p>
             </div>
@@ -390,9 +392,12 @@ export default function LandingPage() {
                 desc: 'Foreign keys cascade from auth user → business → child data.',
               },
             ].map((it) => (
-              <div key={it.title} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
+              <div
+                key={it.title}
+                className="rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
+              >
                 <div className="text-sm font-semibold text-slate-100">{it.title}</div>
-                <div className="mt-2 text-sm text-slate-400">{it.desc}</div>
+                <div className="mt-2 text-sm text-slate-400 leading-relaxed">{it.desc}</div>
               </div>
             ))}
           </div>
@@ -400,11 +405,11 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="max-w-6xl mx-auto px-4 py-14">
+      <section id="pricing" className="max-w-6xl mx-auto px-6 py-20">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Pricing</h2>
-            <p className="mt-2 text-sm text-slate-400">
+            <h2 className="text-3xl font-semibold tracking-tight">Pricing</h2>
+            <p className="mt-3 text-base text-slate-400 leading-relaxed">
               One plan. All features included.
             </p>
           </div>
@@ -412,7 +417,7 @@ export default function LandingPage() {
         </div>
 
         <div className="mt-8">
-          <div className="mx-auto w-full max-w-lg rounded-3xl border border-emerald-500/40 bg-emerald-500/10 p-6 shadow-lg shadow-emerald-500/15">
+          <div className="mx-auto w-full max-w-lg rounded-3xl border border-emerald-500/35 bg-emerald-500/10 p-6 shadow-lg shadow-emerald-500/12">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-slate-100">RevGuard Pro</div>
@@ -445,7 +450,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="mt-5 space-y-2 text-sm text-slate-300">
+            <div className="mt-6 space-y-2 text-sm text-slate-300">
               {[
                 'AI insights + premium reports',
                 'Cash overview, statements, and exports',
@@ -474,10 +479,10 @@ export default function LandingPage() {
       </section>
 
       {/* FAQ */}
-      <section id="faq" className="max-w-6xl mx-auto px-4 py-14">
+      <section id="faq" className="max-w-6xl mx-auto px-6 py-20">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">FAQ</h2>
-          <p className="mt-2 text-sm text-slate-400">
+          <h2 className="text-3xl font-semibold tracking-tight">FAQ</h2>
+          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
             Quick answers to common questions.
           </p>
         </div>
@@ -499,7 +504,7 @@ export default function LandingPage() {
           ].map((item) => (
             <details
               key={item.q}
-              className="group rounded-2xl border border-slate-800 bg-slate-950/60 p-5"
+              className="group rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
             >
               <summary className="cursor-pointer list-none select-none flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-slate-100">{item.q}</span>
@@ -512,14 +517,14 @@ export default function LandingPage() {
       </section>
 
       {/* Final CTA */}
-      <section className="max-w-6xl mx-auto px-4 pb-16">
-        <div className="rounded-3xl border border-slate-800 bg-gradient-to-br from-emerald-500/15 via-slate-950/40 to-blue-500/10 p-8">
+      <section className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="rounded-3xl border border-slate-800/80 bg-gradient-to-br from-emerald-500/14 via-slate-950/40 to-blue-500/10 p-10 shadow-sm">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-2xl font-semibold tracking-tight">
                 Ready to run your numbers with confidence?
               </h3>
-              <p className="mt-2 text-sm text-slate-300">
+              <p className="mt-3 text-base text-slate-300 leading-relaxed max-w-xl">
                 Create your account and get a premium dashboard in minutes.
               </p>
             </div>
@@ -539,6 +544,25 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
+
+        <footer className="mt-10 flex flex-col gap-3 border-t border-slate-800/70 pt-8 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-slate-300">
+            <Image src="/revguard-r.svg" alt="RevGuard" width={20} height={20} className="h-5 w-5" />
+            <span className="font-semibold text-slate-200">RevGuard</span>
+            <span className="text-slate-500">© {new Date().getFullYear()}</span>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">
+            <Link href="/pricing" className="hover:text-slate-200">
+              Pricing
+            </Link>
+            <Link href="/login" className="hover:text-slate-200">
+              Log in
+            </Link>
+            <Link href="/signup" className="hover:text-slate-200">
+              Sign up
+            </Link>
+          </div>
+        </footer>
       </section>
     </div>
   );
