@@ -23,7 +23,7 @@ import { CashFlowCard } from '../../components/CashFlowCard';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
-import { ArrowDownRight, ArrowUpRight, Droplet, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -956,7 +956,17 @@ export default function DashboardHome() {
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
-  const { todayKey, yesterdayKey, netToday, netYesterday, healthScore, moneyMoves, lowData } =
+  const {
+    todayKey,
+    yesterdayKey,
+    netToday,
+    netYesterday,
+    healthScore,
+    healthState,
+    healthReason,
+    moneyMoves,
+    lowData,
+  } =
     useMemo(() => {
       const now = new Date();
       const tKey = dayKey(now);
@@ -1005,6 +1015,21 @@ export default function DashboardHome() {
       const low = !hasAnyRecent || transactions.length < 3;
       const score = low ? 18 : Math.max(0, Math.min(100, 50 + activityScore + marginScore));
 
+      const state = low
+        ? 'Needs attention'
+        : score >= 70
+        ? 'Healthy'
+        : score >= 45
+        ? 'Stable'
+        : 'Needs attention';
+
+      const reason = (() => {
+        if (low) return 'Not enough recent activity to score health reliably.';
+        if (state === 'Healthy') return 'Consistent activity with solid margins recently.';
+        if (state === 'Stable') return 'Mixed activity or margins — keep an eye on spend.';
+        return 'Low activity or margin pressure in the last 30 days.';
+      })();
+
       // Today's Money Moves (1–3 bullets) from TODAY only.
       const byCategory: Record<string, { net: number; in: number; out: number }> = {};
       let biggestAbs: Transaction | null = null;
@@ -1026,13 +1051,13 @@ export default function DashboardHome() {
         .sort((a, b) => b[1].out - a[1].out)[0];
 
       const bullets: string[] = [];
-      if (topIn) bullets.push(`In: ${formatCurrency(topIn[1].in)} • ${topIn[0]}`);
-      if (topOut) bullets.push(`Out: ${formatCurrency(topOut[1].out)} • ${topOut[0]}`);
+      if (topIn) bullets.push(`Money in: ${formatCurrency(topIn[1].in)} from ${topIn[0]}`);
+      if (topOut) bullets.push(`Money out: ${formatCurrency(topOut[1].out)} to ${topOut[0]}`);
       if (biggestAbs && bullets.length < 3) {
         const label = String((biggestAbs as any)?.description ?? '').trim();
         const short = label.length > 42 ? `${label.slice(0, 42)}…` : label;
         bullets.push(
-          `Largest: ${formatCurrency(Number((biggestAbs as any)?.amount) || 0)}${
+          `Biggest item: ${formatCurrency(Number((biggestAbs as any)?.amount) || 0)}${
             short ? ` • ${short}` : ''
           }`
         );
@@ -1044,63 +1069,54 @@ export default function DashboardHome() {
         netToday: todayNet,
         netYesterday: yesterdayNet,
         healthScore: score,
+        healthState: state,
+        healthReason: reason,
         moneyMoves: bullets.slice(0, 3),
         lowData: low,
       };
     }, [transactions]);
 
-  const [waterStreak, setWaterStreak] = useState<number>(0);
-  const [lastWateredKey, setLastWateredKey] = useState<string | null>(null);
-  const [wateredJustNow, setWateredJustNow] = useState(false);
+  const [lastReviewedKey, setLastReviewedKey] = useState<string | null>(null);
+  const [reviewedJustNow, setReviewedJustNow] = useState(false);
 
   useEffect(() => {
-    setWateredJustNow(false);
+    setReviewedJustNow(false);
     if (!selectedBusinessId) {
-      setWaterStreak(0);
-      setLastWateredKey(null);
+      setLastReviewedKey(null);
       return;
     }
     try {
-      const raw = localStorage.getItem(`revguard:water:${selectedBusinessId}`);
+      const raw = localStorage.getItem(`revguard:daily_review:${selectedBusinessId}`);
       if (!raw) {
-        setWaterStreak(0);
-        setLastWateredKey(null);
+        setLastReviewedKey(null);
         return;
       }
-      const parsed = JSON.parse(raw) as { streak?: number; lastDayKey?: string | null };
-      setWaterStreak(Number(parsed?.streak) || 0);
-      setLastWateredKey(typeof parsed?.lastDayKey === 'string' ? parsed.lastDayKey : null);
+      const parsed = JSON.parse(raw) as { lastDayKey?: string | null };
+      setLastReviewedKey(typeof parsed?.lastDayKey === 'string' ? parsed.lastDayKey : null);
     } catch {
-      setWaterStreak(0);
-      setLastWateredKey(null);
+      setLastReviewedKey(null);
     }
   }, [selectedBusinessId]);
 
-  function handleWaterBusiness() {
+  function handleMarkReviewed() {
     if (!selectedBusinessId) return;
-    setWateredJustNow(false);
-    const already = lastWateredKey === todayKey;
+    setReviewedJustNow(false);
+    const already = lastReviewedKey === todayKey;
     if (already) return;
 
-    const next =
-      lastWateredKey === yesterdayKey
-        ? Math.max(1, (waterStreak || 0) + 1)
-        : 1;
-
-    setWaterStreak(next);
-    setLastWateredKey(todayKey);
-    setWateredJustNow(true);
+    setLastReviewedKey(todayKey);
+    setReviewedJustNow(true);
 
     try {
       localStorage.setItem(
-        `revguard:water:${selectedBusinessId}`,
-        JSON.stringify({ streak: next, lastDayKey: todayKey })
+        `revguard:daily_review:${selectedBusinessId}`,
+        JSON.stringify({ lastDayKey: todayKey })
       );
     } catch {
       // ignore
     }
     try {
-      window.setTimeout(() => setWateredJustNow(false), 1400);
+      window.setTimeout(() => setReviewedJustNow(false), 1400);
     } catch {
       // ignore
     }
@@ -2458,20 +2474,31 @@ export default function DashboardHome() {
         {/* Daily Growth (minimal) */}
         <section className="mb-8">
           <div className="grid gap-6 lg:grid-cols-2 items-stretch">
-            {/* Business Health Meter */}
+            {/* Business Health */}
             <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
                     Business health
                   </div>
-                  <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
-                    Daily pulse
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="text-lg font-semibold text-slate-50 tracking-tight">
+                      {healthState}
+                    </div>
+                    <div
+                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] ${
+                        healthState === 'Healthy'
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : healthState === 'Stable'
+                          ? 'border-sky-500/30 bg-sky-500/10 text-sky-200'
+                          : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+                      }`}
+                    >
+                      Rolling
+                    </div>
                   </div>
-                  <div className="mt-1 text-sm text-slate-300 leading-relaxed">
-                    {lowData
-                      ? 'Add transactions to see your daily pulse.'
-                      : 'A quick read based on recent activity + margins.'}
+                  <div className="mt-2 text-sm text-slate-300 leading-relaxed">
+                    {lowData ? 'Add a few transactions to unlock health.' : healthReason}
                   </div>
                 </div>
 
@@ -2515,85 +2542,70 @@ export default function DashboardHome() {
                     );
                   })()}
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <div className="text-lg font-semibold text-slate-50 leading-none">
-                      {lowData ? '—' : `${Math.round(healthScore)}%`}
+                    <div className="text-[11px] font-semibold text-slate-200 leading-none text-center px-1">
+                      {lowData ? '—' : healthState}
                     </div>
-                    <div className="mt-1 text-[10px] text-slate-400">today</div>
                   </div>
                 </div>
               </div>
 
               <div className="mt-5 flex items-center justify-between">
                 <div className="text-xs text-slate-300">
-                  {selectedBusinessId ? (
-                    <span className="text-slate-400">
-                      Compared to yesterday:{' '}
-                      <span className="text-slate-200 font-semibold">
-                        {formatCurrency(netToday - netYesterday)}
-                      </span>
-                    </span>
+                  {!selectedBusinessId ? (
+                    <span className="text-slate-400">Sign in to see daily changes.</span>
                   ) : (
-                    <span className="text-slate-400">Sign in to see your daily pulse.</span>
+                    (() => {
+                      const delta = netToday - netYesterday;
+                      const dir = delta >= 0 ? 'Up' : 'Down';
+                      return (
+                        <span className="text-slate-400">
+                          {dir}{' '}
+                          <span className="text-slate-200 font-semibold">
+                            {formatCurrency(Math.abs(delta))}
+                          </span>{' '}
+                          vs yesterday
+                        </span>
+                      );
+                    })()
                   )}
-                </div>
-                <div
-                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] ${
-                    netToday >= netYesterday
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                      : 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                  }`}
-                >
-                  {netToday >= netYesterday ? (
-                    <ArrowUpRight className="h-3.5 w-3.5" />
-                  ) : (
-                    <ArrowDownRight className="h-3.5 w-3.5" />
-                  )}
-                  <span>{netToday >= netYesterday ? 'Up today' : 'Down today'}</span>
                 </div>
               </div>
             </div>
 
-            {/* Streak */}
+            {/* Daily Review */}
             <div className="rg-enter rg-d1 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                    Daily streak
+                    Daily Review
                   </div>
                   <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
-                    Water the business
+                    Daily Review
                   </div>
                   <div className="mt-1 text-sm text-slate-300 leading-relaxed">
-                    One tap to stay consistent—no extra setup.
+                    Confirm you reviewed today’s activity.
                   </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-semibold text-slate-50 leading-none">
-                    {selectedBusinessId ? waterStreak : '—'}
-                  </div>
-                  <div className="mt-1 text-[11px] text-slate-400">day streak</div>
                 </div>
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <button
                   type="button"
-                  onClick={handleWaterBusiness}
-                  disabled={!selectedBusinessId || lastWateredKey === todayKey}
+                  onClick={handleMarkReviewed}
+                  disabled={!selectedBusinessId || lastReviewedKey === todayKey}
                   className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Droplet className="h-4 w-4" />
-                  {lastWateredKey === todayKey ? 'Watered today' : wateredJustNow ? 'Watered ✓' : 'Water today'}
+                  {lastReviewedKey === todayKey
+                    ? 'Reviewed today ✓'
+                    : reviewedJustNow
+                    ? 'Reviewed today ✓'
+                    : 'Mark reviewed'}
                 </button>
                 <div className="text-[11px] text-slate-400">
                   {selectedBusinessId ? (
-                    lastWateredKey === todayKey ? (
-                      <span>Keep it going tomorrow.</span>
-                    ) : (
-                      <span>Tap once per day.</span>
-                    )
+                    lastReviewedKey === todayKey ? <span>All set.</span> : <span>One tap per day.</span>
                   ) : (
-                    <span>Sign in to track your streak.</span>
+                    <span>Sign in to mark reviewed.</span>
                   )}
                 </div>
               </div>
@@ -2612,7 +2624,7 @@ export default function DashboardHome() {
                   Today’s Money Moves
                 </div>
                 <div className="mt-1 text-sm text-slate-300 leading-relaxed">
-                  {selectedBusinessId ? 'A quick snapshot from today’s activity.' : 'Sign in to see today’s moves.'}
+                  Here’s what changed today that matters.
                 </div>
               </div>
 
