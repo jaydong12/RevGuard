@@ -102,8 +102,12 @@ export default function TransactionsPage() {
 
   // Simple client-side search by description.
   const [search, setSearch] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+
+  // Date filter: store ISO internally (YYYY-MM-DD) for filtering, but allow typing MM/DD/YYYY.
+  const [dateFromIso, setDateFromIso] = useState('');
+  const [dateToIso, setDateToIso] = useState('');
+  const [dateFromDisplay, setDateFromDisplay] = useState('');
+  const [dateToDisplay, setDateToDisplay] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
@@ -334,10 +338,43 @@ export default function TransactionsPage() {
     return Array.from(set.values()).sort((a, b) => a.localeCompare(b));
   }, [transactions]);
 
+  function maskUsDate(input: string): string {
+    const digits = input.replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  }
+
+  function displayToIso(display: string): string | null {
+    const v = display.trim();
+    if (!v) return '';
+    if (!/^\d{2}\/\d{2}\/\d{4}$/.test(v)) return null;
+    const [mmS, ddS, yyyyS] = v.split('/');
+    const mm = Number(mmS);
+    const dd = Number(ddS);
+    const yyyy = Number(yyyyS);
+    if (!Number.isFinite(mm) || !Number.isFinite(dd) || !Number.isFinite(yyyy)) return null;
+    if (mm < 1 || mm > 12) return null;
+    if (dd < 1 || dd > 31) return null;
+    if (yyyy < 1900 || yyyy > 2200) return null;
+    const dt = new Date(yyyy, mm - 1, dd);
+    if (
+      dt.getFullYear() !== yyyy ||
+      dt.getMonth() !== mm - 1 ||
+      dt.getDate() !== dd
+    ) {
+      return null;
+    }
+    const iso = `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    return iso;
+  }
+
   const hasActiveFilters =
     Boolean(search.trim()) ||
-    Boolean(dateFrom) ||
-    Boolean(dateTo) ||
+    Boolean(dateFromIso) ||
+    Boolean(dateToIso) ||
+    Boolean(dateFromDisplay.trim()) ||
+    Boolean(dateToDisplay.trim()) ||
     Boolean(flowFilter !== 'all') ||
     Boolean(categoryFilter.trim()) ||
     Boolean(amountMin.trim()) ||
@@ -345,8 +382,10 @@ export default function TransactionsPage() {
 
   function clearFilters() {
     setSearch('');
-    setDateFrom('');
-    setDateTo('');
+    setDateFromIso('');
+    setDateToIso('');
+    setDateFromDisplay('');
+    setDateToDisplay('');
     setFlowFilter('all');
     setCategoryFilter('');
     setAmountMin('');
@@ -368,8 +407,8 @@ export default function TransactionsPage() {
       !categoryFilter.trim() ||
       String(tx.category ?? '').trim().toLowerCase() === categoryFilter.trim().toLowerCase();
 
-    const matchesDateFrom = !dateFrom || (tx.date ?? '') >= dateFrom;
-    const matchesDateTo = !dateTo || (tx.date ?? '') <= dateTo;
+    const matchesDateFrom = !dateFromIso || (tx.date ?? '') >= dateFromIso;
+    const matchesDateTo = !dateToIso || (tx.date ?? '') <= dateToIso;
 
     const absAmt = Math.abs(Number(tx.amount) || 0);
     const min = Number(amountMin);
@@ -490,54 +529,66 @@ export default function TransactionsPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-12">
+            <div className="flex flex-wrap gap-3 items-center">
               {/* Search */}
-              <div className="md:col-span-4">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={search}
-                    onChange={(e) => {
-                      setSearch(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    placeholder="Search description or category…"
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-9 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  />
-                </div>
-              </div>
-
-              {/* Date range */}
-              <div className="md:col-span-3 grid grid-cols-2 gap-2">
-                <div className="relative">
-                  <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => {
-                      setDateFrom(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                    aria-label="From date"
-                  />
-                </div>
+              <div className="relative flex-1 min-w-[240px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                 <input
-                  type="date"
-                  value={dateTo}
+                  type="text"
+                  value={search}
                   onChange={(e) => {
-                    setDateTo(e.target.value);
+                    setSearch(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  aria-label="To date"
+                  placeholder="Search description or category…"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-9 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 />
               </div>
 
+              {/* Date range */}
+              <div className="flex items-center gap-2">
+                <div className="relative w-[140px]">
+                  <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="MM/DD/YYYY"
+                    value={dateFromDisplay}
+                    onChange={(e) => {
+                      const next = maskUsDate(e.target.value);
+                      setDateFromDisplay(next);
+                      const iso = displayToIso(next);
+                      setDateFromIso(iso === null ? '' : iso);
+                      setCurrentPage(1);
+                    }}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 tabular-nums"
+                    aria-label="From date"
+                  />
+                </div>
+                <div className="w-[140px]">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="MM/DD/YYYY"
+                    value={dateToDisplay}
+                    onChange={(e) => {
+                      const next = maskUsDate(e.target.value);
+                      setDateToDisplay(next);
+                      const iso = displayToIso(next);
+                      setDateToIso(iso === null ? '' : iso);
+                      setCurrentPage(1);
+                    }}
+                    className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 tabular-nums"
+                    aria-label="To date"
+                  />
+                </div>
+              </div>
+
               {/* Income/Expense */}
-              <div className="md:col-span-2">
-                <div className="grid grid-cols-3 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px]">
+              <div className="w-[180px]">
+                <div className="h-10 grid grid-cols-3 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px]">
                   {(['all', 'income', 'expenses'] as FlowFilter[]).map((f) => {
                     const label = f === 'all' ? 'All' : f === 'income' ? 'Income' : 'Expense';
                     const active = flowFilter === f;
@@ -549,10 +600,8 @@ export default function TransactionsPage() {
                           setFlowFilter(f);
                           setCurrentPage(1);
                         }}
-                        className={`rounded-lg py-1.5 font-semibold transition ${
-                          active
-                            ? 'bg-white/10 text-slate-50'
-                            : 'text-slate-300 hover:bg-white/5'
+                        className={`rounded-lg font-semibold transition ${
+                          active ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
                         }`}
                       >
                         {label}
@@ -563,14 +612,14 @@ export default function TransactionsPage() {
               </div>
 
               {/* Category */}
-              <div className="md:col-span-2">
+              <div className="w-[220px]">
                 <select
                   value={categoryFilter}
                   onChange={(e) => {
                     setCategoryFilter(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 >
                   <option value="">All categories</option>
                   {categoryOptions.map((c) => (
@@ -582,7 +631,7 @@ export default function TransactionsPage() {
               </div>
 
               {/* Amount range */}
-              <div className="md:col-span-1 grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-2">
                 <input
                   type="number"
                   inputMode="decimal"
@@ -592,7 +641,7 @@ export default function TransactionsPage() {
                     setAmountMin(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  className="h-10 w-[96px] rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 />
                 <input
                   type="number"
@@ -603,7 +652,7 @@ export default function TransactionsPage() {
                     setAmountMax(e.target.value);
                     setCurrentPage(1);
                   }}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  className="h-10 w-[96px] rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                 />
               </div>
             </div>
