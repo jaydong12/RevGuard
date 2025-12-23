@@ -3,6 +3,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../utils/supabaseClient';
+import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
+import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone } from 'lucide-react';
 
 type ProfileRow = {
   id: string;
@@ -30,6 +32,24 @@ export default function SettingsPage() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileExists, setProfileExists] = useState<boolean>(false);
+
+  // Business Profile state
+  const [bizLoading, setBizLoading] = useState(true);
+  const [bizSaving, setBizSaving] = useState(false);
+  const [bizError, setBizError] = useState<string | null>(null);
+  const [bizId, setBizId] = useState<string | null>(null);
+
+  // Business Profile form state
+  const [bizName, setBizName] = useState('');
+  const [bizEmail, setBizEmail] = useState('');
+  const [bizPhone, setBizPhone] = useState('');
+  const [bizWebsite, setBizWebsite] = useState('');
+  const [bizLogoUrl, setBizLogoUrl] = useState('');
+  const [bizAddress1, setBizAddress1] = useState('');
+  const [bizAddress2, setBizAddress2] = useState('');
+  const [bizCity, setBizCity] = useState('');
+  const [bizState, setBizState] = useState('');
+  const [bizZip, setBizZip] = useState('');
 
   // Profile form state
   const [fullName, setFullName] = useState('');
@@ -68,7 +88,46 @@ export default function SettingsPage() {
 
         if (!userId) {
           setProfileLoading(false);
+          setBizLoading(false);
           return;
+        }
+
+        // Load business profile (get-or-create + fetch full row)
+        setBizLoading(true);
+        setBizError(null);
+        try {
+          const ensuredBizId = await getOrCreateBusinessId(supabase);
+          if (!mounted) return;
+          setBizId(ensuredBizId);
+
+          const { data: bizRow, error: bizErr } = await supabase
+            .from('business')
+            .select('*')
+            .eq('id', ensuredBizId)
+            .maybeSingle();
+
+          if (!mounted) return;
+
+          if (bizErr) {
+            setBizError(bizErr.message || 'Could not load business profile.');
+          } else {
+            const b: any = bizRow ?? null;
+            setBizName(b?.name ?? '');
+            setBizEmail(b?.email ?? '');
+            setBizPhone(b?.phone ?? '');
+            setBizWebsite(b?.website ?? '');
+            setBizLogoUrl(b?.logo_url ?? '');
+            setBizAddress1(b?.address1 ?? '');
+            setBizAddress2(b?.address2 ?? '');
+            setBizCity(b?.city ?? '');
+            setBizState(b?.state ?? '');
+            setBizZip(b?.zip ?? '');
+          }
+        } catch (e: any) {
+          if (!mounted) return;
+          setBizError(e?.message || 'Could not load business profile.');
+        } finally {
+          if (mounted) setBizLoading(false);
         }
 
         setProfileLoading(true);
@@ -105,6 +164,7 @@ export default function SettingsPage() {
       } catch {
         if (!mounted) return;
         setProfileLoading(false);
+        setBizLoading(false);
       }
     })();
 
@@ -207,6 +267,66 @@ export default function SettingsPage() {
       showToast('success', 'Profile saved.');
     } finally {
       setProfileSaving(false);
+    }
+  }
+
+  async function handleSaveBusinessProfile() {
+    setBizError(null);
+
+    if (!sessionUserId) {
+      showToast('error', 'Please sign in to update your business profile.');
+      return;
+    }
+
+    if (!bizName.trim()) {
+      const msg = 'Business name is required.';
+      setBizError(msg);
+      showToast('error', msg);
+      return;
+    }
+
+    if (!bizEmail.trim() && !bizPhone.trim()) {
+      const msg = 'Add at least an email or phone number.';
+      setBizError(msg);
+      showToast('error', msg);
+      return;
+    }
+
+    setBizSaving(true);
+    try {
+      const ensuredBizId = bizId ?? (await getOrCreateBusinessId(supabase));
+      setBizId(ensuredBizId);
+
+      const payload: any = {
+        owner_id: sessionUserId,
+        name: bizName.trim(),
+        email: bizEmail.trim() || null,
+        phone: bizPhone.trim() || null,
+        website: bizWebsite.trim() || null,
+        logo_url: bizLogoUrl.trim() || null,
+        address1: bizAddress1.trim() || null,
+        address2: bizAddress2.trim() || null,
+        city: bizCity.trim() || null,
+        state: bizState.trim() || null,
+        zip: bizZip.trim() || null,
+      };
+
+      const { error } = await supabase
+        .from('business')
+        .update(payload)
+        .eq('id', ensuredBizId)
+        .eq('owner_id', sessionUserId);
+
+      if (error) {
+        const msg = error.message || 'Could not save business profile.';
+        setBizError(msg);
+        showToast('error', msg);
+        return;
+      }
+
+      showToast('success', 'Business profile saved.');
+    } finally {
+      setBizSaving(false);
     }
   }
 
@@ -346,6 +466,188 @@ export default function SettingsPage() {
           </p>
         </div>
       </header>
+
+      {/* Business Profile */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/25">
+              <Building2 className="h-5 w-5" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Business Profile</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Used on invoices and client-facing documents. Required: name + (email or phone).
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSaveBusinessProfile}
+            disabled={!sessionUserId || bizLoading || bizSaving}
+            className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {bizSaving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+
+        {!sessionUserId && (
+          <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            Please sign in to view and edit your business profile.
+          </div>
+        )}
+
+        {bizError && (
+          <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            {bizError}
+          </div>
+        )}
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">Business name *</label>
+            <input
+              value={bizName}
+              onChange={(e) => setBizName(e.target.value)}
+              placeholder="My Business"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2">
+                <Mail className="h-4 w-4 text-slate-500" />
+                Email
+              </span>
+            </label>
+            <input
+              value={bizEmail}
+              onChange={(e) => setBizEmail(e.target.value)}
+              placeholder="billing@mybusiness.com"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2">
+                <Phone className="h-4 w-4 text-slate-500" />
+                Phone
+              </span>
+            </label>
+            <input
+              value={bizPhone}
+              onChange={(e) => setBizPhone(e.target.value)}
+              placeholder="(555) 555-5555"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2">
+                <Globe className="h-4 w-4 text-slate-500" />
+                Website
+              </span>
+            </label>
+            <input
+              value={bizWebsite}
+              onChange={(e) => setBizWebsite(e.target.value)}
+              placeholder="https://mybusiness.com"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1 sm:col-span-2">
+            <label className="block text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2">
+                <ImageIcon className="h-4 w-4 text-slate-500" />
+                Logo URL
+              </span>
+            </label>
+            <input
+              value={bizLogoUrl}
+              onChange={(e) => setBizLogoUrl(e.target.value)}
+              placeholder="https://.../logo.png"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1 sm:col-span-2">
+            <label className="block text-[11px] text-slate-400">
+              <span className="inline-flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-slate-500" />
+                Address line 1
+              </span>
+            </label>
+            <input
+              value={bizAddress1}
+              onChange={(e) => setBizAddress1(e.target.value)}
+              placeholder="123 Main St"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1 sm:col-span-2">
+            <label className="block text-[11px] text-slate-400">Address line 2</label>
+            <input
+              value={bizAddress2}
+              onChange={(e) => setBizAddress2(e.target.value)}
+              placeholder="Suite 200"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">City</label>
+            <input
+              value={bizCity}
+              onChange={(e) => setBizCity(e.target.value)}
+              placeholder="Austin"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">State</label>
+            <input
+              value={bizState}
+              onChange={(e) => setBizState(e.target.value)}
+              placeholder="TX"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400">ZIP</label>
+            <input
+              value={bizZip}
+              onChange={(e) => setBizZip(e.target.value)}
+              placeholder="78701"
+              disabled={!sessionUserId || bizLoading}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-[11px] text-slate-400"> </label>
+            <div className="text-[11px] text-slate-500">
+              {bizLoading ? 'Loading…' : bizId ? `Business ID: ${bizId}` : ''}
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* Profile */}
       <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">

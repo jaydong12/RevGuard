@@ -39,11 +39,13 @@ type BusinessInfo = {
   name?: string | null;
   email?: string | null;
   phone?: string | null;
-  address?: string | null;
+  website?: string | null;
+  logo_url?: string | null;
+  address1?: string | null;
+  address2?: string | null;
   city?: string | null;
   state?: string | null;
-  postal_code?: string | null;
-  country?: string | null;
+  zip?: string | null;
 };
 
 type Props = {
@@ -113,12 +115,13 @@ function safeDate(d: string | null) {
 function buildPrintHtml(biz: BusinessInfo | null, inv: InvoiceRow) {
   const name = biz?.name || 'My Business';
   const lines: string[] = [];
-  if (biz?.address) lines.push(biz.address);
-  const cityLine = [biz?.city, biz?.state, biz?.postal_code].filter(Boolean).join(', ');
+  if (biz?.address1) lines.push(biz.address1);
+  if (biz?.address2) lines.push(biz.address2);
+  const cityLine = [biz?.city, biz?.state, biz?.zip].filter(Boolean).join(', ');
   if (cityLine) lines.push(cityLine);
-  if (biz?.country) lines.push(biz.country);
 
   const contact = [biz?.email, biz?.phone].filter(Boolean).join(' • ');
+  const website = biz?.website ? String(biz.website) : '';
 
   const issue = inv.issue_date ? inv.issue_date : '—';
   const due = inv.due_date ? inv.due_date : '—';
@@ -128,6 +131,8 @@ function buildPrintHtml(biz: BusinessInfo | null, inv: InvoiceRow) {
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
+
+  const logo = biz?.logo_url ? String(biz.logo_url) : '';
 
   return `<!doctype html>
 <html>
@@ -154,8 +159,10 @@ function buildPrintHtml(biz: BusinessInfo | null, inv: InvoiceRow) {
 <body>
   <div class="top row">
     <div>
+      ${logo ? `<div style="margin-bottom:10px;"><img src="${esc(logo)}" alt="${esc(name)}" style="max-height:44px; max-width:240px; object-fit:contain;" /></div>` : ''}
       <p class="h1">${esc(name)}</p>
       ${contact ? `<div class="muted">${esc(contact)}</div>` : ''}
+      ${website ? `<div class="muted">${esc(website)}</div>` : ''}
       ${lines.length ? `<div class="muted">${lines.map(esc).join('<br/>')}</div>` : ''}
     </div>
     <div style="text-align:right;">
@@ -600,7 +607,9 @@ export default function InvoiceTab(_props: Props) {
   }
 
   const bizTitle = businessInfo?.name || 'My Business';
-  const bizMeta = [businessInfo?.email, businessInfo?.phone].filter(Boolean).join(' • ');
+  const bizMeta = [businessInfo?.email, businessInfo?.phone, businessInfo?.website]
+    .filter(Boolean)
+    .join(' • ');
 
   return (
     <div className="space-y-4">
@@ -633,9 +642,18 @@ export default function InvoiceTab(_props: Props) {
       <div className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-950/60 to-slate-900/40 p-5">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/25">
-              <FileText className="h-5 w-5" />
-            </div>
+            {businessInfo?.logo_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={businessInfo.logo_url}
+                alt={bizTitle}
+                className="h-11 w-11 rounded-2xl object-contain bg-white/5 ring-1 ring-slate-700"
+              />
+            ) : (
+              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/25">
+                <FileText className="h-5 w-5" />
+              </div>
+            )}
             <div>
               <div className="text-lg font-semibold text-slate-50">Invoices</div>
               <div className="text-xs text-slate-400">

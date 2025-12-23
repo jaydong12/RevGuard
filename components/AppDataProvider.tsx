@@ -9,6 +9,15 @@ type BusinessRow = {
   name: string | null;
   owner_id: string | null;
   subscription_status?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  logo_url?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
 };
 
 type ProfileRow = {
@@ -49,7 +58,9 @@ async function getSessionUser(): Promise<{ id: string | null; email: string | nu
 async function fetchBusinessForOwner(userId: string): Promise<BusinessRow | null> {
   const res = await supabase
     .from('business')
-    .select('id, name, owner_id, subscription_status')
+    .select(
+      'id, name, owner_id, subscription_status, email, phone, website, logo_url, address1, address2, city, state, zip'
+    )
     .eq('owner_id', userId)
     .order('created_at', { ascending: true })
     .limit(1)
@@ -65,7 +76,9 @@ async function ensureBusinessForOwner(userId: string): Promise<BusinessRow | nul
   const created = await supabase
     .from('business')
     .insert({ owner_id: userId, name: 'My Business' } as any)
-    .select('id, name, owner_id, subscription_status')
+    .select(
+      'id, name, owner_id, subscription_status, email, phone, website, logo_url, address1, address2, city, state, zip'
+    )
     .single();
 
   if (created.error) throw created.error;

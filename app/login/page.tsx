@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AuthCard } from '../../components/AuthCard';
 import { supabase } from '../../utils/supabaseClient';
+import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
@@ -58,6 +59,22 @@ function LoginInner() {
     return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
   }
 
+  async function businessProfileIncompleteForUser(userId: string): Promise<boolean> {
+    const bizId = await getOrCreateBusinessId(supabase);
+    const { data: biz, error } = await supabase
+      .from('business')
+      .select('id, name, email, phone')
+      .eq('id', bizId)
+      .maybeSingle();
+
+    if (error || !biz) return true;
+
+    const name = String((biz as any)?.name ?? '').trim();
+    const emailV = String((biz as any)?.email ?? '').trim();
+    const phoneV = String((biz as any)?.phone ?? '').trim();
+    return !name || (!emailV && !phoneV);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -86,24 +103,15 @@ function LoginInner() {
         return;
       }
 
-      // Ensure a business exists (DB trigger should do this, but keep a client fallback).
+      // Ensure business exists and route to Business Profile if incomplete.
       try {
-        const first = await supabase
-          .from('business')
-          .select('id')
-          .eq('owner_id', userId)
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        if (!first.data?.id) {
-          await supabase.from('business').insert({
-            owner_id: userId,
-            name: 'My Business',
-            subscription_status: 'inactive',
-          } as any);
+        const needsBizProfile = await businessProfileIncompleteForUser(userId);
+        if (needsBizProfile) {
+          router.replace('/settings');
+          return;
         }
       } catch {
-        // ignore
+        // ignore; fall through to paywall logic
       }
 
       const status = await getSubscriptionStatus(userId);
