@@ -4,6 +4,7 @@ import React from 'react';
 import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
+import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 
 function tryConsoleLog(...args: any[]) {
   try {
@@ -191,6 +192,53 @@ const CustomersSection: React.FC = () => {
     });
     setIsCreating(false);
     setSaving(false);
+  };
+
+  const handleDeleteCustomer = async (customer: Customer) => {
+    setError(null);
+
+    const ok = window.confirm(
+      `Delete customer "${customer.name}"? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setSaving(true);
+    try {
+      let businessIdToUse: string | null =
+        customer.business_id ?? selectedBusinessId ?? null;
+
+      if (!businessIdToUse) {
+        try {
+          businessIdToUse = await getOrCreateBusinessId(supabase);
+        } catch {
+          businessIdToUse = null;
+        }
+      }
+
+      if (!businessIdToUse) {
+        setError('Loading your business…');
+        return;
+      }
+
+      // Requirement: delete must include id + business_id
+      const { error: delErr } = await supabase
+        .from('customers')
+        .delete()
+        .eq('id', customer.id)
+        .eq('business_id', businessIdToUse);
+
+      if (delErr) {
+        tryConsoleLog('Error deleting customer', delErr);
+        setError(delErr.message || 'Could not delete customer.');
+        return;
+      }
+
+      await queryClient.invalidateQueries({
+        queryKey: ['customers', businessIdToUse],
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredCustomers = customers.filter((c) => {
@@ -422,30 +470,41 @@ const CustomersSection: React.FC = () => {
               )}
 
               <div className="mt-3 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingCustomer(c);
-                    setForm({
-                      name: c.name ?? '',
-                      company: c.company ?? '',
-                      email: c.email ?? '',
-                      phone: c.phone ?? '',
-                      billing_terms: c.billing_terms ?? 'Net 30',
-                      status: c.status ?? 'ACTIVE',
-                      notes: c.notes ?? '',
-                      balance:
-                        c.balance !== null && c.balance !== undefined
-                          ? String(c.balance)
-                          : '0',
-                      last_invoice_date: c.last_invoice_date ?? '',
-                    });
-                    setIsCreating(true);
-                  }}
-                  className="text-xs px-3 py-1 rounded-full border border-slate-600 text-slate-200 hover:bg-slate-800"
-                >
-                  Edit
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCustomer(c);
+                      setForm({
+                        name: c.name ?? '',
+                        company: c.company ?? '',
+                        email: c.email ?? '',
+                        phone: c.phone ?? '',
+                        billing_terms: c.billing_terms ?? 'Net 30',
+                        status: c.status ?? 'ACTIVE',
+                        notes: c.notes ?? '',
+                        balance:
+                          c.balance !== null && c.balance !== undefined
+                            ? String(c.balance)
+                            : '0',
+                        last_invoice_date: c.last_invoice_date ?? '',
+                      });
+                      setIsCreating(true);
+                    }}
+                    className="text-xs px-3 py-1 rounded-full border border-slate-600 text-slate-200 hover:bg-slate-800"
+                    disabled={saving}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteCustomer(c)}
+                    className="text-xs px-3 py-1 rounded-full border border-rose-500/40 text-rose-200 hover:bg-rose-500/10"
+                    disabled={saving}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             </div>
           );
