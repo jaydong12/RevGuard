@@ -20,6 +20,7 @@ import CashBarChart from '../../components/CashBarChart';
 import { IncomeStatementCard } from '../../components/IncomeStatementCard';
 import { BalanceSheetCard } from '../../components/BalanceSheetCard';
 import { CashFlowCard } from '../../components/CashFlowCard';
+import WeeklyOverviewChart from '../../components/WeeklyOverviewChart';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
@@ -2647,6 +2648,11 @@ export default function DashboardHome() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Weekly Overview */}
+          <div className="mt-6 rg-enter rg-d2">
+            <WeeklyOverviewChart transactions={transactions as any} showNetLine />
           </div>
 
           {/* AI Insights (Today) */}
