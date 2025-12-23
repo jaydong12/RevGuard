@@ -9,6 +9,9 @@ import {
   Plus,
   X,
   RefreshCw,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { supabase } from '../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../lib/getOrCreateBusinessId';
@@ -217,6 +220,20 @@ export default function InvoiceTab(_props: Props) {
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo | null>(null);
 
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState<20 | 50>(20);
+  const [pageHasMore, setPageHasMore] = useState(false);
+
+  const [search, setSearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | InvoiceStatus>('all');
+  const [createdFrom, setCreatedFrom] = useState(''); // YYYY-MM-DD
+  const [createdTo, setCreatedTo] = useState(''); // YYYY-MM-DD
+
+  // List expand/collapse + row expansion
+  const [listExpanded, setListExpanded] = useState(false); // compact by default
+  const [expandedRowId, setExpandedRowId] = useState<any | null>(null);
 
   // Edit mode
   const [editingId, setEditingId] = useState<any | null>(null);
@@ -239,14 +256,65 @@ export default function InvoiceTab(_props: Props) {
     return safeS + safeT;
   }, [subtotal, tax]);
 
-  async function refetchInvoices(bizId: string) {
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(search.trim()), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setPageIndex(0);
+  }, [businessId, pageSize, searchQuery, statusFilter, createdFrom, createdTo]);
+
+  // Close any expanded row when paging/filtering
+  useEffect(() => {
+    setExpandedRowId(null);
+  }, [pageIndex, pageSize, searchQuery, statusFilter, createdFrom, createdTo]);
+
+  function toggleRow(invId: any) {
+    setExpandedRowId((prev: any) => (String(prev) === String(invId) ? null : invId));
+  }
+
+  async function loadInvoicesPage(params: {
+    bizId: string;
+    pageIndex: number;
+    pageSize: number;
+    searchQuery: string;
+    statusFilter: 'all' | InvoiceStatus;
+    createdFrom: string;
+    createdTo: string;
+  }) {
     setLoadingList(true);
     try {
-      const { data, error: invErr } = await supabase
+      let q: any = supabase
         .from('invoices')
-        .select('*')
-        .eq('business_id', bizId)
+        .select('*', { count: 'exact' })
+        .eq('business_id', params.bizId)
         .order('created_at', { ascending: false });
+
+      if (params.statusFilter !== 'all') {
+        q = q.eq('status', params.statusFilter);
+      }
+
+      const raw = params.searchQuery.trim();
+      if (raw) {
+        // Supabase `.or()` filter is comma-separated; avoid commas in user input.
+        const cleaned = raw.replaceAll(',', ' ').slice(0, 64);
+        const pattern = `%${cleaned}%`;
+        q = q.or(`invoice_number.ilike.${pattern},client_name.ilike.${pattern}`);
+      }
+
+      if (params.createdFrom) {
+        q = q.gte('created_at', `${params.createdFrom}T00:00:00.000Z`);
+      }
+      if (params.createdTo) {
+        q = q.lte('created_at', `${params.createdTo}T23:59:59.999Z`);
+      }
+
+      const from = params.pageIndex * params.pageSize;
+      const to = from + params.pageSize - 1;
+
+      const { data, error: invErr, count } = await q.range(from, to);
 
       if (invErr) {
         setError(invErr.message || 'Failed to load invoices.');
@@ -254,6 +322,13 @@ export default function InvoiceTab(_props: Props) {
       }
 
       setInvoices(((data ?? []) as any[]) as InvoiceRow[]);
+      setTotalCount(typeof count === 'number' ? count : null);
+      if (typeof count === 'number') {
+        const totalPages = Math.max(1, Math.ceil(count / params.pageSize));
+        setPageHasMore(params.pageIndex < totalPages - 1);
+      } else {
+        setPageHasMore(((data ?? []) as any[]).length === params.pageSize);
+      }
     } finally {
       setLoadingList(false);
     }
@@ -361,7 +436,18 @@ export default function InvoiceTab(_props: Props) {
       if (cancelled) return;
 
       setBusinessId(bizId);
-      await Promise.all([refetchInvoices(bizId), fetchBusinessInfo(bizId)]);
+      await Promise.all([
+        loadInvoicesPage({
+          bizId,
+          pageIndex: 0,
+          pageSize,
+          searchQuery: '',
+          statusFilter: 'all',
+          createdFrom: '',
+          createdTo: '',
+        }),
+        fetchBusinessInfo(bizId),
+      ]);
       setBooting(false);
     }
 
@@ -373,6 +459,35 @@ export default function InvoiceTab(_props: Props) {
   }, []);
 
   const saveDisabled = !businessId || saving || booting;
+
+  async function refreshList(opts?: { resetPage?: boolean }) {
+    if (!businessId) return;
+    const nextPage = opts?.resetPage ? 0 : pageIndex;
+    if (opts?.resetPage) setPageIndex(0);
+    await loadInvoicesPage({
+      bizId: businessId,
+      pageIndex: nextPage,
+      pageSize,
+      searchQuery,
+      statusFilter,
+      createdFrom,
+      createdTo,
+    });
+  }
+
+  useEffect(() => {
+    if (!businessId) return;
+    void loadInvoicesPage({
+      bizId: businessId,
+      pageIndex,
+      pageSize,
+      searchQuery,
+      statusFilter,
+      createdFrom,
+      createdTo,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId, pageIndex, pageSize, searchQuery, statusFilter, createdFrom, createdTo]);
 
   async function handleSave() {
     setError(null);
@@ -468,7 +583,8 @@ export default function InvoiceTab(_props: Props) {
         }
       }
 
-      await refetchInvoices(businessIdToUse);
+      // Reload current list (reset to first page so new invoice is visible at top)
+      await refreshList({ resetPage: true });
       resetForm();
     } finally {
       setSaving(false);
@@ -532,7 +648,7 @@ export default function InvoiceTab(_props: Props) {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => businessId && refetchInvoices(businessId)}
+              onClick={() => void refreshList()}
               disabled={!businessId || loadingList}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
             >
@@ -685,9 +801,121 @@ export default function InvoiceTab(_props: Props) {
 
       {/* List */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/30">
-        <div className="flex items-center justify-between border-b border-slate-800 p-4">
-          <div className="text-sm font-semibold text-slate-100">All invoices</div>
-          <div className="text-xs text-slate-400">{invoices.length} total</div>
+        <div className="border-b border-slate-800 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="text-sm font-semibold text-slate-100">All invoices</div>
+              <div className="text-xs text-slate-400">
+                {totalCount !== null ? `${totalCount} total` : `${invoices.length} loaded`}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setListExpanded((v) => {
+                    const next = !v;
+                    if (!next) setExpandedRowId(null);
+                    return next;
+                  });
+                }}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+              >
+                {listExpanded ? 'Collapse' : 'Show all invoices'}
+              </button>
+            </div>
+          </div>
+
+          {/* Filters + pagination controls (active in both compact + expanded modes) */}
+          <div className="mt-3 grid gap-2 md:grid-cols-12">
+            <div className="md:col-span-4">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search invoice # or client…"
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950/40 py-2 pl-9 pr-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+                />
+              </div>
+            </div>
+
+            <div className="md:col-span-2">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-600"
+              >
+                <option value="all">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="sent">Sent</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+              </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <input
+                type="date"
+                value={createdFrom}
+                onChange={(e) => setCreatedFrom(e.target.value)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-600"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <input
+                type="date"
+                value={createdTo}
+                onChange={(e) => setCreatedTo(e.target.value)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-600"
+              />
+            </div>
+
+            <div className="md:col-span-2 flex items-center justify-between gap-2">
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize((Number(e.target.value) as any) ?? 20)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 outline-none focus:border-slate-600"
+              >
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-slate-400">
+              Page <span className="text-slate-200">{pageIndex + 1}</span>
+              {totalCount !== null ? (
+                <>
+                  {' '}
+                  of <span className="text-slate-200">{Math.max(1, Math.ceil(totalCount / pageSize))}</span>
+                </>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPageIndex((p) => Math.max(0, p - 1))}
+                disabled={pageIndex === 0 || loadingList}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={() => setPageIndex((p) => p + 1)}
+                disabled={!pageHasMore || loadingList}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
         </div>
 
         {loadingList ? (
@@ -697,54 +925,146 @@ export default function InvoiceTab(_props: Props) {
         ) : (
           <div className="divide-y divide-slate-800">
             {invoices.map((inv) => (
-              <div key={String(inv.id)} className="p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="truncate text-sm font-semibold text-slate-100">
-                        {inv.invoice_number}
+              <div key={String(inv.id)} className="px-4 py-3">
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleRow(inv.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') toggleRow(inv.id);
+                  }}
+                  className="rounded-xl border border-slate-800 bg-slate-950/20 px-3 py-3 hover:bg-slate-950/30"
+                >
+                  {/* Compact vs expanded row */}
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="truncate text-sm font-semibold text-slate-100">
+                          {inv.invoice_number}
+                        </div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeForStatus(
+                            inv.status
+                          )}`}
+                          style={{ textTransform: 'capitalize' }}
+                        >
+                          {inv.status}
+                        </span>
                       </div>
-                      <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeForStatus(
-                          inv.status
-                        )}`}
-                        style={{ textTransform: 'capitalize' }}
-                      >
-                        {inv.status}
-                      </span>
+
+                      {listExpanded ? (
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                          <span className="truncate">{inv.client_name}</span>
+                          <span>•</span>
+                          <span>Issue {inv.issue_date || '—'}</span>
+                          <span>•</span>
+                          <span>Due {inv.due_date || '—'}</span>
+                        </div>
+                      ) : (
+                        <div className="mt-1 truncate text-xs text-slate-400">
+                          {inv.client_name}
+                        </div>
+                      )}
                     </div>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
-                      <span className="truncate">{inv.client_name}</span>
-                      <span>•</span>
-                      <span>Issue {inv.issue_date || '—'}</span>
-                      <span>•</span>
-                      <span>Due {inv.due_date || '—'}</span>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="mr-1 text-sm font-semibold text-slate-100">
+                        {formatMoney(inv.total)}
+                      </div>
+
+                      {/* In compact mode, keep actions inside expanded details to reduce clutter */}
+                      {listExpanded ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              beginEdit(inv);
+                            }}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handlePrint(inv);
+                            }}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+                          >
+                            <Printer className="h-4 w-4" />
+                            Print
+                          </button>
+                        </>
+                      ) : null}
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="mr-2 text-sm font-semibold text-slate-100">
-                      {formatMoney(inv.total)}
+                  {/* Inline expanded details */}
+                  {String(expandedRowId) === String(inv.id) ? (
+                    <div className="mt-3 grid gap-3 rounded-xl border border-slate-800 bg-black/20 p-3 md:grid-cols-3">
+                      <div className="md:col-span-2">
+                        <div className="text-[11px] font-semibold text-slate-300">Details</div>
+                        <div className="mt-1 text-xs text-slate-300">
+                          <div>Client: <span className="text-slate-100">{inv.client_name}</span></div>
+                          <div>Issue: <span className="text-slate-100">{inv.issue_date || '—'}</span></div>
+                          <div>Due: <span className="text-slate-100">{inv.due_date || '—'}</span></div>
+                          <div>Created: <span className="text-slate-100">{inv.created_at || '—'}</span></div>
+                        </div>
+                        <div className="mt-2 text-[11px] font-semibold text-slate-300">Notes</div>
+                        <div className="mt-1 text-xs text-slate-300 whitespace-pre-wrap break-words">
+                          {inv.notes || '—'}
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-1">
+                        <div className="text-[11px] font-semibold text-slate-300">Totals</div>
+                        <div className="mt-1 text-xs text-slate-300 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span>Subtotal</span>
+                            <span className="text-slate-100">{formatMoney(inv.subtotal)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Tax</span>
+                            <span className="text-slate-100">{formatMoney(inv.tax ?? 0)}</span>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between border-t border-slate-800 pt-2">
+                            <span className="font-semibold">Total</span>
+                            <span className="font-semibold text-slate-100">{formatMoney(inv.total)}</span>
+                          </div>
+                        </div>
+
+                        {/* Actions (always available in expanded details) */}
+                        <div className="mt-3 flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              beginEdit(inv);
+                            }}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+                          >
+                            <Pencil className="h-4 w-4" />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handlePrint(inv);
+                            }}
+                            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+                          >
+                            <Printer className="h-4 w-4" />
+                            Print
+                          </button>
+                        </div>
+                      </div>
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => beginEdit(inv)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
-                    >
-                      <Pencil className="h-4 w-4" />
-                      Edit
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handlePrint(inv)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
-                    >
-                      <Printer className="h-4 w-4" />
-                      Print
-                    </button>
-                  </div>
+                  ) : null}
                 </div>
               </div>
             ))}
