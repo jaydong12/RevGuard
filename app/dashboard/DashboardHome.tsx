@@ -1078,13 +1078,34 @@ export default function DashboardHome() {
       };
     }, [transactions]);
 
+  // Ensure the Health System (especially "Fix this first") refreshes daily even if
+  // the underlying data doesn't change, and automatically flips at midnight local time.
+  const [healthDayKey, setHealthDayKey] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2);
+    const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
+    const t = window.setTimeout(() => {
+      const d = new Date();
+      setHealthDayKey(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      );
+    }, ms);
+    return () => window.clearTimeout(t);
+  }, [healthDayKey]);
+
   const health = useMemo(() => {
     return computeHealthSystem({
       transactions: transactions as any,
       bills,
       invoices,
+      now: new Date(),
     });
-  }, [transactions, bills, invoices]);
+  }, [transactions, bills, invoices, healthDayKey]);
 
   const [lastReviewedKey, setLastReviewedKey] = useState<string | null>(null);
   const [reviewedJustNow, setReviewedJustNow] = useState(false);

@@ -5,7 +5,8 @@
 // - Lets you create, edit, and delete a single transaction at a time
 // - Optional client-side search by description
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
@@ -84,6 +85,7 @@ type SortDirection = 'asc' | 'desc';
 type FlowFilter = 'all' | 'income' | 'expenses';
 
 export default function TransactionsPage() {
+  const sp = useSearchParams();
   // ---------- basic state ----------
 
   const queryClient = useQueryClient();
@@ -136,6 +138,49 @@ export default function TransactionsPage() {
     flow: 'expense',
   });
   const [formError, setFormError] = useState<string | null>(null);
+
+  function isoToMdy(iso: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+    const [yyyy, mm, dd] = iso.split('-');
+    return `${mm}/${dd}/${yyyy}`;
+  }
+
+  // Optional deep-link hydration (used by Dashboard "Fix this first" links).
+  // Supported params: q, from, to, category, flow, min, max
+  useEffect(() => {
+    try {
+      const q = String(sp.get('q') ?? '');
+      const from = String(sp.get('from') ?? '');
+      const to = String(sp.get('to') ?? '');
+      const cat = String(sp.get('category') ?? '');
+      const flow = String(sp.get('flow') ?? '');
+      const min = String(sp.get('min') ?? '');
+      const max = String(sp.get('max') ?? '');
+
+      if (q) setSearch(q);
+      if (from) {
+        setDateFromIso(from);
+        setDateFromDisplay(isoToMdy(from));
+      }
+      if (to) {
+        setDateToIso(to);
+        setDateToDisplay(isoToMdy(to));
+      }
+      if (cat) setCategoryFilter(cat);
+      if (min) setAmountMin(min);
+      if (max) setAmountMax(max);
+      if (flow === 'income') setFlowFilter('income');
+      if (flow === 'expenses') setFlowFilter('expenses');
+
+      // If any filters are present, reset paging for the filtered view.
+      if (q || from || to || cat || flow || min || max) {
+        setCurrentPage(1);
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sp]);
 
   const customersLoading = false;
   const customersError: string | null = null;

@@ -1,8 +1,21 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import { formatCurrency } from '../lib/formatCurrency';
-import type { HealthPillar, HealthState, HealthSystemResult } from '../lib/healthSystem';
+import type {
+  HealthPillar,
+  HealthState,
+  HealthSystemResult,
+} from '../lib/healthSystem';
+import {
+  Activity,
+  TrendingUp,
+  Wallet,
+  LineChart,
+  Info,
+  ChevronRight,
+} from 'lucide-react';
 
 function pillClasses(state: HealthState) {
   switch (state) {
@@ -15,20 +28,6 @@ function pillClasses(state: HealthState) {
     case 'Critical':
     default:
       return 'border-rose-500/30 bg-rose-500/10 text-rose-200';
-  }
-}
-
-function dotClasses(state: HealthState) {
-  switch (state) {
-    case 'Healthy':
-      return 'bg-emerald-400 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]';
-    case 'Caution':
-      return 'bg-sky-400 shadow-[0_0_0_4px_rgba(56,189,248,0.12)]';
-    case 'At Risk':
-      return 'bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]';
-    case 'Critical':
-    default:
-      return 'bg-rose-400 shadow-[0_0_0_4px_rgba(244,63,94,0.12)]';
   }
 }
 
@@ -49,90 +48,199 @@ function barFillClasses(state: HealthState) {
 function formatPct(p: number | null) {
   if (p === null) return '—';
   const pct = Math.round(p * 100);
-  const arrow = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
-  return `${arrow} ${Math.abs(pct)}%`;
+  const capped = Math.max(-999, Math.min(999, pct));
+  const sign = capped > 0 ? '+' : capped < 0 ? '-' : '';
+  return capped === 0 ? '0%' : `${sign}${Math.abs(capped)}%`;
 }
 
-function PillarBar({ pillar }: { pillar: HealthPillar }) {
-  const pct = Math.max(0, Math.min(100, Math.round(pillar.score)));
+function Tooltip({
+  title,
+  what,
+  calc,
+  good,
+}: {
+  title: string;
+  what: string;
+  calc: string[];
+  good: string;
+}) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`h-2 w-2 rounded-full ${dotClasses(pillar.state)}`} />
-          <div className="text-xs text-slate-200 truncate">{pillar.label}</div>
-        </div>
-        <div className="text-[11px] font-semibold text-slate-200 tabular-nums">
-          {pct}%
-        </div>
+    <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 w-[280px] -translate-x-1/2 rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)] opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
+      <div className="text-xs font-semibold text-slate-100">{title}</div>
+      <div className="mt-1 text-[11px] text-slate-300 leading-relaxed">{what}</div>
+      <div className="mt-2 text-[11px] text-slate-400">How it’s scored</div>
+      <ul className="mt-1 space-y-0.5 text-[11px] text-slate-300">
+        {calc.slice(0, 4).map((c, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-600/80 shrink-0" />
+            <span>{c}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 text-[11px] text-slate-300">
+        <span className="text-slate-400">Good looks like:</span> {good}
       </div>
-      <div className="h-2.5 rounded-full bg-white/10 overflow-hidden">
-        <div
-          className={`h-full rounded-full bg-gradient-to-r ${barFillClasses(
-            pillar.state
-          )} shadow-[0_0_18px_rgba(56,189,248,0.10)]`}
-          style={{ width: `${pct}%` }}
-        />
+    </div>
+  );
+}
+
+function InfoTip({
+  title,
+  what,
+  calc,
+  good,
+}: {
+  title: string;
+  what: string;
+  calc: string[];
+  good: string;
+}) {
+  return (
+    <span className="group relative inline-flex items-center">
+      <Info className="h-3.5 w-3.5 text-slate-500 group-hover:text-slate-200 transition" />
+      <Tooltip title={title} what={what} calc={calc} good={good} />
+    </span>
+  );
+}
+
+function SegmentedBar({ score, state }: { score: number; state: HealthState }) {
+  const pct = Math.max(0, Math.min(100, Math.round(score)));
+  const segments = 22;
+  const filled = Math.round((pct / 100) * segments);
+  return (
+    <div className="flex items-center gap-1">
+      {Array.from({ length: segments }).map((_, i) => {
+        const on = i < filled;
+        const rounded =
+          i === 0 ? 'rounded-l-full' : i === segments - 1 ? 'rounded-r-full' : 'rounded-sm';
+        return (
+          <div
+            key={i}
+            className={`h-2 flex-1 ${rounded} ${
+              on
+                ? `bg-gradient-to-r ${barFillClasses(
+                    state
+                  )} shadow-[0_0_14px_rgba(56,189,248,0.10)]`
+                : 'bg-white/10'
+            }`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function metricIcon(key: HealthPillar['key']) {
+  switch (key) {
+    case 'cashFlow':
+      return <Activity className="h-4 w-4 text-emerald-200" />;
+    case 'profit':
+      return <TrendingUp className="h-4 w-4 text-sky-200" />;
+    case 'expenseControl':
+      return <Wallet className="h-4 w-4 text-amber-200" />;
+    case 'forecastStability':
+    default:
+      return <LineChart className="h-4 w-4 text-violet-200" />;
+  }
+}
+
+function HealthMetric({ pillar }: { pillar: HealthPillar }) {
+  return (
+    <div className="grid grid-cols-[1fr,64px] gap-3 items-center">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+            {metricIcon(pillar.key)}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="text-xs font-medium text-slate-200 truncate">{pillar.label}</div>
+              <InfoTip
+                title={pillar.label}
+                what={pillar.help.what}
+                calc={pillar.help.calc}
+                good={pillar.help.good}
+              />
+            </div>
+          </div>
+        </div>
+        <SegmentedBar score={pillar.score} state={pillar.state} />
+      </div>
+      <div className="text-right text-[11px] text-slate-400 tabular-nums">
+        {Math.max(0, Math.min(100, Math.round(pillar.score)))}%
       </div>
     </div>
   );
 }
 
 export default function BusinessHealthSystemCard({ health }: { health: HealthSystemResult }) {
-  const { overallScore, overallState, todayVsTrend, pillars, fixFirst } = health;
+  const { overallScore, overallState, overallHelp, todayVsTrend, pillars, fixFirst } = health;
 
   return (
     <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-            Business health
+          <div className="flex items-center gap-2">
+            <div className="text-xs font-medium text-slate-200">Overall Health</div>
+            <InfoTip
+              title="Overall Health"
+              what={overallHelp.what}
+              calc={overallHelp.calc}
+              good={overallHelp.good}
+            />
           </div>
 
-          <div className="mt-2 flex items-center gap-2 flex-wrap">
-            <div className="text-lg font-semibold text-slate-50 tracking-tight">
-              Overall Health{' '}
-              <span className="text-slate-200 tabular-nums">{overallScore}</span>
-              <span className="text-slate-400 font-medium">/100</span>
+          <div className="mt-2 flex items-end gap-3 flex-wrap">
+            <div className="text-4xl font-semibold tracking-tight text-slate-50 tabular-nums leading-none">
+              {overallScore}
+              <span className="text-base text-slate-500 font-medium">/100</span>
             </div>
             <div className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] ${pillClasses(overallState)}`}>
               {overallState}
             </div>
           </div>
 
-          <div className="mt-2 text-[11px] text-slate-300">
-            <span className="text-slate-400">Today vs Trend:</span>{' '}
-            <span className="font-semibold text-slate-100">
-              Today: {formatCurrency(todayVsTrend.todayNet)}
-            </span>{' '}
-            <span className="text-slate-500">|</span>{' '}
-            <span className="text-slate-300">
-              7d: <span className="font-semibold text-slate-100">{formatPct(todayVsTrend.pct7d)}</span>
-            </span>{' '}
-            <span className="text-slate-500">|</span>{' '}
-            <span className="text-slate-300">
-              30d: <span className="font-semibold text-slate-100">{formatPct(todayVsTrend.pct30d)}</span>
-            </span>
+          <div className="mt-3 text-[11px] text-slate-300">
+            <span className="text-slate-400">Today:</span>{' '}
+            <span className="font-semibold text-slate-100">{formatCurrency(todayVsTrend.todayNet)}</span>{' '}
+            <span className="text-slate-500">•</span>{' '}
+            <span className="text-slate-400">7d change:</span>{' '}
+            <span className="font-semibold text-slate-100">{formatPct(todayVsTrend.pct7d)}</span>{' '}
+            <span className="text-slate-500">•</span>{' '}
+            <span className="text-slate-400">30d change:</span>{' '}
+            <span className="font-semibold text-slate-100">{formatPct(todayVsTrend.pct30d)}</span>
           </div>
         </div>
       </div>
 
-      <div className="mt-5 grid gap-3">
-        <PillarBar pillar={pillars.cashFlow} />
-        <PillarBar pillar={pillars.profit} />
-        <PillarBar pillar={pillars.expenseControl} />
-        <PillarBar pillar={pillars.forecastStability} />
+      <div className="mt-5 grid gap-4">
+        <HealthMetric pillar={pillars.cashFlow} />
+        <HealthMetric pillar={pillars.profit} />
+        <HealthMetric pillar={pillars.expenseControl} />
+        <HealthMetric pillar={pillars.forecastStability} />
       </div>
 
       <div className="mt-5">
         <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
           Fix this first
         </div>
-        <ul className="mt-2 space-y-1 text-[11px] text-slate-300">
-          {fixFirst.slice(0, 3).map((t, idx) => (
-            <li key={idx} className="flex gap-2">
-              <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-500/80 shrink-0" />
-              <span className="leading-relaxed">{t}</span>
+        <ul className="mt-2 space-y-1.5 text-[11px] text-slate-300">
+          {fixFirst.slice(0, 3).map((item, idx) => (
+            <li key={idx} className="group">
+              {item.href ? (
+                <Link
+                  href={item.href}
+                  className="flex items-start justify-between gap-3 rounded-xl border border-white/5 bg-white/0 px-2.5 py-2 hover:bg-white/5 transition"
+                >
+                  <span className="leading-relaxed">{item.text}</span>
+                  <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-200 mt-0.5 shrink-0" />
+                </Link>
+              ) : (
+                <div className="flex gap-2">
+                  <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-500/80 shrink-0" />
+                  <span className="leading-relaxed">{item.text}</span>
+                </div>
+              )}
             </li>
           ))}
         </ul>

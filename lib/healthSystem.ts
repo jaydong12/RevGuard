@@ -11,6 +11,11 @@ export type HealthPillar = {
   label: string;
   score: number; // 0–100
   state: HealthState;
+  help: {
+    what: string;
+    calc: string[];
+    good: string;
+  };
   notes?: string[];
 };
 
@@ -27,9 +32,17 @@ export type TodayVsTrend = {
 export type HealthSystemResult = {
   overallScore: number;
   overallState: HealthState;
+  overallHelp: {
+    what: string;
+    calc: string[];
+    good: string;
+  };
   pillars: Record<HealthPillarKey, HealthPillar>;
   todayVsTrend: TodayVsTrend;
-  fixFirst: string[]; // top 3
+  fixFirst: Array<{
+    text: string;
+    href?: string; // optional deep-link to /transactions with filters
+  }>;
 };
 
 type Tx = { date?: string | null; amount?: any; category?: any };
@@ -74,7 +87,10 @@ function parseTxDateLocal(raw: unknown): Date | null {
 function pctChange(current: number, prev: number): number | null {
   const c = Number(current) || 0;
   const p = Number(prev) || 0;
-  if (p === 0) return c === 0 ? 0 : null;
+  // Avoid nonsense percentages when the baseline is near zero.
+  // If last period net was tiny (or 0), treat % change as not meaningful.
+  const baselineMin = Math.max(50, Math.abs(c) * 0.05); // $50 or 5% of current net
+  if (Math.abs(p) < baselineMin) return null;
   return (c - p) / Math.abs(p);
 }
 
@@ -317,6 +333,15 @@ export function computeHealthSystem(params: {
       label: 'Cash Flow Health',
       score: cashScore,
       state: stateFromScore(cashScore),
+      help: {
+        what: 'Measures how steady money in vs out is.',
+        calc: [
+          'Last 30 days net cash pace (up/down)',
+          'Runway estimate when net is negative',
+          'Rewards positive net and longer runway',
+        ],
+        good: '80+ means cash is steady or improving (and runway is healthy if you’re burning).',
+      },
       notes:
         runwayDays !== null && Number.isFinite(runwayDays)
           ? [`Runway ~${Math.max(0, Math.round(runwayDays))} days at current pace`]
@@ -327,6 +352,14 @@ export function computeHealthSystem(params: {
       label: 'Profit Health',
       score: profitScore,
       state: stateFromScore(profitScore),
+      help: {
+        what: 'Measures how profitable you are recently.',
+        calc: [
+          '30-day net margin = (income − expenses) / income',
+          'Higher margin → higher score',
+        ],
+        good: '80+ usually means consistently positive margin (healthy buffer).',
+      },
       notes:
         margin30 === null
           ? ['Not enough revenue to estimate margin']
@@ -337,17 +370,55 @@ export function computeHealthSystem(params: {
       label: 'Expense Control',
       score: expenseControlScore,
       state: stateFromScore(expenseControlScore),
+      help: {
+        what: 'Measures whether spending is under control (and not spiking).',
+        calc: [
+          '30-day expense ratio = expenses / income',
+          'Penalty for week-over-week expense spikes',
+        ],
+        good: '80+ means expenses are predictable and reasonable vs income.',
+      },
     },
     forecastStability: {
       key: 'forecastStability',
       label: 'Forecast Stability',
       score: forecastScore,
       state: stateFromScore(forecastScore),
+      help: {
+        what: 'Measures how “swingy” your day-to-day net is.',
+        calc: [
+          '30-day daily net volatility (standard deviation)',
+          'Optional 14-day receivable vs payable coverage when available',
+        ],
+        good: '80+ means fewer surprise swings and easier planning.',
+      },
     },
   };
 
-  // Fix-this-first list (top 3)
-  const fixFirst: string[] = [];
+  const overallHelp = {
+    what: 'A single score that summarizes core financial health.',
+    calc: [
+      `Weighted average of: cash flow (${Math.round(weights.cashFlow * 100)}%), profit (${Math.round(
+        weights.profit * 100
+      )}%), expense control (${Math.round(weights.expenseControl * 100)}%), forecast stability (${Math.round(
+        weights.forecastStability * 100
+      )}%).`,
+      'Each pillar is scored 0–100 using simple last-30-day heuristics.',
+    ],
+    good: '80+ means the business is financially stable with healthy margins and predictability.',
+  };
+
+  // Fix-this-first list (top 3) — generated from TODAY and recent comparisons.
+  const fixFirst: Array<{ text: string; href?: string }> = [];
+
+  const toIso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const qs = (params: Record<string, string>) =>
+    Object.entries(params)
+      .filter(([, v]) => v !== '')
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&');
+  const txHref = (p: Record<string, string>) => `/transactions?${qs(p)}`;
   const byWorst = (Object.values(pillars) as HealthPillar[]).sort((a, b) => a.score - b.score);
   const worst = byWorst[0];
 
@@ -367,35 +438,93 @@ export function computeHealthSystem(params: {
       'Your net swings a lot day-to-day — stabilize by smoothing expenses and building predictable inflows.',
   };
 
-  if (worst) fixFirst.push(worstCopy[worst.key]);
+  if (worst) {
+    // Provide a broad link to expenses if the pillar relates to spend.
+    const baseLink =
+      worst.key === 'profit' || worst.key === 'cashFlow'
+        ? txHref({ from: toIso(start7), to: toIso(end), flow: 'all' })
+        : worst.key === 'expenseControl'
+          ? txHref({ from: toIso(start7), to: toIso(end), flow: 'expenses' })
+          : txHref({ from: toIso(start30), to: toIso(end), flow: 'all' });
+    fixFirst.push({ text: worstCopy[worst.key], href: baseLink });
+  }
 
   const spike = pickExpenseSpike(txs, now);
   if (spike) {
-    fixFirst.push(
-      `${spike.cat} spending spiked ${(spike.pct! * 100).toFixed(0)}% vs last week.`
-    );
+    fixFirst.push({
+      text: `${spike.cat} spending spiked ${(spike.pct! * 100).toFixed(0)}% vs last week.`,
+      href: txHref({
+        from: toIso(start7),
+        to: toIso(end),
+        flow: 'expenses',
+        category: spike.cat,
+      }),
+    });
   }
 
   const marginDrop = pickMarginDrop(txs, now);
   if (marginDrop) {
-    fixFirst.push(
-      `Margin dropped ${marginDrop.dropPts.toFixed(0)} pts vs last week (${marginDrop.curMargin.toFixed(
+    fixFirst.push({
+      text: `Margin dropped ${marginDrop.dropPts.toFixed(0)} pts vs last week (${marginDrop.curMargin.toFixed(
         0
-      )}% now).`
-    );
+      )}% now).`,
+      href: txHref({ from: toIso(start7), to: toIso(end), flow: 'all' }),
+    });
+  }
+
+  // Largest expense today (deterministic “today” item).
+  const todayStart = new Date(end);
+  const todayEnd = new Date(end);
+  const todayTxs: Array<{ amount: number; category: string; date: string }> = [];
+  for (const tx of txs) {
+    const d = parseTxDateLocal((tx as any)?.date ?? null);
+    if (!d) continue;
+    if (d < todayStart || d > todayEnd) continue;
+    const amt = Number((tx as any)?.amount) || 0;
+    const cat = String((tx as any)?.category ?? 'Uncategorized') || 'Uncategorized';
+    todayTxs.push({ amount: amt, category: cat, date: toIso(d) });
+  }
+  const biggestExpenseToday = todayTxs
+    .filter((t) => t.amount < 0)
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
+  if (biggestExpenseToday) {
+    fixFirst.push({
+      text: `Largest expense today: ${biggestExpenseToday.category}. Verify it’s correct and expected.`,
+      href: txHref({
+        from: toIso(end),
+        to: toIso(end),
+        flow: 'expenses',
+        category: biggestExpenseToday.category,
+      }),
+    });
+  }
+
+  // Volatility warning if forecast pillar is weak.
+  if (pillars.forecastStability.score < 35) {
+    fixFirst.push({
+      text: 'Your daily net is very swingy — smooth expenses and build more predictable inflows.',
+      href: txHref({ from: toIso(start30), to: toIso(end), flow: 'all' }),
+    });
   }
 
   if (fixFirst.length < 3 && txs.length < 10) {
-    fixFirst.push('Add more transactions (at least a week) to make health scores more reliable.');
+    fixFirst.push({
+      text: 'Add more transactions (at least a week) to make health scores more reliable.',
+      href: txHref({ from: toIso(start7), to: toIso(end), flow: 'all' }),
+    });
   }
 
   while (fixFirst.length < 3) {
-    fixFirst.push('Review your largest transactions today and confirm categories are correct.');
+    fixFirst.push({
+      text: 'Review your largest transactions today and confirm categories are correct.',
+      href: txHref({ from: toIso(end), to: toIso(end), flow: 'all' }),
+    });
   }
 
   return {
     overallScore,
     overallState: stateFromScore(overallScore),
+    overallHelp,
     pillars,
     todayVsTrend: {
       todayNet,
