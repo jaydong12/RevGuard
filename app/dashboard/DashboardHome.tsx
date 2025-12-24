@@ -27,7 +27,7 @@ import { formatCurrency } from '../../lib/formatCurrency';
 import { computeHealthSystem } from '../../lib/healthSystem';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
-import { CheckCircle2, FileText, Sparkles, Target } from 'lucide-react';
+import { CheckCircle2, Sparkles, Target } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -998,7 +998,6 @@ export default function DashboardHome() {
     netYesterday,
     moneyMovesTakeaway,
     moneyMoves,
-    todaysSnapshot,
     oneFocusTomorrow,
     lowData,
   } =
@@ -1097,31 +1096,6 @@ export default function DashboardHome() {
         return null;
       })();
 
-      // Today's Snapshot (1–2 sentences)
-      const snapshot = (() => {
-        if (todayTxs.length === 0) {
-          return 'No transactions recorded today yet. If you had activity, import or sync so your numbers stay accurate.';
-        }
-        let income = 0;
-        let out = 0;
-        for (const tx of todayTxs) {
-          const amt = Number((tx as any)?.amount) || 0;
-          if (amt >= 0) income += amt;
-          else out += Math.abs(amt);
-        }
-        const net = income - out;
-        const biggest = biggestAbs
-          ? `${formatCurrency(Number((biggestAbs as any)?.amount) || 0)} ${String(
-              (biggestAbs as any)?.category ?? 'Uncategorized'
-            )}`
-          : null;
-        const s1 = `Today: ${todayTxs.length} tx • ${formatCurrency(income)} in • ${formatCurrency(
-          out
-        )} out • Net ${net >= 0 ? '+' : '-'}${formatCurrency(Math.abs(net))}.`;
-        const s2 = biggest ? `Biggest move: ${biggest}.` : '';
-        return `${s1} ${s2}`.trim();
-      })();
-
       // One Focus for Tomorrow (single actionable suggestion)
       const focus = (() => {
         const uncategorized = todayTxs.filter(
@@ -1148,7 +1122,6 @@ export default function DashboardHome() {
         netYesterday: yesterdayNet,
         moneyMovesTakeaway: takeaway,
         moneyMoves: bullets.slice(0, 3),
-        todaysSnapshot: snapshot,
         oneFocusTomorrow: focus,
         lowData: low,
       };
@@ -2743,16 +2716,6 @@ export default function DashboardHome() {
                 {calendarLoading && (
                   <div className="text-[11px] text-slate-500 -mt-2">Loading calendar…</div>
                 )}
-
-                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                    <FileText className="h-4 w-4 text-slate-300/80" />
-                    Today’s Snapshot
-                  </div>
-                  <div className="mt-2 text-sm text-slate-200 leading-relaxed">
-                    {todaysSnapshot}
-                  </div>
-                </div>
 
                 <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
