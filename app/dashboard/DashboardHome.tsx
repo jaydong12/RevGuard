@@ -1254,6 +1254,17 @@ export default function DashboardHome() {
     // optimistic update
     setCalendarProgressByDay((prev) => ({ ...prev, [day]: progress }));
     try {
+      const payload = {
+        business_id: selectedBusinessId,
+        date: day,
+        tx_done: progress.transactions,
+        categories_done: progress.categories,
+        biggest_done: progress.biggest_move,
+        completed: Boolean(progress.transactions && progress.categories && progress.biggest_move),
+      };
+      // eslint-disable-next-line no-console
+      console.log('DAILY_REVIEW_CALENDAR_UPSERT_PAYLOAD', payload);
+
       const { error } = await supabase
         .from('daily_review_calendar')
         .upsert(
@@ -1268,8 +1279,14 @@ export default function DashboardHome() {
         );
       if (error) throw error;
     } catch (e) {
+      const err: any = e;
       // eslint-disable-next-line no-console
-      console.error('DAILY_REVIEW_CALENDAR_UPSERT_ERROR', e);
+      console.error('DAILY_REVIEW_CALENDAR_UPSERT_ERROR', {
+        message: err?.message ?? String(err ?? ''),
+        code: err?.code ?? null,
+        details: err?.details ?? null,
+        hint: err?.hint ?? null,
+      });
     }
   }
 
