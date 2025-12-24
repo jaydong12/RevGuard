@@ -893,6 +893,95 @@ function buildExpensesByVendorRows(txs: Transaction[]) {
   return { rows, total, usedVendorField };
 }
 
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function clamp100(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function computeTaxAccuracyScore(txs: Transaction[]) {
+  if (!txs.length) {
+    return {
+      score: 20,
+      sentence: 'Add more transactions so the estimate can learn your patterns.',
+      checklist: ['Add transactions (at least a month)'],
+    };
+  }
+
+  let taxCatCount = 0;
+  let catCount = 0;
+  let confCount = 0;
+  let confSum = 0;
+
+  for (const tx of txs) {
+    const taxCat = String((tx as any)?.tax_category ?? '').trim();
+    if (taxCat) taxCatCount += 1;
+
+    const cat = String((tx as any)?.category ?? '').trim();
+    if (cat && cat.toLowerCase() !== 'uncategorized') catCount += 1;
+
+    const c = Number((tx as any)?.confidence_score);
+    if (Number.isFinite(c)) {
+      confCount += 1;
+      confSum += clamp01(c);
+    }
+  }
+
+  const taxCatCoverage = taxCatCount / txs.length;
+  const categoryCoverage = catCount / txs.length;
+  const avgConfidence = confCount ? confSum / confCount : 0.5;
+
+  const score = clamp100(40 * taxCatCoverage + 20 * categoryCoverage + 40 * avgConfidence);
+
+  const sentence =
+    score >= 85
+      ? 'This estimate is in great shape—just keep classifications up to date.'
+      : score >= 65
+        ? 'This is directionally solid. A few cleanups will tighten it up.'
+        : 'This is a rough estimate right now. A bit of setup will improve it fast.';
+
+  const checklist: string[] = [];
+  if (taxCatCoverage < 0.9) checklist.push('Mark more transactions with the right tax category');
+  if (categoryCoverage < 0.9) checklist.push('Reduce “Uncategorized” and add clearer categories');
+  if (avgConfidence < 0.75) checklist.push('Review low-confidence items and correct mislabels');
+  if (!checklist.length) checklist.push('Keep categories and tax tags current each week');
+
+  return { score, sentence, checklist: checklist.slice(0, 3) };
+}
+
+function isoTodayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function nextEstimatedTaxDue(params: { year: number }) {
+  const year = Number(params.year) || new Date().getUTCFullYear();
+  const dueDates = [
+    `${year}-04-15`,
+    `${year}-06-15`,
+    `${year}-09-15`,
+    `${year + 1}-01-15`,
+  ];
+  const today = isoTodayUtc();
+  return dueDates.find((d) => d >= today) ?? `${year + 1}-04-15`;
+}
+
+function InlineInfoTip({ text }: { text: string }) {
+  return (
+    <span className="group relative inline-flex items-center">
+      <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[10px] text-slate-400 group-hover:text-slate-200 transition">
+        i
+      </span>
+      <span className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 w-[260px] -translate-x-1/2 rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)] opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
+        <span className="text-[11px] text-slate-300 leading-relaxed">{text}</span>
+      </span>
+    </span>
+  );
+}
+
 function buildTaxSummaryRows(
   txs: Transaction[],
   opts?: {
@@ -1690,6 +1779,41 @@ export default function ReportsPage() {
     [effectiveTxs, taxProfile, taxRulesByKey]
   );
 
+  // --- Tax Summary UI (presentation-only; calculations stay in buildTaxSummaryRows) ---
+  const [taxSetupOpen, setTaxSetupOpen] = useState(false);
+  const [taxAdvancedOpen, setTaxAdvancedOpen] = useState(false);
+  const [taxBreakdownOpen, setTaxBreakdownOpen] = useState(false);
+  const [taxBreakdownSections, setTaxBreakdownSections] = useState(() => ({
+    income: true,
+    writeoffs: false,
+    profit: false,
+    taxes: false,
+  }));
+
+  const taxAccuracy = useMemo(() => computeTaxAccuracyScore(effectiveTxs), [effectiveTxs]);
+
+  const taxYearForPlan = useMemo(() => {
+    const yyyy = Number(String(endDate ?? '').slice(0, 4));
+    return Number.isFinite(yyyy) && yyyy > 1900 ? yyyy : new Date().getUTCFullYear();
+  }, [endDate]);
+
+  const nextEstimatedDueDate = useMemo(
+    () => nextEstimatedTaxDue({ year: taxYearForPlan }),
+    [taxYearForPlan]
+  );
+
+  const nextEstimatedPayment = useMemo(
+    () => (Number(taxSummary.estTotal || 0) > 0 ? Number(taxSummary.estTotal || 0) / 4 : 0),
+    [taxSummary.estTotal]
+  );
+
+  const setAsidePct = useMemo(() => {
+    const profit = Number(taxSummary.estimatedTaxableProfit ?? 0);
+    const tax = Number(taxSummary.estTotal ?? 0);
+    if (!Number.isFinite(profit) || profit <= 0 || !Number.isFinite(tax) || tax <= 0) return null;
+    return clamp01(tax / profit);
+  }, [taxSummary.estimatedTaxableProfit, taxSummary.estTotal]);
+
   const activeReport = useMemo(() => {
     return REPORT_LIBRARY.find((r) => r.id === activeReportId) ?? REPORT_LIBRARY[0];
   }, [activeReportId]);
@@ -2126,7 +2250,14 @@ export default function ReportsPage() {
               ) : (
                 <>
                   {/* KPI row */}
-                  <div className="grid md:grid-cols-3 gap-3 mb-4">
+                  <div
+                    className={classNames(
+                      'grid gap-3 mb-4',
+                      activeReport.kind === 'tax_summary'
+                        ? 'sm:grid-cols-2 lg:grid-cols-4'
+                        : 'md:grid-cols-3'
+                    )}
+                  >
                     {activeReport.kind === 'pnl' && (
                       <>
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(34,197,94,0.06)]">
@@ -2333,66 +2464,70 @@ export default function ReportsPage() {
 
                     {activeReport.kind === 'tax_summary' && (
                       <>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Gross
-                          </div>
-                          <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency(taxSummary.totalIncome)}
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            Income in this window (before deductions).
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Deductions
-                          </div>
-                          <div className="mt-1 text-3xl font-semibold text-emerald-300">
-                            {formatCurrency(-taxSummary.deductibleExpenses)}
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            Deductible + partially deductible expenses.
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Taxable income
-                          </div>
-                          <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency(taxSummary.profile?.taxableIncomeForFederal ?? 0)}
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            After deductions
-                            {taxSummary.profile?.standardDeduction
-                              ? ` and standard deduction (${formatCurrency(-taxSummary.profile.standardDeduction)})`
-                              : ''}
-                            {taxSummary.profile?.seHalfDeduction
-                              ? ` and SE half deduction (${formatCurrency(-taxSummary.profile.seHalfDeduction)})`
-                              : ''}
-                            .
-                          </div>
-                        </div>
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Est. tax
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Tax set-aside (YTD)
+                            </div>
+                            <InlineInfoTip text="A simple target: set aside your estimated taxes as you earn profit, so payments don’t surprise you." />
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-blue-200">
+                            {formatCurrency(taxSummary.estTotal)}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            {setAsidePct === null
+                              ? '—'
+                              : `About ${(setAsidePct * 100).toFixed(0)}% of taxable profit.`}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Estimated taxes owed (YTD)
+                            </div>
+                            <InlineInfoTip text="Estimated total for this date range (federal + state + self-employment when applicable)." />
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-slate-100">
                             {formatCurrency(taxSummary.estTotal)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             Federal + state{taxSummary.estSelfEmployment ? ' + SE' : ''}.
                           </div>
                         </div>
+
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                            Net after tax
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Profit (YTD)
+                            </div>
+                            <InlineInfoTip text="Income minus expenses for this date range (not a tax filing value—just your operating result)." />
                           </div>
-                          <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency((taxSummary.net || 0) - (taxSummary.estTotal || 0))}
+                          <div
+                            className={classNames(
+                              'mt-1 text-3xl font-semibold',
+                              (taxSummary.net || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                            )}
+                          >
+                            {formatCurrency(taxSummary.net || 0)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Net (income − expenses) minus estimated tax.
+                            Income − expenses
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Next estimated payment
+                            </div>
+                            <InlineInfoTip text="A simple quarterly plan: estimated annual taxes divided into four payments." />
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-slate-100">
+                            {formatCurrency(nextEstimatedPayment)}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Due {nextEstimatedDueDate}
                           </div>
                         </div>
                       </>
@@ -2400,156 +2535,474 @@ export default function ReportsPage() {
                   </div>
 
                   {activeReport.kind === 'tax_summary' && (
-                    <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                      <div className="text-[11px] text-slate-300">
-                        Estimate improves as data is completed.
+                    <div className="mb-4 grid gap-3 lg:grid-cols-[1fr,220px] items-start">
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Accuracy
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Estimate improves as data is completed.
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-2xl font-semibold text-slate-100 tabular-nums leading-none">
+                              {taxAccuracy.score}
+                              <span className="text-[11px] text-slate-500 font-medium">/100</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 h-2.5 rounded-full bg-white/[0.08] overflow-hidden border border-white/10">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-emerald-400/80 via-sky-400/70 to-blue-500/70 shadow-[0_0_18px_rgba(59,130,246,0.16)]"
+                            style={{ width: `${Math.max(0, Math.min(100, taxAccuracy.score))}%` }}
+                          />
+                        </div>
+
+                        <div className="mt-2 text-[11px] text-slate-300">
+                          {taxAccuracy.sentence}
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-500">
+                          Uses taxable net income, filing status brackets, and your category treatments.
+                        </div>
+
+                        <div className="mt-3">
+                          <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                            Improve
+                          </div>
+                          <ul className="mt-2 space-y-1 text-[11px] text-slate-300">
+                            {taxAccuracy.checklist.map((t, idx) => (
+                              <li key={idx} className="flex gap-2">
+                                <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-500/80 shrink-0" />
+                                <span className="leading-relaxed">{t}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-500">
-                        Uses taxable net income (income − deductible expenses), filing status brackets, and your category treatments.
+
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                          Breakdown
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-400">
+                          See the numbers behind the estimate.
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTaxBreakdownOpen(true)}
+                          className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-slate-100 hover:bg-white/10 transition"
+                        >
+                          See breakdown
+                        </button>
                       </div>
                     </div>
                   )}
 
                   {activeReport.kind === 'tax_summary' && (
-                    <div className="mb-4 grid gap-3 md:grid-cols-2">
+                    <div className="mb-4 grid gap-3">
+                      {/* Setup (3 questions) */}
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                        <div className="flex items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setTaxSetupOpen((v) => !v)}
+                          className="w-full flex items-start justify-between gap-3 text-left"
+                        >
                           <div>
                             <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                              Business Tax Profile
+                              Setup (3 questions)
                             </div>
                             <div className="mt-1 text-[11px] text-slate-400">
                               Entity, filing status, and state rate.
                             </div>
                           </div>
+                          <div className="text-[11px] text-slate-300">
+                            {taxSetupOpen ? 'Hide' : 'Show'}
+                          </div>
+                        </button>
+
+                        {taxSetupOpen && (
+                          <div className="mt-4">
+                            <div className="grid gap-2 sm:grid-cols-3">
+                              <label className="text-[11px] text-slate-400">
+                                Entity
+                                <select
+                                  style={{ colorScheme: 'dark' }}
+                                  value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
+                                  onChange={(e) =>
+                                    setTaxProfileDraft((p: any) => ({
+                                      ...p,
+                                      entity_type: e.target.value as any,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                                >
+                                  <option value="sole_prop" className="bg-slate-950 text-slate-100">Sole prop</option>
+                                  <option value="llc_single" className="bg-slate-950 text-slate-100">Single-member LLC</option>
+                                  <option value="llc_multi" className="bg-slate-950 text-slate-100">Multi-member LLC</option>
+                                  <option value="partnership" className="bg-slate-950 text-slate-100">Partnership</option>
+                                  <option value="s_corp" className="bg-slate-950 text-slate-100">S-Corp</option>
+                                  <option value="c_corp" className="bg-slate-950 text-slate-100">C-Corp</option>
+                                </select>
+                              </label>
+
+                              <label className="text-[11px] text-slate-400">
+                                Filing status
+                                <select
+                                  style={{ colorScheme: 'dark' }}
+                                  value={String(taxProfileDraft.filing_status ?? 'single')}
+                                  onChange={(e) =>
+                                    setTaxProfileDraft((p: any) => ({
+                                      ...p,
+                                      filing_status: e.target.value as any,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                                >
+                                  <option value="single" className="bg-slate-950 text-slate-100">Single</option>
+                                  <option value="married_joint" className="bg-slate-950 text-slate-100">Married (joint)</option>
+                                  <option value="married_separate" className="bg-slate-950 text-slate-100">Married (separate)</option>
+                                  <option value="head_of_household" className="bg-slate-950 text-slate-100">Head of household</option>
+                                </select>
+                              </label>
+
+                              <label className="text-[11px] text-slate-400">
+                                State rate (%)
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  step="0.1"
+                                  value={String((Number(taxProfileDraft.state_rate) || 0) * 100)}
+                                  onChange={(e) => {
+                                    const pct = Number(e.target.value);
+                                    setTaxProfileDraft((p: any) => ({
+                                      ...p,
+                                      state_rate: Number.isFinite(pct) ? pct / 100 : 0,
+                                    }));
+                                  }}
+                                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                                  placeholder="e.g. 5"
+                                />
+                              </label>
+                            </div>
+
+                            <div className="mt-3 flex items-center justify-between gap-3">
+                              <div className="text-[11px] text-slate-500">
+                                Saving updates the estimate immediately.
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void saveTaxProfile()}
+                                disabled={!selectedBusinessId || taxProfileSaving}
+                                className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+                              >
+                                {taxProfileSaving ? 'Saving…' : 'Save'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Advanced */}
+                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                        <button
+                          type="button"
+                          onClick={() => setTaxAdvancedOpen((v) => !v)}
+                          className="w-full flex items-start justify-between gap-3 text-left"
+                        >
+                          <div>
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Advanced
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Fine-tune edge cases and category treatments.
+                            </div>
+                          </div>
+                          <div className="text-[11px] text-slate-300">
+                            {taxAdvancedOpen ? 'Hide' : 'Show'}
+                          </div>
+                        </button>
+
+                        {taxAdvancedOpen && (
+                          <div className="mt-4 grid gap-3 md:grid-cols-2">
+                            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Options
+                              </div>
+                              <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-300">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(taxProfileDraft.include_self_employment ?? true)}
+                                  onChange={(e) =>
+                                    setTaxProfileDraft((p: any) => ({
+                                      ...p,
+                                      include_self_employment: e.target.checked,
+                                    }))
+                                  }
+                                />
+                                Include self-employment tax (sole prop / single-member LLC).
+                              </label>
+                              <div className="mt-3 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => void saveTaxProfile()}
+                                  disabled={!selectedBusinessId || taxProfileSaving}
+                                  className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+                                >
+                                  {taxProfileSaving ? 'Saving…' : 'Save'}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                                Category treatments
+                              </div>
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                Mark top categories as deductible / partial / non-deductible.
+                              </div>
+
+                              <div className="mt-3 space-y-2">
+                                {taxSummary.taxRows.slice(0, 8).map((r) => {
+                                  const key = String(r.category ?? '').trim().toLowerCase();
+                                  const current =
+                                    (taxRulesByKey[key]?.treatment as any) ?? 'review';
+                                  return (
+                                    <div
+                                      key={r.category}
+                                      className="flex items-center justify-between gap-2"
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="text-[11px] text-slate-200 truncate">
+                                          {r.category}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">
+                                          Net taxable: {formatCurrency(r.netTaxable)}
+                                        </div>
+                                      </div>
+                                      <select
+                                        style={{ colorScheme: 'dark' }}
+                                        value={String(current)}
+                                        onChange={(e) =>
+                                          void upsertTaxRule(r.category, e.target.value as any)
+                                        }
+                                        className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                                      >
+                                        <option value="review" className="bg-slate-950 text-slate-100">Review</option>
+                                        <option value="deductible" className="bg-slate-950 text-slate-100">Deductible (100%)</option>
+                                        <option value="partial_50" className="bg-slate-950 text-slate-100">Partial (50%)</option>
+                                        <option value="non_deductible" className="bg-slate-950 text-slate-100">Non-deductible</option>
+                                        <option value="capitalized" className="bg-slate-950 text-slate-100">Capitalized</option>
+                                        <option value="non_taxable_income" className="bg-slate-950 text-slate-100">Non-taxable income</option>
+                                      </select>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Tax breakdown drawer */}
+                  {activeReport.kind === 'tax_summary' && taxBreakdownOpen && (
+                    <div className="fixed inset-0 z-50">
+                      <button
+                        type="button"
+                        aria-label="Close breakdown"
+                        onClick={() => setTaxBreakdownOpen(false)}
+                        className="absolute inset-0 bg-black/60"
+                      />
+                      <div className="absolute right-0 top-0 h-full w-full max-w-[560px] border-l border-slate-800 bg-slate-950/80 backdrop-blur p-5 overflow-y-auto">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-semibold text-slate-100">
+                              Tax breakdown
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Expand sections to see how the estimate is built.
+                            </div>
+                          </div>
                           <button
                             type="button"
-                            onClick={() => void saveTaxProfile()}
-                            disabled={!selectedBusinessId || taxProfileSaving}
-                            className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
+                            onClick={() => setTaxBreakdownOpen(false)}
+                            className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-slate-100 hover:bg-white/10 transition"
                           >
-                            {taxProfileSaving ? 'Saving…' : 'Save'}
+                            Close
                           </button>
                         </div>
 
-                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          <label className="text-[11px] text-slate-400">
-                            Entity
-                            <select
-                              style={{ colorScheme: 'dark' }}
-                              value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
-                              onChange={(e) =>
-                                setTaxProfileDraft((p: any) => ({
-                                  ...p,
-                                  entity_type: e.target.value as any,
-                                }))
+                        <div className="mt-4 space-y-3">
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTaxBreakdownSections((s) => ({ ...s, income: !s.income }))
                               }
-                              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                              className="w-full flex items-center justify-between gap-3 px-4 py-3"
                             >
-                              <option value="sole_prop" className="bg-slate-950 text-slate-100">Sole prop</option>
-                              <option value="llc_single" className="bg-slate-950 text-slate-100">Single-member LLC</option>
-                              <option value="llc_multi" className="bg-slate-950 text-slate-100">Multi-member LLC</option>
-                              <option value="partnership" className="bg-slate-950 text-slate-100">Partnership</option>
-                              <option value="s_corp" className="bg-slate-950 text-slate-100">S-Corp</option>
-                              <option value="c_corp" className="bg-slate-950 text-slate-100">C-Corp</option>
-                            </select>
-                          </label>
-
-                          <label className="text-[11px] text-slate-400">
-                            Filing status
-                            <select
-                              style={{ colorScheme: 'dark' }}
-                              value={String(taxProfileDraft.filing_status ?? 'single')}
-                              onChange={(e) =>
-                                setTaxProfileDraft((p: any) => ({
-                                  ...p,
-                                  filing_status: e.target.value as any,
-                                }))
-                              }
-                              className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
-                            >
-                              <option value="single" className="bg-slate-950 text-slate-100">Single</option>
-                              <option value="married_joint" className="bg-slate-950 text-slate-100">Married (joint)</option>
-                              <option value="married_separate" className="bg-slate-950 text-slate-100">Married (separate)</option>
-                              <option value="head_of_household" className="bg-slate-950 text-slate-100">Head of household</option>
-                            </select>
-                          </label>
-
-                          <label className="text-[11px] text-slate-400">
-                            State rate (%)
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              step="0.1"
-                              value={String((Number(taxProfileDraft.state_rate) || 0) * 100)}
-                              onChange={(e) => {
-                                const pct = Number(e.target.value);
-                                setTaxProfileDraft((p: any) => ({
-                                  ...p,
-                                  state_rate: Number.isFinite(pct) ? pct / 100 : 0,
-                                }));
-                              }}
-                              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
-                              placeholder="e.g. 5"
-                            />
-                          </label>
-                        </div>
-
-                        <label className="mt-3 flex items-center gap-2 text-[11px] text-slate-300">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(taxProfileDraft.include_self_employment ?? true)}
-                            onChange={(e) =>
-                              setTaxProfileDraft((p: any) => ({
-                                ...p,
-                                include_self_employment: e.target.checked,
-                              }))
-                            }
-                          />
-                          Include self-employment tax (sole prop / single-member LLC).
-                        </label>
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                        <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                          Category treatments
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-400">
-                          Mark top categories as deductible / partial / non-deductible.
-                        </div>
-
-                        <div className="mt-3 space-y-2">
-                          {taxSummary.taxRows.slice(0, 8).map((r) => {
-                            const key = String(r.category ?? '').trim().toLowerCase();
-                            const current = (taxRulesByKey[key]?.treatment as any) ?? 'review';
-                            return (
-                              <div key={r.category} className="flex items-center justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className="text-[11px] text-slate-200 truncate">
-                                    {r.category}
-                                  </div>
-                                  <div className="text-[10px] text-slate-500">
-                                    Net taxable: {formatCurrency(r.netTaxable)}
-                                  </div>
-                                </div>
-                                <select
-                                  style={{ colorScheme: 'dark' }}
-                                  value={String(current)}
-                                  onChange={(e) =>
-                                    void upsertTaxRule(r.category, e.target.value as any)
-                                  }
-                                  className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
-                                >
-                                  <option value="review" className="bg-slate-950 text-slate-100">Review</option>
-                                  <option value="deductible" className="bg-slate-950 text-slate-100">Deductible (100%)</option>
-                                  <option value="partial_50" className="bg-slate-950 text-slate-100">Partial (50%)</option>
-                                  <option value="non_deductible" className="bg-slate-950 text-slate-100">Non-deductible</option>
-                                  <option value="capitalized" className="bg-slate-950 text-slate-100">Capitalized</option>
-                                  <option value="non_taxable_income" className="bg-slate-950 text-slate-100">Non-taxable income</option>
-                                </select>
+                              <div className="text-[11px] font-semibold text-slate-100">
+                                Income
                               </div>
-                            );
-                          })}
+                              <div className="text-[11px] text-slate-400">
+                                {taxBreakdownSections.income ? 'Hide' : 'Show'}
+                              </div>
+                            </button>
+                            {taxBreakdownSections.income && (
+                              <div className="px-4 pb-4 text-[11px] text-slate-300 space-y-2">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Gross income</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.totalIncome)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Non-taxable income</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.nonTaxableIncome || 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Taxable income</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.taxableIncome || 0)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTaxBreakdownSections((s) => ({
+                                  ...s,
+                                  writeoffs: !s.writeoffs,
+                                }))
+                              }
+                              className="w-full flex items-center justify-between gap-3 px-4 py-3"
+                            >
+                              <div className="text-[11px] font-semibold text-slate-100">
+                                Write-offs
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {taxBreakdownSections.writeoffs ? 'Hide' : 'Show'}
+                              </div>
+                            </button>
+                            {taxBreakdownSections.writeoffs && (
+                              <div className="px-4 pb-4 text-[11px] text-slate-300 space-y-2">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Deductible expenses</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(-taxSummary.deductibleExpenses)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Non-deductible expenses</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(-taxSummary.nonDeductibleExpenses)}
+                                  </span>
+                                </div>
+                                <div className="h-px bg-white/10 my-1" />
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Standard deduction</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(-(taxSummary.profile?.standardDeduction ?? 0))}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">SE half deduction</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(-(taxSummary.profile?.seHalfDeduction ?? 0))}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTaxBreakdownSections((s) => ({ ...s, profit: !s.profit }))
+                              }
+                              className="w-full flex items-center justify-between gap-3 px-4 py-3"
+                            >
+                              <div className="text-[11px] font-semibold text-slate-100">
+                                Profit
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {taxBreakdownSections.profit ? 'Hide' : 'Show'}
+                              </div>
+                            </button>
+                            {taxBreakdownSections.profit && (
+                              <div className="px-4 pb-4 text-[11px] text-slate-300 space-y-2">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Net profit</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.net || 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Taxable profit (estimate)</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.estimatedTaxableProfit || 0)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setTaxBreakdownSections((s) => ({ ...s, taxes: !s.taxes }))
+                              }
+                              className="w-full flex items-center justify-between gap-3 px-4 py-3"
+                            >
+                              <div className="text-[11px] font-semibold text-slate-100">
+                                Taxes
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {taxBreakdownSections.taxes ? 'Hide' : 'Show'}
+                              </div>
+                            </button>
+                            {taxBreakdownSections.taxes && (
+                              <div className="px-4 pb-4 text-[11px] text-slate-300 space-y-2">
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Federal (estimate)</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.estFederal || 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">State (estimate)</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.estState || 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Self-employment (estimate)</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.estSelfEmployment || 0)}
+                                  </span>
+                                </div>
+                                <div className="h-px bg-white/10 my-1" />
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Total estimated tax</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxSummary.estTotal || 0)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </div>
