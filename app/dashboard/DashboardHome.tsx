@@ -1267,7 +1267,14 @@ export default function DashboardHome() {
       .select()
       .maybeSingle();
 
-    if (error) {
+    // Some environments may provide a truthy `error` with no meaningful details.
+    // Treat it as a real error only when it has actual fields.
+    const err: any = error as any;
+    const isRealError = Boolean(
+      err && (err.message || err.code || err.details || err.hint)
+    );
+
+    if (isRealError) {
       // eslint-disable-next-line no-console
       console.error('CAL_UPSERT_ERROR', error, { payload });
       return;
