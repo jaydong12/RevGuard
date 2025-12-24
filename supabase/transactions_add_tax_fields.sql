@@ -9,6 +9,11 @@
 alter table public.transactions
 add column if not exists tax_category text not null default 'taxable';
 
+-- New: tax_treatment (how expenses should be treated for tax purposes).
+-- Required and independent from tax_category so TaxEngine can use ONLY these fields.
+alter table public.transactions
+add column if not exists tax_treatment text not null default 'review';
+
 alter table public.transactions
 add column if not exists tax_status text not null default 'not_taxed';
 
@@ -25,13 +30,14 @@ begin
       check (tax_status in ('not_taxed', 'taxed'));
   end if;
 
-  if not exists (
-    select 1 from pg_constraint where conname = 'transactions_tax_category_check'
-  ) then
-    alter table public.transactions
-      add constraint transactions_tax_category_check
-      check (
-        tax_category in (
+  -- Always (re)create constraint so new enum values are picked up on existing DBs.
+  if exists (select 1 from pg_constraint where conname = 'transactions_tax_category_check') then
+    alter table public.transactions drop constraint transactions_tax_category_check;
+  end if;
+  alter table public.transactions
+    add constraint transactions_tax_category_check
+    check (
+      tax_category in (
           -- legacy (v0)
           'taxable',
           'non_taxable',
@@ -52,19 +58,27 @@ begin
           'loan_interest',
           'capex',
           'owner_draw',
+          'owner_estimated_tax',
           'transfer',
           'uncategorized'
-        )
-      );
+      )
+    );
+
+  if exists (select 1 from pg_constraint where conname = 'transactions_tax_treatment_check') then
+    alter table public.transactions drop constraint transactions_tax_treatment_check;
   end if;
+  alter table public.transactions
+    add constraint transactions_tax_treatment_check
+    check (tax_treatment in ('deductible','non_deductible','partial_50','capitalized','review'));
 end $$;
 
 -- Backfill existing rows (safe if already populated).
 update public.transactions
 set
   tax_category = coalesce(tax_category, 'taxable'),
+  tax_treatment = coalesce(tax_treatment, 'review'),
   tax_status = coalesce(tax_status, 'not_taxed')
-where tax_category is null or tax_status is null;
+where tax_category is null or tax_status is null or tax_treatment is null;
 
 -- Backfill tax_year from date (handles date or text that can be cast to date).
 update public.transactions

@@ -33,9 +33,6 @@ function containsAny(hay: string, needles: string[]) {
 export function classifyTaxBucket(tx: BucketedTx): TaxBucket {
   const amt = Number(tx.amount) || 0;
   const tcRaw = norm(tx.tax_category);
-  const cat = norm(tx.category);
-  const desc = norm(tx.description);
-  const text = `${cat} ${desc}`.trim();
 
   // Strict mapping from tax_category when present.
   const direct = tcRaw.replace(/\s+/g, '_');
@@ -51,53 +48,24 @@ export function classifyTaxBucket(tx: BucketedTx): TaxBucket {
     'loan_interest',
     'capex',
     'owner_draw',
+    'owner_estimated_tax' as any,
     'transfer',
     'uncategorized',
   ]);
   if (allowed.has(direct as TaxBucket)) return direct as TaxBucket;
 
-  // Backward-compatible mapping from legacy tax_category values (v0)
+  // Backward-compatible mapping from legacy tax_category values (v0).
+  // IMPORTANT: do not use description/category heuristics for tax calcs.
   if (direct === 'taxable') return amt >= 0 ? 'gross_receipts' : 'deductible_expense';
   if (direct === 'non_taxable') return 'transfer';
   if (direct === 'deductible') return 'deductible_expense';
   if (direct === 'non_deductible') return 'non_deductible_expense';
+  if (direct === 'partial_deductible') return 'deductible_expense';
   if (direct === 'capitalized') return 'capex';
   if (direct === 'review') return 'uncategorized';
 
-  // If category is explicitly uncategorized, treat as uncategorized.
-  if (!cat || cat === 'uncategorized') return 'uncategorized';
-
-  // Heuristic fallbacks (only when tax_category isn't one of our strict buckets)
-  if (containsAny(text, ['sales tax', 'salestax'])) {
-    return amt >= 0 ? 'sales_tax_collected' : 'sales_tax_paid';
-  }
-  if (containsAny(text, ['owner draw', 'owners draw', 'owner withdrawal', 'draw'])) {
-    return 'owner_draw';
-  }
-  if (containsAny(text, ['loan principal', 'principal payment', 'loan payment'])) {
-    return 'loan_principal';
-  }
-  if (containsAny(text, ['loan interest', 'interest'])) {
-    return 'loan_interest';
-  }
-  if (containsAny(text, ['capex', 'equipment', 'asset', 'capital'])) {
-    return 'capex';
-  }
-  if (containsAny(text, ['payroll tax', 'fica', 'medicare', 'futa', 'suta'])) {
-    return 'payroll_taxes';
-  }
-  if (containsAny(text, ['payroll', 'wages', 'salary'])) {
-    return 'payroll_wages';
-  }
-  if (containsAny(text, ['transfer', 'bank transfer', 'ach', 'wire', 'sweep'])) {
-    return 'transfer';
-  }
-  if (containsAny(text, ['owner investment', 'owner contribution', 'equity', 'capital contribution'])) {
-    return 'transfer';
-  }
-
-  // Default: treat as deductible expense if money out, gross receipts if money in.
-  return amt >= 0 ? 'gross_receipts' : 'deductible_expense';
+  // Unknown/empty -> uncategorized (low accuracy).
+  return 'uncategorized';
 }
 
 export function sumBuckets(txs: BucketedTx[]) {

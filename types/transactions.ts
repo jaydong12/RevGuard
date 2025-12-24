@@ -20,6 +20,9 @@ export interface Transaction {
   status: TransactionStatus | null;
   source: TransactionSource | null;
   notes: string | null;
+  tax_category?: string | null;
+  tax_treatment?: string | null;
+  confidence_score?: number | null;
   business_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;

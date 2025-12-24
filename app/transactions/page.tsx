@@ -65,6 +65,9 @@ type Transaction = {
   amount: number; // positive = income, negative = expense
   customer_id?: string | null;
   business_id?: string | null;
+  tax_category?: string | null;
+  tax_treatment?: string | null;
+  confidence_score?: number | null;
 };
 
 // Form state for creating / editing a transaction.
@@ -138,6 +141,7 @@ export default function TransactionsPage() {
     flow: 'expense',
   });
   const [formError, setFormError] = useState<string | null>(null);
+  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
 
   function isoToMdy(iso: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
@@ -269,10 +273,46 @@ export default function TransactionsPage() {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const userId = sess.session?.user?.id ?? null;
+      const token = sess.session?.access_token ?? null;
       if (!userId) {
         setFormError('Please log in to create transactions.');
         return;
       }
+      if (!token) {
+        setFormError('Please log in again.');
+        return;
+      }
+
+      // Classify tax tags (rules-first, optional AI server-side)
+      const classifyRes = await fetch('/api/transactions/classify-tax', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          transactions: [
+            {
+              description: formValues.description,
+              merchant: null,
+              category: formValues.category,
+              amount: amountNumber,
+            },
+          ],
+        }),
+      });
+
+      if (!classifyRes.ok) {
+        const txt = await classifyRes.text().catch(() => '');
+        setFormError(txt || 'Could not classify transaction for tax tagging.');
+        return;
+      }
+
+      const classifyJson: any = await classifyRes.json();
+      const tag = classifyJson?.results?.[0] ?? null;
+      const tax_category = String(tag?.tax_category ?? 'uncategorized');
+      const tax_treatment = String(tag?.tax_treatment ?? 'review');
+      const confidence_score = Number(tag?.confidence_score ?? 0.5);
 
       if (formMode === 'create') {
         // Insert a new transaction.
@@ -285,6 +325,9 @@ export default function TransactionsPage() {
             amount: amountNumber,
             customer_id: customerIdToSave,
             business_id: selectedBusinessId,
+            tax_category,
+            tax_treatment,
+            confidence_score,
           })
           .select('*')
           .single();
@@ -308,6 +351,9 @@ export default function TransactionsPage() {
             category: formValues.category,
             amount: amountNumber,
             customer_id: customerIdToSave,
+            tax_category,
+            tax_treatment,
+            confidence_score,
           })
           .eq('id', editingTx.id)
           .eq('business_id', selectedBusinessId)
@@ -461,6 +507,13 @@ export default function TransactionsPage() {
     const matchesMin = !amountMin.trim() || (!Number.isNaN(min) && absAmt >= min);
     const matchesMax = !amountMax.trim() || (!Number.isNaN(max) && absAmt <= max);
 
+    const needsReview =
+      String((tx as any)?.tax_category ?? '').toLowerCase() === 'uncategorized' ||
+      String((tx as any)?.tax_treatment ?? '').toLowerCase() === 'review' ||
+      (Number((tx as any)?.confidence_score ?? 1) < 0.75);
+
+    const matchesNeedsReview = !needsReviewOnly || needsReview;
+
     return (
       matchesSearch &&
       matchesFlow &&
@@ -468,7 +521,8 @@ export default function TransactionsPage() {
       matchesDateFrom &&
       matchesDateTo &&
       matchesMin &&
-      matchesMax
+      matchesMax &&
+      matchesNeedsReview
     );
   });
 
@@ -575,6 +629,19 @@ export default function TransactionsPage() {
             </div>
 
             <div className="flex flex-wrap gap-3 items-center">
+              {/* Needs review */}
+              <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10">
+                <input
+                  type="checkbox"
+                  checked={needsReviewOnly}
+                  onChange={(e) => {
+                    setNeedsReviewOnly(e.target.checked);
+                    setCurrentPage(1);
+                  }}
+                />
+                <span>Needs review</span>
+              </label>
+
               {/* Search */}
               <div className="relative flex-1 min-w-[240px]">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />

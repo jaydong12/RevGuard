@@ -2323,6 +2323,14 @@ export default function DashboardHome() {
       return;
     }
 
+    const { data: sessForTax } = await supabase.auth.getSession();
+    const token = sessForTax.session?.access_token ?? null;
+    if (!token) {
+      setMapError('Log in required to import.');
+      setImportToast({ kind: 'error', message: 'Log in to import.' });
+      return;
+    }
+
     // eslint-disable-next-line no-console
     console.log('IMPORT_START', {
       businessId: selectedBusinessId,
@@ -2380,7 +2388,6 @@ export default function DashboardHome() {
           description,
           category,
           amount,
-          user_id: userId,
           business_id: selectedBusinessId,
           customer_id: null as string | null,
           _raw_customer: customerCol ? String(row[customerCol] ?? '').trim() : '',
@@ -2513,7 +2520,50 @@ export default function DashboardHome() {
         return rest;
       });
 
-      const { error } = await supabase.from('transactions').insert(chunk);
+      // Tax tagging: classify each row before insert (rules-first, optional AI).
+      try {
+        const classifyRes = await fetch('/api/transactions/classify-tax', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            transactions: chunk.map((r: any) => ({
+              description: r.description ?? null,
+              merchant: null,
+              category: r.category ?? null,
+              amount: Number(r.amount) || 0,
+            })),
+          }),
+        });
+
+        if (classifyRes.ok) {
+          const json: any = await classifyRes.json();
+          const results: any[] = Array.isArray(json?.results) ? json.results : [];
+          for (let k = 0; k < chunk.length; k++) {
+            const tag = results[k] ?? null;
+            (chunk[k] as any).tax_category = String(tag?.tax_category ?? 'uncategorized');
+            (chunk[k] as any).tax_treatment = String(tag?.tax_treatment ?? 'review');
+            (chunk[k] as any).confidence_score = Number(tag?.confidence_score ?? 0.5);
+          }
+        } else {
+          // Fall back to defaults; user can fix via Needs review queue.
+          for (const r of chunk as any[]) {
+            r.tax_category = 'uncategorized';
+            r.tax_treatment = 'review';
+            r.confidence_score = 0.3;
+          }
+        }
+      } catch {
+        for (const r of chunk as any[]) {
+          r.tax_category = 'uncategorized';
+          r.tax_treatment = 'review';
+          r.confidence_score = 0.3;
+        }
+      }
+
+      const { error } = await supabase.from('transactions').insert(chunk as any);
 
       if (!error) {
         imported += chunk.length;

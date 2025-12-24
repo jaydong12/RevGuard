@@ -1,5 +1,3 @@
-import { sumBuckets } from './taxBuckets';
-
 export type TaxCategory =
   | 'taxable'
   | 'non_taxable'
@@ -52,6 +50,7 @@ export type TransactionRow = {
   category?: string | null;
   description?: string | null;
   tax_category?: TaxCategory | null;
+  tax_treatment?: string | null; // deductible/non_deductible/partial_50/capitalized/review
   confidence_score?: number | string | null; // 0..1
 };
 
@@ -269,18 +268,20 @@ function computeAccuracy(transactions: TransactionRow[]) {
   }
 
   let hasTaxCategory = 0;
-  let hasNonEmptyCategory = 0;
+  let hasTreatment = 0;
   let confCount = 0;
   let confSum = 0;
   let uncategorizedCount = 0;
+  let reviewCount = 0;
 
   for (const tx of txs) {
-    const tc = String((tx as any)?.tax_category ?? '').trim();
+    const tc = String((tx as any)?.tax_category ?? '').trim().toLowerCase();
     if (tc) hasTaxCategory += 1;
+    if (tc === 'uncategorized' || tc === 'review' || !tc) uncategorizedCount += 1;
 
-    const cat = String((tx as any)?.category ?? '').trim();
-    if (cat && cat.toLowerCase() !== 'uncategorized') hasNonEmptyCategory += 1;
-    if (!cat || cat.toLowerCase() === 'uncategorized') uncategorizedCount += 1;
+    const tt = String((tx as any)?.tax_treatment ?? '').trim().toLowerCase();
+    if (tt) hasTreatment += 1;
+    if (tt === 'review' || !tt) reviewCount += 1;
 
     const c = num((tx as any)?.confidence_score);
     if (c > 0) {
@@ -290,17 +291,24 @@ function computeAccuracy(transactions: TransactionRow[]) {
   }
 
   const taxCatCoverage = hasTaxCategory / txs.length; // 0..1
-  const categoryCoverage = hasNonEmptyCategory / txs.length; // 0..1
+  const treatmentCoverage = hasTreatment / txs.length; // 0..1
   const avgConfidence = confCount ? confSum / confCount : 0.5;
 
-  const uncategorizedPenalty = Math.min(25, (uncategorizedCount / txs.length) * 40);
-  const score = 40 * taxCatCoverage + 20 * categoryCoverage + 40 * clamp01(avgConfidence) - uncategorizedPenalty;
+  const uncategorizedPenalty = Math.min(30, (uncategorizedCount / txs.length) * 50);
+  const reviewPenalty = Math.min(20, (reviewCount / txs.length) * 30);
+  const score =
+    35 * taxCatCoverage +
+    25 * treatmentCoverage +
+    40 * clamp01(avgConfidence) -
+    uncategorizedPenalty -
+    reviewPenalty;
 
   const tips: string[] = [];
   if (taxCatCoverage < 0.9) tips.push('Mark more transactions with the correct tax category to improve accuracy.');
-  if (categoryCoverage < 0.9) tips.push('Categorize more transactions (avoid “Uncategorized”) to improve tax estimates.');
+  if (treatmentCoverage < 0.9) tips.push('Set tax treatment on more expenses (deductible / partial / non-deductible).');
   if (avgConfidence < 0.75) tips.push('Review low-confidence transaction classifications to improve estimate quality.');
-  if (uncategorizedCount > 0) tips.push('Classify uncategorized transactions to improve accuracy and reduce surprises.');
+  if (uncategorizedCount > 0) tips.push('Fix uncategorized tax tags to improve accuracy and reduce surprises.');
+  if (reviewCount > 0) tips.push('Resolve items marked “review” in the Needs review queue.');
 
   return { score: clamp100(score), tips };
 }
@@ -327,43 +335,74 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
     txsInRange.push(tx);
   }
 
-  // Strict tax bucket mapping drives income/profit totals.
-  const bucketed = sumBuckets(
-    txsInRange.map((t) => ({
-      amount: num((t as any)?.amount),
-      date: (t as any)?.date ?? null,
-      category: (t as any)?.category ?? null,
-      description: (t as any)?.description ?? null,
-      tax_category: String((t as any)?.tax_category ?? '') || null,
-      confidence_score: Number((t as any)?.confidence_score) || null,
-    }))
-  );
+  // TaxEngine v2: use ONLY tax_category + tax_treatment (no description/category heuristics).
+  let grossIncome = 0; // gross_receipts (+ uncategorized income)
+  let nonTaxableIncome = 0; // transfers + loan principal
+  let deductibleExpenses = 0; // based on tax_treatment
+  let nonDeductibleExpenses = 0; // based on tax_treatment (excludes owner_draw/capex/payments)
+  let salesTaxCollected = 0;
+  let salesTaxPaid = 0;
 
-  const b = bucketed.totals;
-  const uncIncome = Math.max(0, b.uncategorized || 0);
-  const uncExpense = Math.abs(Math.min(0, b.uncategorized || 0));
+  // For payroll runs (optional table), we keep existing support; but payroll deposits in transactions are also respected.
+  for (const tx of txsInRange as any[]) {
+    const amt = num(tx.amount);
+    if (!Number.isFinite(amt) || amt === 0) continue;
 
-  // Income/profit exclusions requested:
-  // - Exclude sales tax collected/paid
-  // - Exclude transfers
-  // - Exclude loan principal
-  const grossIncome = (b.gross_receipts || 0) + uncIncome;
-  const nonTaxableIncome = Math.abs(b.transfer || 0);
+    const taxCat = String(tx.tax_category ?? '').trim().toLowerCase();
+    const treatment = String(tx.tax_treatment ?? '').trim().toLowerCase();
 
-  const deductibleExpenses =
-    Math.abs(b.deductible_expense || 0) +
-    Math.abs(b.payroll_wages || 0) +
-    Math.abs(b.payroll_taxes || 0) +
-    Math.abs(b.loan_interest || 0) +
-    uncExpense;
+    if (taxCat === 'sales_tax_collected') {
+      if (amt > 0) salesTaxCollected += amt;
+      continue;
+    }
+    if (taxCat === 'sales_tax_paid') {
+      if (amt < 0) salesTaxPaid += Math.abs(amt);
+      continue;
+    }
 
-  const nonDeductibleExpenses =
-    Math.abs(b.non_deductible_expense || 0) + Math.abs(b.owner_draw || 0);
+    // Non-operating / excluded-from-profit buckets
+    if (taxCat === 'transfer' || taxCat === 'loan_principal') {
+      nonTaxableIncome += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'owner_estimated_tax') {
+      // payment, not a business expense
+      continue;
+    }
+    if (taxCat === 'owner_draw') {
+      // not a business expense
+      continue;
+    }
+    if (taxCat === 'capex') {
+      // capitalized, not a period expense in this simplified engine
+      continue;
+    }
 
-  const salesTaxCollected = Math.max(0, b.sales_tax_collected || 0);
-  const salesTaxPaid = Math.abs(b.sales_tax_paid || 0);
+    // Income
+    if (taxCat === 'gross_receipts' || (taxCat === 'uncategorized' && amt > 0)) {
+      if (amt > 0) grossIncome += amt;
+      continue;
+    }
 
-  // Capex and loan principal are excluded from profit/tax base by default.
+    // Expenses
+    if (amt < 0) {
+      const abs = Math.abs(amt);
+      if (treatment === 'deductible') {
+        deductibleExpenses += abs;
+      } else if (treatment === 'partial_50') {
+        deductibleExpenses += abs * 0.5;
+        nonDeductibleExpenses += abs * 0.5;
+      } else if (treatment === 'non_deductible' || treatment === 'review' || !treatment) {
+        // conservative: review counts as non-deductible until corrected
+        nonDeductibleExpenses += abs;
+      } else if (treatment === 'capitalized') {
+        // ignore in period
+      } else {
+        nonDeductibleExpenses += abs;
+      }
+    }
+  }
+
   const taxableProfit = Math.max(0, grossIncome - deductibleExpenses);
 
   const standardDeduction = getStandardDeduction(filingStatus);

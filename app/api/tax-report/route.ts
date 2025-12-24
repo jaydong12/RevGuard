@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../lib/requireActiveSubscription';
 import { computeTaxReport, type PayrollRunRow, type TransactionRow } from '../../../lib/taxEngine';
-import { sumBuckets } from '../../../lib/taxBuckets';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -86,16 +85,20 @@ function computeAccuracyForUi(txs: any[]) {
   }
 
   let taxCatCount = 0;
-  let catCount = 0;
+  let treatmentCount = 0;
   let confCount = 0;
   let confSum = 0;
+  let uncategorizedCount = 0;
+  let reviewCount = 0;
 
   for (const tx of txs) {
-    const taxCat = String((tx as any)?.tax_category ?? '').trim();
+    const taxCat = String((tx as any)?.tax_category ?? '').trim().toLowerCase();
     if (taxCat) taxCatCount += 1;
+    if (!taxCat || taxCat === 'uncategorized' || taxCat === 'review') uncategorizedCount += 1;
 
-    const cat = String((tx as any)?.category ?? '').trim();
-    if (cat && cat.toLowerCase() !== 'uncategorized') catCount += 1;
+    const tt = String((tx as any)?.tax_treatment ?? '').trim().toLowerCase();
+    if (tt) treatmentCount += 1;
+    if (!tt || tt === 'review') reviewCount += 1;
 
     const c = Number((tx as any)?.confidence_score);
     if (Number.isFinite(c)) {
@@ -105,10 +108,14 @@ function computeAccuracyForUi(txs: any[]) {
   }
 
   const taxCatCoverage = taxCatCount / txs.length;
-  const categoryCoverage = catCount / txs.length;
+  const treatmentCoverage = treatmentCount / txs.length;
   const avgConfidence = confCount ? confSum / confCount : 0.5;
 
-  const score = clamp100(40 * taxCatCoverage + 20 * categoryCoverage + 40 * avgConfidence);
+  const uncategorizedPenalty = Math.min(30, (uncategorizedCount / txs.length) * 50);
+  const reviewPenalty = Math.min(20, (reviewCount / txs.length) * 30);
+  const score = clamp100(
+    35 * taxCatCoverage + 25 * treatmentCoverage + 40 * avgConfidence - uncategorizedPenalty - reviewPenalty
+  );
 
   const sentence =
     score >= 85
@@ -119,8 +126,10 @@ function computeAccuracyForUi(txs: any[]) {
 
   const checklist: string[] = [];
   if (taxCatCoverage < 0.9) checklist.push('Mark more transactions with the right tax category');
-  if (categoryCoverage < 0.9) checklist.push('Reduce “Uncategorized” and add clearer categories');
+  if (treatmentCoverage < 0.9) checklist.push('Set tax treatment on more expenses');
   if (avgConfidence < 0.75) checklist.push('Review low-confidence items and correct mislabels');
+  if (uncategorizedCount > 0) checklist.push('Fix uncategorized tax tags (they reduce accuracy)');
+  if (reviewCount > 0) checklist.push('Resolve items marked “review” in Needs review');
   if (!checklist.length) checklist.push('Keep categories and tax tags current each week');
 
   return { score, sentence, checklist: checklist.slice(0, 3) };
@@ -248,33 +257,81 @@ async function handle(req: Request, body: any) {
   }
 
   // Provide a simple net profit computed from transactions (keeps UI consistent even if tax engine excludes some items).
-  const bucketed = sumBuckets(
-    (transactions as any[]).map((t) => ({
-      amount: Number((t as any)?.amount) || 0,
-      date: (t as any)?.date ?? null,
-      category: (t as any)?.category ?? null,
-      description: (t as any)?.description ?? null,
-      tax_category: String((t as any)?.tax_category ?? '') || null,
-      confidence_score: Number((t as any)?.confidence_score) || null,
-    }))
-  );
-  const b = bucketed.totals;
+  let grossReceipts = 0;
+  let uncategorizedIncome = 0;
+  let deductibleExpenses = 0;
+  let nonDeductibleExpenses = 0;
+  let salesTaxCollected = 0;
+  let salesTaxPaid = 0;
+  let transfers = 0;
+  let loanPrincipal = 0;
+  let ownerDraw = 0;
+  let capex = 0;
+  let ownerEstimatedTax = 0;
 
-  // Profit from transactions with exclusions:
-  // - exclude sales tax (collected/paid)
-  // - exclude transfers
-  // - exclude loan principal
-  // - exclude owner draws and capex (not operating profit)
-  const incomeIncluded =
-    Math.max(0, b.gross_receipts || 0) + Math.max(0, b.uncategorized || 0);
-  const expensesIncluded =
-    Math.abs(Math.min(0, b.deductible_expense || 0)) +
-    Math.abs(Math.min(0, b.non_deductible_expense || 0)) +
-    Math.abs(Math.min(0, b.loan_interest || 0)) +
-    Math.abs(Math.min(0, b.payroll_wages || 0)) +
-    Math.abs(Math.min(0, b.payroll_taxes || 0)) +
-    Math.abs(Math.min(0, b.uncategorized || 0));
-  const netProfit = incomeIncluded - expensesIncluded;
+  const txs = transactions as any[];
+  for (const tx of txs) {
+    const amt = Number(tx?.amount) || 0;
+    if (!Number.isFinite(amt) || amt === 0) continue;
+    const taxCat = String(tx?.tax_category ?? '').trim().toLowerCase();
+    const treatment = String(tx?.tax_treatment ?? '').trim().toLowerCase();
+
+    if (taxCat === 'sales_tax_collected') {
+      if (amt > 0) salesTaxCollected += amt;
+      continue;
+    }
+    if (taxCat === 'sales_tax_paid') {
+      if (amt < 0) salesTaxPaid += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'transfer') {
+      transfers += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'loan_principal') {
+      loanPrincipal += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'owner_draw') {
+      ownerDraw += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'capex') {
+      capex += Math.abs(amt);
+      continue;
+    }
+    if (taxCat === 'owner_estimated_tax') {
+      ownerEstimatedTax += Math.abs(amt);
+      continue;
+    }
+
+    if (taxCat === 'gross_receipts') {
+      if (amt > 0) grossReceipts += amt;
+      continue;
+    }
+    if (taxCat === 'uncategorized') {
+      if (amt > 0) uncategorizedIncome += amt;
+      // expenses handled below
+    }
+
+    if (amt < 0) {
+      const abs = Math.abs(amt);
+      if (treatment === 'deductible') deductibleExpenses += abs;
+      else if (treatment === 'partial_50') {
+        deductibleExpenses += abs * 0.5;
+        nonDeductibleExpenses += abs * 0.5;
+      } else if (treatment === 'non_deductible' || treatment === 'review' || !treatment) {
+        nonDeductibleExpenses += abs;
+      } else if (treatment === 'capitalized') {
+        // ignore here (capex should have its own bucket)
+      } else {
+        nonDeductibleExpenses += abs;
+      }
+    }
+  }
+
+  const incomeIncluded = grossReceipts + uncategorizedIncome;
+  const netProfit = incomeIncluded - (deductibleExpenses + nonDeductibleExpenses);
 
   // Load payroll runs if table exists; otherwise treat as empty.
   let payrollRuns: PayrollRunRow[] = [];
@@ -335,15 +392,6 @@ async function handle(req: Request, body: any) {
   });
 
   const accuracy = computeAccuracyForUi(transactions as any[]);
-  if (bucketed.uncategorizedCount > 0) {
-    const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
-    const fix = 'Fix uncategorized transactions (so totals match reality)';
-    if (!checklist.includes(fix)) checklist.unshift(fix);
-    (accuracy as any).checklist = checklist.slice(0, 4);
-    // Penalize score for uncategorized rows
-    const penalty = Math.min(25, (bucketed.uncategorizedCount / Math.max(1, bucketed.totalCount)) * 40);
-    (accuracy as any).score = clamp100(Number((accuracy as any).score ?? 0) - penalty);
-  }
   if (payrollMissing) {
     const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
     const fix = 'Create/connect payroll (so payroll taxes can be included)';
@@ -353,20 +401,13 @@ async function handle(req: Request, body: any) {
   const nextPayment = pickNextPayment(report as any);
 
   // Breakdown totals must come only from summed transactions (bucket sums).
-  const deductibleForTaxableProfit =
-    Math.abs(Math.min(0, b.deductible_expense || 0)) +
-    Math.abs(Math.min(0, b.payroll_wages || 0)) +
-    Math.abs(Math.min(0, b.payroll_taxes || 0)) +
-    Math.abs(Math.min(0, b.loan_interest || 0)) +
-    Math.abs(Math.min(0, b.uncategorized || 0));
-
-  const taxableProfit =
-    incomeIncluded -
-    deductibleForTaxableProfit;
+  const deductibleForTaxableProfit = deductibleExpenses;
+  const taxableProfit = incomeIncluded - deductibleForTaxableProfit;
   const taxesOwed = Number((report as any)?.estimates?.total_estimated_tax) || 0;
   const setAsidePct = taxableProfit > 0 ? clamp01(taxesOwed / taxableProfit) : null;
 
   const reconciliationNotes: string[] = [];
+  const expensesIncluded = deductibleExpenses + nonDeductibleExpenses;
   const r1 = Math.abs(netProfit - (incomeIncluded - expensesIncluded));
   if (r1 > 0.01) {
     reconciliationNotes.push(`Profit mismatch: ${r1.toFixed(2)}`);
@@ -386,13 +427,13 @@ async function handle(req: Request, body: any) {
     breakdown: {
       meta: { transactionCount: (transactions as any[])?.length ?? 0 },
       income: {
-        grossIncome: Math.max(0, b.gross_receipts || 0) + Math.max(0, b.uncategorized || 0),
-        nonTaxableIncome: Math.abs(b.transfer || 0) + Math.abs(b.loan_principal || 0),
+        grossIncome: incomeIncluded,
+        nonTaxableIncome: transfers + loanPrincipal,
         taxableIncome: incomeIncluded,
       },
       writeOffs: {
-        deductibleExpenses: deductibleForTaxableProfit,
-        nonDeductibleExpenses: Math.abs(Math.min(0, b.non_deductible_expense || 0)),
+        deductibleExpenses,
+        nonDeductibleExpenses,
         standardDeduction: Number((report as any)?.meta?.standard_deduction) || 0,
         seHalfDeduction: Number((report as any)?.meta?.se_half_deduction) || 0,
       },
@@ -405,17 +446,17 @@ async function handle(req: Request, body: any) {
         state: Number((report as any)?.estimates?.state_income_tax) || 0,
         selfEmployment: Number((report as any)?.estimates?.self_employment_tax) || 0,
         payrollEmployer: Number((report as any)?.estimates?.employer_payroll_taxes) || 0,
-        salesTaxLiability:
-          Math.max(0, b.sales_tax_collected || 0) - Math.abs(Math.min(0, b.sales_tax_paid || 0)),
+        salesTaxLiability: Math.max(0, salesTaxCollected - salesTaxPaid),
         total: taxesOwed,
       },
       excluded: {
-        salesTaxCollected: Math.max(0, b.sales_tax_collected || 0),
-        salesTaxPaid: Math.abs(Math.min(0, b.sales_tax_paid || 0)),
-        transfers: Math.abs(b.transfer || 0),
-        loanPrincipal: Math.abs(b.loan_principal || 0),
-        capex: Math.abs(Math.min(0, b.capex || 0)),
-        ownerDraw: Math.abs(Math.min(0, b.owner_draw || 0)),
+        salesTaxCollected,
+        salesTaxPaid,
+        transfers,
+        loanPrincipal,
+        capex,
+        ownerDraw,
+        ownerEstimatedTax,
       },
     },
     accuracy,
