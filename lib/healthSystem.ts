@@ -14,6 +14,7 @@ export type HealthPillar = {
   whatThisMeans?: string;
   help: {
     what: string;
+    bulletsTitle?: string;
     calc: string[];
     good: string;
   };
@@ -355,13 +356,14 @@ export function computeHealthSystem(params: {
       state: stateFromScore(cashScore),
       whatThisMeans: `What this means: ${cashWhatThisMeans}`,
       help: {
-        what: 'Shows whether cash is trending up or down recently.',
+        what: 'Tells you if money in is keeping up with money out lately.',
+        bulletsTitle: 'It goes up when…',
         calc: [
-          'Looks at last 30 days net (money in − money out)',
-          'Adds a runway estimate when spending > income',
-          'Higher score when cash is improving and runway is healthier',
+          'You’re bringing in more than you’re spending',
+          'Your spending is steady (fewer surprise swings)',
+          'If you’re spending more than you earn, your runway improves',
         ],
-        good: '80+ means cash is steady or improving (and you’re not burning fast).',
+        good: '80+ means cash flow is steady and under control.',
       },
       notes:
         runwayDays !== null && Number.isFinite(runwayDays)

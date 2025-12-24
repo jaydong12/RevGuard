@@ -56,11 +56,13 @@ function formatPct(p: number | null) {
 function Tooltip({
   title,
   what,
+  bulletsTitle,
   calc,
   good,
 }: {
   title: string;
   what: string;
+  bulletsTitle?: string;
   calc: string[];
   good: string;
 }) {
@@ -68,7 +70,7 @@ function Tooltip({
     <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 w-[280px] -translate-x-1/2 rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)] opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
       <div className="text-xs font-semibold text-slate-100">{title}</div>
       <div className="mt-1 text-[11px] text-slate-300 leading-relaxed">{what}</div>
-      <div className="mt-2 text-[11px] text-slate-400">How it’s scored</div>
+      <div className="mt-2 text-[11px] text-slate-400">{bulletsTitle ?? 'How it’s scored'}</div>
       <ul className="mt-1 space-y-0.5 text-[11px] text-slate-300">
         {calc.slice(0, 4).map((c, i) => (
           <li key={i} className="flex gap-2">
@@ -78,7 +80,7 @@ function Tooltip({
         ))}
       </ul>
       <div className="mt-2 text-[11px] text-slate-300">
-        <span className="text-slate-400">Good looks like:</span> {good}
+        <span className="text-slate-400">Interpretation:</span> {good}
       </div>
     </div>
   );
@@ -87,18 +89,20 @@ function Tooltip({
 function InfoTip({
   title,
   what,
+  bulletsTitle,
   calc,
   good,
 }: {
   title: string;
   what: string;
+  bulletsTitle?: string;
   calc: string[];
   good: string;
 }) {
   return (
     <span className="group relative inline-flex items-center">
       <Info className="h-3.5 w-3.5 text-slate-500 group-hover:text-slate-200 transition" />
-      <Tooltip title={title} what={what} calc={calc} good={good} />
+      <Tooltip title={title} what={what} bulletsTitle={bulletsTitle} calc={calc} good={good} />
     </span>
   );
 }
@@ -159,6 +163,7 @@ function HealthMetric({ pillar }: { pillar: HealthPillar }) {
               <InfoTip
                 title={pillar.label}
                 what={pillar.help.what}
+                bulletsTitle={pillar.help.bulletsTitle}
                 calc={pillar.help.calc}
                 good={pillar.help.good}
               />
