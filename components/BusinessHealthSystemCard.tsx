@@ -105,10 +105,11 @@ function InfoTip({
 
 function SegmentedBar({ score, state }: { score: number; state: HealthState }) {
   const pct = Math.max(0, Math.min(100, Math.round(score)));
-  const segments = 22;
+  // Slightly fewer segments + thinner bars = calmer, more modern look.
+  const segments = 18;
   const filled = Math.round((pct / 100) * segments);
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-[3px]">
       {Array.from({ length: segments }).map((_, i) => {
         const on = i < filled;
         const rounded =
@@ -121,7 +122,7 @@ function SegmentedBar({ score, state }: { score: number; state: HealthState }) {
                 ? `bg-gradient-to-r ${barFillClasses(
                     state
                   )} shadow-[0_0_14px_rgba(56,189,248,0.10)]`
-                : 'bg-white/10'
+                : 'bg-white/[0.08]'
             }`}
           />
         );
@@ -165,6 +166,11 @@ function HealthMetric({ pillar }: { pillar: HealthPillar }) {
           </div>
         </div>
         <SegmentedBar score={pillar.score} state={pillar.state} />
+        {pillar.key === 'cashFlow' && pillar.whatThisMeans && (
+          <div className="text-[11px] text-slate-400 leading-relaxed">
+            {pillar.whatThisMeans}
+          </div>
+        )}
       </div>
       <div className="text-right text-[11px] text-slate-400 tabular-nums">
         {Math.max(0, Math.min(100, Math.round(pillar.score)))}%

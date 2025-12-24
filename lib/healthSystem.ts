@@ -11,6 +11,7 @@ export type HealthPillar = {
   label: string;
   score: number; // 0–100
   state: HealthState;
+  whatThisMeans?: string;
   help: {
     what: string;
     calc: string[];
@@ -255,6 +256,25 @@ export function computeHealthSystem(params: {
     runwayDays === null ? 10 : clamp100(Math.min(30, Math.max(0, (runwayDays - 14) * 1.5)));
   const cashScore = clamp100(cashPerfScore + runwayBoost);
 
+  const cashWhatThisMeans = (() => {
+    // Keep this human + short; avoid finance jargon.
+    if (cur30.income === 0 && cur30.expenses === 0) {
+      return 'No recent activity yet — add transactions to get a reliable signal.';
+    }
+    if (avgDailyNet30 >= 0) {
+      return 'Money in has been keeping up with money out lately.';
+    }
+    // net negative lately
+    if (runwayDays !== null && Number.isFinite(runwayDays)) {
+      const days = Math.max(0, Math.round(runwayDays));
+      return `You’ve been spending more than you’re bringing in lately. At this pace, runway is ~${days} days.`;
+    }
+    if (cashBalance <= 0) {
+      return 'You’ve been spending more than you’re bringing in lately, and cash is tight.';
+    }
+    return 'You’ve been spending more than you’re bringing in lately — watch cash closely.';
+  })();
+
   // ---------- Pillar: Expense Control ----------
   const expenseRatio = cur30.income > 0 ? cur30.expenses / cur30.income : null;
   // lower expense ratio is better; 0.3 => ~100, 0.8 => ~0
@@ -333,14 +353,15 @@ export function computeHealthSystem(params: {
       label: 'Cash Flow Health',
       score: cashScore,
       state: stateFromScore(cashScore),
+      whatThisMeans: `What this means: ${cashWhatThisMeans}`,
       help: {
-        what: 'Measures how steady money in vs out is.',
+        what: 'Shows whether cash is trending up or down recently.',
         calc: [
-          'Last 30 days net cash pace (up/down)',
-          'Runway estimate when net is negative',
-          'Rewards positive net and longer runway',
+          'Looks at last 30 days net (money in − money out)',
+          'Adds a runway estimate when spending > income',
+          'Higher score when cash is improving and runway is healthier',
         ],
-        good: '80+ means cash is steady or improving (and runway is healthy if you’re burning).',
+        good: '80+ means cash is steady or improving (and you’re not burning fast).',
       },
       notes:
         runwayDays !== null && Number.isFinite(runwayDays)
