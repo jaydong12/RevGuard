@@ -1281,7 +1281,7 @@ export default function DashboardHome() {
   }, [smartTaxes?.simpleCards?.taxSetAside?.pct, todaysTaxableProfit]);
 
   const smartTaxAlerts = useMemo(() => {
-    const alerts: string[] = [];
+    const alerts: Array<{ text: string; href: string }> = [];
     if (!selectedBusinessId) return alerts;
 
     const salesTaxOwed = Number(smartTaxes?.breakdown?.taxes?.salesTaxLiability ?? 0) || 0;
@@ -1293,13 +1293,19 @@ export default function DashboardHome() {
         .sort()
         .pop();
       if (!lastPay) {
-        alerts.push('You’re collecting sales tax, but we don’t see a sales tax payment yet.');
+        alerts.push({
+          text: 'You’re collecting sales tax, but we don’t see a sales tax payment yet.',
+          href: '/transactions?q=sales%20tax',
+        });
       } else {
         const daysSince =
           (new Date(todayIso).getTime() - new Date(`${lastPay}T00:00:00Z`).getTime()) /
           (1000 * 60 * 60 * 24);
         if (daysSince > 45) {
-          alerts.push('Sales tax looks owed, but your last sales tax payment was a while ago.');
+          alerts.push({
+            text: 'Sales tax looks owed, but your last sales tax payment was a while ago.',
+            href: '/transactions?q=sales%20tax',
+          });
         }
       }
     }
@@ -1315,7 +1321,10 @@ export default function DashboardHome() {
       )
       .reduce((sum, t) => sum + Math.abs(Number(t?.amount) || 0), 0);
     if (uncSpend > 250) {
-      alerts.push('Some spending needs review—fixing it will tighten your tax estimate.');
+      alerts.push({
+        text: 'Some spending needs review—fixing it will tighten your tax estimate.',
+        href: '/transactions?needsReview=1',
+      });
     }
 
     const misclassifiedTransfers = (transactions as any[]).filter((t) => {
@@ -1325,7 +1334,10 @@ export default function DashboardHome() {
       return txt.includes('transfer') || txt.includes('loan');
     }).length;
     if (misclassifiedTransfers > 0) {
-      alerts.push('Some transactions look like transfers/loans but are tagged as income—worth a quick review.');
+      alerts.push({
+        text: 'Some transactions look like transfers/loans but are tagged as income—worth a quick review.',
+        href: '/transactions?q=transfer',
+      });
     }
 
     const ownerPayments = (transactions as any[]).filter((t) => {
@@ -1333,7 +1345,10 @@ export default function DashboardHome() {
       return tc === 'owner_draw' || tc === 'owner_estimated_tax';
     }).length;
     if (ownerPayments > 0) {
-      alerts.push('We detected owner-related payments. These shouldn’t be counted as business expenses.');
+      alerts.push({
+        text: 'We detected owner-related payments. These shouldn’t be counted as business expenses.',
+        href: '/transactions?q=estimated%20tax',
+      });
     }
 
     return alerts.slice(0, 4);
@@ -3102,9 +3117,15 @@ export default function DashboardHome() {
                     </div>
                     <ul className="mt-2 space-y-2 text-sm text-slate-200">
                       {smartTaxAlerts.map((a) => (
-                        <li key={a} className="flex items-start gap-2">
+                        <li key={a.text} className="flex items-start gap-2">
                           <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-300/90" />
-                          <span className="leading-relaxed">{a}</span>
+                          <button
+                            type="button"
+                            onClick={() => router.push(a.href)}
+                            className="text-left leading-relaxed hover:text-slate-50 transition"
+                          >
+                            {a.text}
+                          </button>
                         </li>
                       ))}
                     </ul>

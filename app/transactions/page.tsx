@@ -17,6 +17,8 @@ import {
   Pencil,
   Search,
   SlidersHorizontal,
+  Tag,
+  RotateCw,
   Trash2,
 } from 'lucide-react';
 
@@ -142,6 +144,134 @@ export default function TransactionsPage() {
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
+
+  const [taxModalOpen, setTaxModalOpen] = useState(false);
+  const [taxTx, setTaxTx] = useState<Transaction | null>(null);
+  const [taxCategory, setTaxCategory] = useState<string>('uncategorized');
+  const [taxTreatment, setTaxTreatment] = useState<string>('review');
+  const [taxReason, setTaxReason] = useState<string>('');
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxError, setTaxError] = useState<string | null>(null);
+
+  const TAX_CATEGORY_OPTIONS: Array<{ value: string; label: string; help: string }> = [
+    { value: 'gross_receipts', label: 'Income', help: 'Money coming in from customers.' },
+    { value: 'sales_tax_collected', label: 'Sales tax collected', help: 'Tax you collected (not income).' },
+    { value: 'sales_tax_paid', label: 'Sales tax payment', help: 'Payment to the state (reduces sales-tax owed).' },
+    { value: 'payroll_wages', label: 'Payroll wages', help: 'Employee wages/salaries.' },
+    { value: 'payroll_taxes', label: 'Payroll taxes', help: 'Payroll tax deposits/withholding payments.' },
+    { value: 'loan_principal', label: 'Loan principal payment', help: 'Principal is not a deductible expense.' },
+    { value: 'loan_interest', label: 'Loan interest', help: 'Interest may be deductible.' },
+    { value: 'capex', label: 'Equipment / asset purchase', help: 'Capital purchase (usually depreciated).' },
+    { value: 'owner_draw', label: 'Owner payment (draw)', help: 'Owner draw isn’t a business expense.' },
+    { value: 'owner_estimated_tax', label: 'Owner tax payment (estimated)', help: 'Quarterly estimated tax payment.' },
+    { value: 'transfer', label: 'Transfer', help: 'Move money between accounts (not income/expense).' },
+    { value: 'uncategorized', label: 'Not sure yet', help: 'Leave this for Needs review.' },
+  ];
+
+  const TAX_TREATMENT_OPTIONS: Array<{ value: string; label: string; help: string }> = [
+    { value: 'deductible', label: 'Deductible', help: 'Counts as a write-off.' },
+    { value: 'partial_50', label: '50% deductible', help: 'Common for meals in many cases.' },
+    { value: 'non_deductible', label: 'Not deductible', help: 'Does not reduce taxable profit.' },
+    { value: 'capitalized', label: 'Capital purchase', help: 'Tracked as an asset (not a normal expense).' },
+    { value: 'review', label: 'Needs review', help: 'We’ll treat this conservatively until you confirm.' },
+  ];
+
+  function isNeedsReview(tx: Transaction) {
+    const tc = String((tx as any)?.tax_category ?? '').toLowerCase();
+    const tt = String((tx as any)?.tax_treatment ?? '').toLowerCase();
+    const cs = Number((tx as any)?.confidence_score ?? 1);
+    return tc === 'uncategorized' || tt === 'review' || (!Number.isNaN(cs) && cs < 0.75);
+  }
+
+  function openTaxModal(tx: Transaction) {
+    setTaxTx(tx);
+    setTaxCategory(String((tx as any)?.tax_category ?? 'uncategorized') || 'uncategorized');
+    setTaxTreatment(String((tx as any)?.tax_treatment ?? 'review') || 'review');
+    setTaxReason('');
+    setTaxError(null);
+    setTaxModalOpen(true);
+  }
+
+  function closeTaxModal() {
+    setTaxModalOpen(false);
+    setTaxTx(null);
+    setTaxReason('');
+    setTaxError(null);
+  }
+
+  async function handleAutoTagAgain() {
+    if (!taxTx) return;
+    try {
+      setTaxError(null);
+      setTaxReason('Auto-tagging…');
+
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token ?? null;
+      if (!token) throw new Error('Please log in again.');
+
+      const res = await fetch('/api/transactions/classify-tax', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          transactions: [
+            {
+              description: taxTx.description,
+              merchant: null,
+              category: taxTx.category,
+              amount: taxTx.amount,
+            },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(txt || 'Auto-tagging failed.');
+      }
+      const json: any = await res.json();
+      const tag = json?.results?.[0] ?? null;
+      setTaxCategory(String(tag?.tax_category ?? 'uncategorized'));
+      setTaxTreatment(String(tag?.tax_treatment ?? 'review'));
+      setTaxReason(String(tag?.reasoning ?? ''));
+    } catch (e: any) {
+      setTaxReason('');
+      setTaxError(e?.message ?? 'Auto-tagging failed.');
+    }
+  }
+
+  async function handleSaveTaxTags() {
+    if (!taxTx || !selectedBusinessId) return;
+    try {
+      setTaxSaving(true);
+      setTaxError(null);
+
+      const { error } = await supabase
+        .from('transactions')
+        .update({
+          tax_category: taxCategory,
+          tax_treatment: taxTreatment,
+          confidence_score: 1, // user-confirmed
+        } as any)
+        .eq('id', taxTx.id)
+        .eq('business_id', selectedBusinessId);
+
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error('TX_TAXTAG_UPDATE_ERROR', error);
+        setTaxError(error.message ?? 'Could not save tax tags.');
+        return;
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['transactions', selectedBusinessId] });
+      closeTaxModal();
+    } catch (e: any) {
+      setTaxError(e?.message ?? 'Could not save tax tags.');
+    } finally {
+      setTaxSaving(false);
+    }
+  }
 
   function isoToMdy(iso: string): string {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
@@ -839,6 +969,7 @@ export default function TransactionsPage() {
                     const amountClass = isNegative ? 'text-rose-300' : 'text-emerald-300';
                     const rowBg = idx % 2 === 0 ? 'bg-white/[0.02]' : 'bg-white/[0.04]';
                     const cat = String(tx.category ?? '').trim() || 'Uncategorized';
+                    const needsReview = isNeedsReview(tx);
                     const dateObj = new Date(tx.date);
                     const dateLabel = Number.isNaN(dateObj.getTime())
                       ? tx.date
@@ -864,6 +995,13 @@ export default function TransactionsPage() {
                               <div className="mt-1 text-[11px] text-slate-400">
                                 {isNegative ? 'Expense' : 'Income'}
                               </div>
+                              {needsReview && (
+                                <div className="mt-2">
+                                  <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-100">
+                                    Needs review
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 align-top">
@@ -880,8 +1018,19 @@ export default function TransactionsPage() {
                           <td className="px-4 py-3 align-top text-right">
                             <button
                               type="button"
+                              onClick={() => openTaxModal(tx)}
+                              className={`inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 ${
+                                needsReview ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                              } hover:bg-white/10 transition`}
+                              aria-label="Fix tax tag"
+                              title="Fix tax tag"
+                            >
+                              <Tag className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => openEditForm(tx)}
-                              className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 opacity-0 group-hover:opacity-100 hover:bg-white/10 transition"
+                              className="ml-2 inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 opacity-0 group-hover:opacity-100 hover:bg-white/10 transition"
                               aria-label="Edit"
                               title="Edit"
                             >
@@ -1163,6 +1312,127 @@ export default function TransactionsPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* Tax tagging modal (plain-English) */}
+        {taxModalOpen && taxTx && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    Smart Taxes
+                  </div>
+                  <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
+                    Fix tax tag
+                  </div>
+                  <div className="mt-1 text-sm text-slate-300 leading-relaxed">
+                    Choose what this is, in plain English. This improves your estimates.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeTaxModal}
+                  className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                <div className="text-sm font-semibold text-slate-100 truncate">
+                  {taxTx.description || '—'}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {taxTx.date} • {formatCurrency(taxTx.amount)}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    What is it?
+                  </div>
+                  <select
+                    style={{ colorScheme: 'dark' }}
+                    value={taxCategory}
+                    onChange={(e) => setTaxCategory(e.target.value)}
+                    className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 hover:bg-slate-950/80 hover:border-white/20"
+                  >
+                    {TAX_CATEGORY_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value} className="bg-slate-950 text-slate-100">
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    {TAX_CATEGORY_OPTIONS.find((o) => o.value === taxCategory)?.help ?? ''}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    How should it count?
+                  </div>
+                  <select
+                    style={{ colorScheme: 'dark' }}
+                    value={taxTreatment}
+                    onChange={(e) => setTaxTreatment(e.target.value)}
+                    className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 hover:bg-slate-950/80 hover:border-white/20"
+                  >
+                    {TAX_TREATMENT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value} className="bg-slate-950 text-slate-100">
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    {TAX_TREATMENT_OPTIONS.find((o) => o.value === taxTreatment)?.help ?? ''}
+                  </div>
+                </div>
+              </div>
+
+              {taxReason && (
+                <div className="mt-3 text-[11px] text-slate-400">
+                  {taxReason}
+                </div>
+              )}
+
+              {taxError && (
+                <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                  {taxError}
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleAutoTagAgain()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                >
+                  <RotateCw className="h-4 w-4" />
+                  Auto-tag again
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={closeTaxModal}
+                    className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveTaxTags()}
+                    disabled={taxSaving || !selectedBusinessId}
+                    className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {taxSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
