@@ -22,6 +22,7 @@ import { BalanceSheetCard } from '../../components/BalanceSheetCard';
 import { CashFlowCard } from '../../components/CashFlowCard';
 import WeeklyOverviewChart from '../../components/WeeklyOverviewChart';
 import BusinessHealthSystemCard from '../../components/BusinessHealthSystemCard';
+import MonthlyReviewCalendar from '../../components/MonthlyReviewCalendar';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { computeHealthSystem } from '../../lib/healthSystem';
 import { useQueryClient } from '@tanstack/react-query';
@@ -1174,6 +1175,14 @@ export default function DashboardHome() {
     []
   );
   const [reviewChecklist, setReviewChecklist] = useState<Record<string, boolean>>({});
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [calendarProgressByDay, setCalendarProgressByDay] = useState<
+    Record<string, { transactions: boolean; categories: boolean; biggest_move: boolean }>
+  >({});
+  const [calendarLoading, setCalendarLoading] = useState(false);
 
   useEffect(() => {
     setReviewedJustNow(false);
@@ -1215,6 +1224,82 @@ export default function DashboardHome() {
     }
   }, [selectedBusinessId, todayKey]);
 
+  function monthBoundsIso(monthDate: Date) {
+    const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+    const toIso = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { start: toIso(start), end: toIso(end) };
+  }
+
+  // Load calendar progress for current month from DB (persisted so past days stay lit).
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!selectedBusinessId) {
+        setCalendarProgressByDay({});
+        return;
+      }
+      setCalendarLoading(true);
+      try {
+        const { start, end } = monthBoundsIso(calendarMonth);
+        const res = await supabase
+          .from('daily_review_calendar')
+          .select('day,transactions,categories,biggest_move')
+          .eq('business_id', selectedBusinessId)
+          .gte('day', start)
+          .lte('day', end);
+        if (res.error) throw res.error;
+
+        const map: Record<string, { transactions: boolean; categories: boolean; biggest_move: boolean }> = {};
+        for (const row of (res.data as any[]) ?? []) {
+          const day = String((row as any).day ?? '').slice(0, 10);
+          if (!day) continue;
+          map[day] = {
+            transactions: Boolean((row as any).transactions),
+            categories: Boolean((row as any).categories),
+            biggest_move: Boolean((row as any).biggest_move),
+          };
+        }
+        if (cancelled) return;
+        setCalendarProgressByDay(map);
+      } catch {
+        if (cancelled) return;
+        setCalendarProgressByDay({});
+      } finally {
+        if (!cancelled) setCalendarLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBusinessId, calendarMonth]);
+
+  async function upsertCalendarProgress(day: string, progress: { transactions: boolean; categories: boolean; biggest_move: boolean }) {
+    if (!selectedBusinessId) return;
+    // optimistic update
+    setCalendarProgressByDay((prev) => ({ ...prev, [day]: progress }));
+    try {
+      const { error } = await supabase
+        .from('daily_review_calendar')
+        .upsert(
+          {
+            business_id: selectedBusinessId,
+            day,
+            transactions: progress.transactions,
+            categories: progress.categories,
+            biggest_move: progress.biggest_move,
+          } as any,
+          { onConflict: 'business_id,day' }
+        );
+      if (error) throw error;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('DAILY_REVIEW_CALENDAR_UPSERT_ERROR', e);
+    }
+  }
+
   function persistChecklist(next: Record<string, boolean>) {
     if (!selectedBusinessId) return;
     try {
@@ -1231,6 +1316,13 @@ export default function DashboardHome() {
     setReviewChecklist((prev) => {
       const next = { ...prev, [id]: !prev?.[id] };
       persistChecklist(next);
+      // Sync to DB calendar for today.
+      const progress = {
+        transactions: Boolean(next.reviewed_tx),
+        categories: Boolean(next.checked_categories),
+        biggest_move: Boolean(next.noted_biggest),
+      };
+      void upsertCalendarProgress(todayKey, progress);
       return next;
     });
   }
@@ -1249,6 +1341,11 @@ export default function DashboardHome() {
     for (const it of CHECKLIST_ITEMS) allChecked[it.id] = true;
     setReviewChecklist(allChecked);
     persistChecklist(allChecked);
+    void upsertCalendarProgress(todayKey, {
+      transactions: true,
+      categories: true,
+      biggest_move: true,
+    });
 
     try {
       localStorage.setItem(
@@ -2638,6 +2735,15 @@ export default function DashboardHome() {
 
               {/* Snapshot + checklist + focus */}
               <div className="mt-4 space-y-4">
+                <MonthlyReviewCalendar
+                  monthDate={calendarMonth}
+                  onMonthChange={(d) => setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1))}
+                  progressByDay={calendarProgressByDay}
+                />
+                {calendarLoading && (
+                  <div className="text-[11px] text-slate-500 -mt-2">Loading calendar…</div>
+                )}
+
                 <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
                     <FileText className="h-4 w-4 text-slate-300/80" />
