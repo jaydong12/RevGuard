@@ -77,6 +77,11 @@ export type TaxReportInput = {
 
 export type TaxReport = {
   period: { from: string; to: string; year: number };
+  meta: {
+    standard_deduction: number;
+    se_half_deduction: number;
+    federal_taxable_income: number;
+  };
   applicable_taxes: TaxApplicable[];
   totals: {
     gross_income: number;
@@ -481,6 +486,11 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
 
   return {
     period,
+    meta: {
+      standard_deduction: standardDeduction,
+      se_half_deduction: halfDeduction,
+      federal_taxable_income: federalTaxableIncome,
+    },
     applicable_taxes,
     totals: {
       gross_income: grossIncome,

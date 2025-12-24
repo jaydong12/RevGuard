@@ -49,15 +49,87 @@ function isIsoDate(s: unknown): s is string {
 }
 
 function parseQueryParams(url: URL) {
-  const year = Number(url.searchParams.get('year') ?? '') || null;
-  const from = url.searchParams.get('from');
-  const to = url.searchParams.get('to');
+  const startDate = url.searchParams.get('startDate') ?? url.searchParams.get('from');
+  const endDate = url.searchParams.get('endDate') ?? url.searchParams.get('to');
   const businessId = url.searchParams.get('businessId');
   return {
-    year,
-    from: isIsoDate(from) ? from : null,
-    to: isIsoDate(to) ? to : null,
+    startDate: isIsoDate(startDate) ? startDate : null,
+    endDate: isIsoDate(endDate) ? endDate : null,
     businessId: businessId ? String(businessId) : null,
+  };
+}
+
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function clamp100(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function computeAccuracyForUi(txs: any[]) {
+  if (!txs.length) {
+    return {
+      score: 20,
+      sentence: 'Add more transactions so the estimate can learn your patterns.',
+      checklist: ['Add transactions (at least a month)'],
+    };
+  }
+
+  let taxCatCount = 0;
+  let catCount = 0;
+  let confCount = 0;
+  let confSum = 0;
+
+  for (const tx of txs) {
+    const taxCat = String((tx as any)?.tax_category ?? '').trim();
+    if (taxCat) taxCatCount += 1;
+
+    const cat = String((tx as any)?.category ?? '').trim();
+    if (cat && cat.toLowerCase() !== 'uncategorized') catCount += 1;
+
+    const c = Number((tx as any)?.confidence_score);
+    if (Number.isFinite(c)) {
+      confCount += 1;
+      confSum += clamp01(c);
+    }
+  }
+
+  const taxCatCoverage = taxCatCount / txs.length;
+  const categoryCoverage = catCount / txs.length;
+  const avgConfidence = confCount ? confSum / confCount : 0.5;
+
+  const score = clamp100(40 * taxCatCoverage + 20 * categoryCoverage + 40 * avgConfidence);
+
+  const sentence =
+    score >= 85
+      ? 'This estimate is in great shape—just keep classifications up to date.'
+      : score >= 65
+        ? 'This is directionally solid. A few cleanups will tighten it up.'
+        : 'This is a rough estimate right now. A bit of setup will improve it fast.';
+
+  const checklist: string[] = [];
+  if (taxCatCoverage < 0.9) checklist.push('Mark more transactions with the right tax category');
+  if (categoryCoverage < 0.9) checklist.push('Reduce “Uncategorized” and add clearer categories');
+  if (avgConfidence < 0.75) checklist.push('Review low-confidence items and correct mislabels');
+  if (!checklist.length) checklist.push('Keep categories and tax tags current each week');
+
+  return { score, sentence, checklist: checklist.slice(0, 3) };
+}
+
+function isoTodayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function pickNextPayment(report: any) {
+  const plan = Array.isArray(report?.quarterly_plan) ? report.quarterly_plan : [];
+  const today = isoTodayUtc();
+  const next = plan.find((p: any) => String(p?.due_date ?? '') >= today) ?? plan[0] ?? null;
+  return {
+    amount: Number(next?.amount) || 0,
+    dueDate: String(next?.due_date ?? ''),
   };
 }
 
@@ -79,14 +151,26 @@ async function handle(req: Request, body: any) {
     }
   );
 
-  const now = new Date();
-  const year = Number(body?.year) || now.getUTCFullYear();
-  const defaultFrom = `${year}-01-01`;
-  const defaultTo =
-    year === now.getUTCFullYear() ? now.toISOString().slice(0, 10) : `${year}-12-31`;
+  const startDate = body?.startDate ?? body?.from ?? null;
+  const endDate = body?.endDate ?? body?.to ?? null;
 
-  const from = isIsoDate(body?.from) ? body.from : defaultFrom;
-  const to = isIsoDate(body?.to) ? body.to : defaultTo;
+  if (!isIsoDate(startDate) || !isIsoDate(endDate)) {
+    return NextResponse.json(
+      { error: 'Invalid date range. Use startDate/endDate as YYYY-MM-DD.' },
+      { status: 400 }
+    );
+  }
+
+  if (endDate < startDate) {
+    return NextResponse.json(
+      { error: 'Invalid date range. endDate must be on or after startDate.' },
+      { status: 400 }
+    );
+  }
+
+  const from = startDate;
+  const to = endDate;
+  const year = Number(String(from).slice(0, 4)) || new Date().getUTCFullYear();
 
   const requestedBusinessId = typeof body?.businessId === 'string' ? body.businessId : null;
 
@@ -110,6 +194,29 @@ async function handle(req: Request, body: any) {
 
   const businessId = String(biz.id);
 
+  // Load tax settings if table exists; otherwise fall back to business columns.
+  let taxSettings: any = null;
+  try {
+    const res = await supabase
+      .from('tax_settings')
+      .select('*')
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (res.error) throw res.error;
+    taxSettings = res.data ?? null;
+  } catch (err: any) {
+    if (!isMissingTableOrColumnError(err)) {
+      return NextResponse.json(
+        {
+          error: 'Failed to load tax settings.',
+          details: { code: err?.code ?? null, message: err?.message ?? String(err) },
+        },
+        { status: 500 }
+      );
+    }
+    taxSettings = null;
+  }
+
   // Load transactions for the period (paged)
   let transactions: TransactionRow[] = [];
   try {
@@ -131,6 +238,12 @@ async function handle(req: Request, body: any) {
       },
       { status: 500 }
     );
+  }
+
+  // Provide a simple net profit computed from transactions (keeps UI consistent even if tax engine excludes some items).
+  let netProfit = 0;
+  for (const tx of transactions as any[]) {
+    netProfit += Number((tx as any)?.amount) || 0;
   }
 
   // Load payroll runs if table exists; otherwise treat as empty.
@@ -157,23 +270,89 @@ async function handle(req: Request, body: any) {
     payrollRuns = [];
   }
 
+  const businessForEngine = {
+    ...(biz as any),
+    tax_entity_type:
+      (taxSettings?.entity_type as any) ??
+      (biz as any)?.tax_entity_type ??
+      ((biz as any)?.legal_structure as any) ??
+      null,
+    tax_filing_status:
+      (taxSettings?.filing_status as any) ?? (biz as any)?.tax_filing_status ?? null,
+    tax_state_rate:
+      taxSettings?.state_rate === null || taxSettings?.state_rate === undefined
+        ? (biz as any)?.tax_state_rate ?? null
+        : Number(taxSettings?.state_rate),
+    tax_include_self_employment:
+      taxSettings?.include_self_employment === null ||
+      taxSettings?.include_self_employment === undefined
+        ? (biz as any)?.tax_include_self_employment ?? true
+        : Boolean(taxSettings?.include_self_employment),
+    // toggles for new UI (may exist on business)
+    legal_structure: (biz as any)?.legal_structure ?? null,
+    state_code: (biz as any)?.state_code ?? null,
+    has_payroll: (biz as any)?.has_payroll ?? false,
+    sells_taxable_goods_services: (biz as any)?.sells_taxable_goods_services ?? false,
+  };
+
   const report = computeTaxReport({
-    business: biz as any,
+    business: businessForEngine as any,
     transactions,
     payrollRuns,
     period: { from, to, year },
   });
 
-  return NextResponse.json(report);
+  const accuracy = computeAccuracyForUi(transactions as any[]);
+  const nextPayment = pickNextPayment(report as any);
+
+  const taxableProfit = Number((report as any)?.totals?.taxable_profit) || 0;
+  const taxesOwed = Number((report as any)?.estimates?.total_estimated_tax) || 0;
+  const setAsidePct = taxableProfit > 0 ? clamp01(taxesOwed / taxableProfit) : null;
+
+  return NextResponse.json({
+    simpleCards: {
+      taxSetAside: { amount: taxesOwed, pct: setAsidePct },
+      estimatedTaxesOwedYtd: taxesOwed,
+      profitYtd: netProfit,
+      nextEstimatedPayment: { amount: nextPayment.amount, dueDate: nextPayment.dueDate },
+    },
+    breakdown: {
+      meta: { transactionCount: (transactions as any[])?.length ?? 0 },
+      income: {
+        grossIncome: Number((report as any)?.totals?.gross_income) || 0,
+        nonTaxableIncome: Number((report as any)?.totals?.non_taxable_income) || 0,
+        taxableIncome: Number((report as any)?.totals?.gross_income) || 0,
+      },
+      writeOffs: {
+        deductibleExpenses: Number((report as any)?.totals?.deductible_expenses) || 0,
+        nonDeductibleExpenses: Number((report as any)?.totals?.non_deductible_expenses) || 0,
+        standardDeduction: Number((report as any)?.meta?.standard_deduction) || 0,
+        seHalfDeduction: Number((report as any)?.meta?.se_half_deduction) || 0,
+      },
+      profit: {
+        netProfit,
+        taxableProfit,
+      },
+      taxes: {
+        federal: Number((report as any)?.estimates?.federal_income_tax) || 0,
+        state: Number((report as any)?.estimates?.state_income_tax) || 0,
+        selfEmployment: Number((report as any)?.estimates?.self_employment_tax) || 0,
+        payrollEmployer: Number((report as any)?.estimates?.employer_payroll_taxes) || 0,
+        salesTaxLiability: Number((report as any)?.totals?.sales_tax_liability) || 0,
+        total: taxesOwed,
+      },
+    },
+    accuracy,
+    nextPayment,
+  });
 }
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const qp = parseQueryParams(url);
   return await handle(request, {
-    year: qp.year ?? undefined,
-    from: qp.from ?? undefined,
-    to: qp.to ?? undefined,
+    startDate: qp.startDate ?? undefined,
+    endDate: qp.endDate ?? undefined,
     businessId: qp.businessId ?? undefined,
   });
 }

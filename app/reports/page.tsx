@@ -1686,6 +1686,30 @@ export default function ReportsPage() {
     },
   });
 
+  const taxSettingsQ = useQuery({
+    queryKey: ['tax_settings', selectedBusinessId],
+    enabled: Boolean(selectedBusinessId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('tax_settings')
+        .select('*')
+        .eq('business_id', selectedBusinessId!)
+        .maybeSingle();
+
+      if (error) {
+        const code = String((error as any)?.code ?? '');
+        const msg = String((error as any)?.message ?? '').toLowerCase();
+        // If the migration isn't applied yet, treat as "no settings".
+        if (code === '42P01' || code === 'PGRST204' || msg.includes('does not exist')) {
+          return null;
+        }
+        throw error;
+      }
+
+      return data ?? null;
+    },
+  });
+
   const taxRulesByKey = useMemo(() => {
     const out: Record<string, { treatment: TaxCategoryTreatment; deduction_pct: number | null }> = {};
     for (const r of (taxRulesQ.data ?? []) as any[]) {
@@ -1701,13 +1725,38 @@ export default function ReportsPage() {
 
   const taxProfile = useMemo(() => {
     const b: any = business ?? null;
+    const s: any = taxSettingsQ.data ?? null;
     return {
-      entity_type: (b?.tax_entity_type as any) ?? 'sole_prop',
-      filing_status: (b?.tax_filing_status as any) ?? 'single',
-      state_rate: b?.tax_state_rate === null || b?.tax_state_rate === undefined ? 0 : Number(b.tax_state_rate),
-      include_self_employment: b?.tax_include_self_employment ?? true,
+      entity_type: (s?.entity_type as any) ?? (b?.tax_entity_type as any) ?? 'sole_prop',
+      filing_status:
+        (s?.filing_status as any) ?? (b?.tax_filing_status as any) ?? 'single',
+      state_rate:
+        s?.state_rate === null || s?.state_rate === undefined
+          ? b?.tax_state_rate === null || b?.tax_state_rate === undefined
+            ? 0
+            : Number(b.tax_state_rate)
+          : Number(s.state_rate),
+      include_self_employment:
+        s?.include_self_employment === null || s?.include_self_employment === undefined
+          ? b?.tax_include_self_employment ?? true
+          : Boolean(s.include_self_employment),
+    };
+  }, [business, taxSettingsQ.data]);
+
+  const taxSetup = useMemo(() => {
+    const b: any = business ?? null;
+    return {
+      legal_structure: String(b?.legal_structure ?? '').trim(),
+      state_code: String(b?.state_code ?? '').trim(),
+      has_payroll: Boolean(b?.has_payroll ?? false),
     };
   }, [business]);
+
+  const [taxSetupDraft, setTaxSetupDraft] = useState(() => taxSetup);
+  const [taxSetupSaving, setTaxSetupSaving] = useState(false);
+  useEffect(() => {
+    setTaxSetupDraft(taxSetup);
+  }, [taxSetup]);
 
   const [taxProfileDraft, setTaxProfileDraft] = useState(() => taxProfile);
   const [taxProfileSaving, setTaxProfileSaving] = useState(false);
@@ -1719,18 +1768,36 @@ export default function ReportsPage() {
     if (!selectedBusinessId) return;
     setTaxProfileSaving(true);
     try {
-      const payload: any = {
+      // Keep legacy business columns in sync for backward compatibility,
+      // but also upsert into tax_settings (preferred source for /api/tax-report).
+      const businessPayload: any = {
         tax_entity_type: taxProfileDraft.entity_type ?? 'sole_prop',
         tax_filing_status: taxProfileDraft.filing_status ?? 'single',
         tax_state_rate: Number(taxProfileDraft.state_rate) || 0,
         tax_include_self_employment: Boolean(taxProfileDraft.include_self_employment),
       };
-      const { error } = await supabase
+
+      const { error: bErr } = await supabase
         .from('business')
-        .update(payload)
+        .update(businessPayload)
         .eq('id', selectedBusinessId);
-      if (error) throw error;
+      if (bErr) throw bErr;
+
+      const settingsPayload: any = {
+        business_id: selectedBusinessId,
+        entity_type: taxProfileDraft.entity_type ?? 'sole_prop',
+        filing_status: taxProfileDraft.filing_status ?? 'single',
+        state_rate: Number(taxProfileDraft.state_rate) || 0,
+        include_self_employment: Boolean(taxProfileDraft.include_self_employment ?? true),
+      };
+
+      const { error: sErr } = await supabase
+        .from('tax_settings')
+        .upsert(settingsPayload, { onConflict: 'business_id' });
+      if (sErr) throw sErr;
+
       await queryClient.invalidateQueries({ queryKey: ['business_by_owner', userId] });
+      await queryClient.invalidateQueries({ queryKey: ['tax_settings', selectedBusinessId] });
       setToast({ message: 'Tax profile saved.', tone: 'ok' });
     } catch (e: any) {
       // eslint-disable-next-line no-console
@@ -1738,6 +1805,45 @@ export default function ReportsPage() {
       setToast({ message: e?.message ?? 'Could not save tax profile.', tone: 'error' });
     } finally {
       setTaxProfileSaving(false);
+    }
+  }
+
+  async function saveTaxSetup() {
+    if (!selectedBusinessId) return;
+    setTaxSetupSaving(true);
+    try {
+      const payload: any = {
+        legal_structure: String(taxSetupDraft.legal_structure ?? '').trim() || null,
+        state_code: String(taxSetupDraft.state_code ?? '').trim().toUpperCase() || null,
+        has_payroll: Boolean(taxSetupDraft.has_payroll),
+      };
+
+      const { error } = await supabase.from('business').update(payload).eq('id', selectedBusinessId);
+      if (error) throw error;
+
+      // Ensure tax_settings row exists (even if user hasn't opened Advanced yet).
+      const settingsPayload: any = {
+        business_id: selectedBusinessId,
+        entity_type: taxProfileDraft.entity_type ?? 'sole_prop',
+        filing_status: taxProfileDraft.filing_status ?? 'single',
+        state_rate: Number(taxProfileDraft.state_rate) || 0,
+        include_self_employment: Boolean(taxProfileDraft.include_self_employment ?? true),
+      };
+      const { error: sErr } = await supabase
+        .from('tax_settings')
+        .upsert(settingsPayload, { onConflict: 'business_id' });
+      if (sErr) throw sErr;
+
+      await queryClient.invalidateQueries({ queryKey: ['business_by_owner', userId] });
+      await queryClient.invalidateQueries({ queryKey: ['tax_settings', selectedBusinessId] });
+      await queryClient.invalidateQueries({ queryKey: ['tax_report', selectedBusinessId, startDate, endDate] });
+      setToast({ message: 'Setup saved.', tone: 'ok' });
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('TAX_SETUP_SAVE_ERROR', e);
+      setToast({ message: e?.message ?? 'Could not save setup.', tone: 'error' });
+    } finally {
+      setTaxSetupSaving(false);
     }
   }
 
@@ -1814,6 +1920,38 @@ export default function ReportsPage() {
     return clamp01(tax / profit);
   }, [taxSummary.estimatedTaxableProfit, taxSummary.estTotal]);
 
+  const taxReportQ = useQuery({
+    queryKey: ['tax_report', selectedBusinessId, startDate, endDate],
+    enabled:
+      Boolean(selectedBusinessId) &&
+      Boolean(startDate && endDate && isIsoDate(startDate) && isIsoDate(endDate)),
+    queryFn: async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token ?? null;
+      if (!token) throw new Error('Please log in again to view Tax Summary.');
+
+      const res = await fetch('/api/tax-report', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          businessId: selectedBusinessId,
+          startDate,
+          endDate,
+        }),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(txt || `Tax report failed (HTTP ${res.status}).`);
+      }
+
+      return (await res.json()) as any;
+    },
+  });
+
   const activeReport = useMemo(() => {
     return REPORT_LIBRARY.find((r) => r.id === activeReportId) ?? REPORT_LIBRARY[0];
   }, [activeReportId]);
@@ -1867,6 +2005,20 @@ export default function ReportsPage() {
     const t = window.setTimeout(() => setToast(null), 2800);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (!taxReportQ.isError) return;
+    const msg = String((taxReportQ.error as any)?.message ?? 'Tax report failed to load.');
+    setToast({ message: msg, tone: 'error' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxReportQ.isError]);
+
+  useEffect(() => {
+    if (!taxSettingsQ.isError) return;
+    const msg = String((taxSettingsQ.error as any)?.message ?? 'Tax settings failed to load.');
+    setToast({ message: msg, tone: 'error' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxSettingsQ.isError]);
 
   return (
     <main>
@@ -2466,50 +2618,75 @@ export default function ReportsPage() {
                       <>
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
                               Tax set-aside (YTD)
                             </div>
                             <InlineInfoTip text="A simple target: set aside your estimated taxes as you earn profit, so payments don’t surprise you." />
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-blue-200">
-                            {formatCurrency(taxSummary.estTotal)}
+                            {taxReportQ.isLoading
+                              ? '—'
+                              : taxReportQ.data?.simpleCards
+                                ? formatCurrency(taxReportQ.data.simpleCards.taxSetAside?.amount ?? 0)
+                                : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            {setAsidePct === null
+                            {taxReportQ.data?.simpleCards?.taxSetAside?.pct === null ||
+                            taxReportQ.data?.simpleCards?.taxSetAside?.pct === undefined
                               ? '—'
-                              : `About ${(setAsidePct * 100).toFixed(0)}% of taxable profit.`}
+                              : `About ${(Number(taxReportQ.data.simpleCards.taxSetAside.pct) * 100).toFixed(0)}% of taxable profit.`}
                           </div>
-                        </div>
+                          </div>
 
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
                               Estimated taxes owed (YTD)
                             </div>
                             <InlineInfoTip text="Estimated total for this date range (federal + state + self-employment when applicable)." />
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency(taxSummary.estTotal)}
+                            {taxReportQ.isLoading
+                              ? '—'
+                              : taxReportQ.data?.simpleCards
+                                ? formatCurrency(
+                                    taxReportQ.data.simpleCards.estimatedTaxesOwedYtd ?? 0
+                                  )
+                                : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Federal + state{taxSummary.estSelfEmployment ? ' + SE' : ''}.
+                            {taxReportQ.isLoading
+                              ? 'Loading…'
+                              : taxReportQ.data?.breakdown?.taxes
+                                ? `Federal + state${
+                                    Number(taxReportQ.data.breakdown.taxes.selfEmployment || 0) > 0
+                                      ? ' + SE'
+                                      : ''
+                                  }.`
+                                : '—'}
                           </div>
                         </div>
 
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="flex items-center justify-between gap-2">
-                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
                               Profit (YTD)
-                            </div>
+                          </div>
                             <InlineInfoTip text="Income minus expenses for this date range (not a tax filing value—just your operating result)." />
                           </div>
                           <div
                             className={classNames(
                               'mt-1 text-3xl font-semibold',
-                              (taxSummary.net || 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'
+                              (Number(taxReportQ.data?.simpleCards?.profitYtd ?? 0) || 0) >= 0
+                                ? 'text-emerald-300'
+                                : 'text-rose-300'
                             )}
                           >
-                            {formatCurrency(taxSummary.net || 0)}
+                            {taxReportQ.isLoading
+                              ? '—'
+                              : taxReportQ.data?.simpleCards
+                                ? formatCurrency(taxReportQ.data.simpleCards.profitYtd ?? 0)
+                                : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             Income − expenses
@@ -2524,10 +2701,18 @@ export default function ReportsPage() {
                             <InlineInfoTip text="A simple quarterly plan: estimated annual taxes divided into four payments." />
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {formatCurrency(nextEstimatedPayment)}
+                            {taxReportQ.isLoading
+                              ? '—'
+                              : taxReportQ.data?.nextPayment
+                                ? formatCurrency(taxReportQ.data.nextPayment.amount ?? 0)
+                                : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Due {nextEstimatedDueDate}
+                            {taxReportQ.isLoading
+                              ? 'Loading…'
+                              : taxReportQ.data?.nextPayment?.dueDate
+                                ? `Due ${taxReportQ.data.nextPayment.dueDate}`
+                                : '—'}
                           </div>
                         </div>
                       </>
@@ -2548,7 +2733,9 @@ export default function ReportsPage() {
                           </div>
                           <div className="text-right">
                             <div className="text-2xl font-semibold text-slate-100 tabular-nums leading-none">
-                              {taxAccuracy.score}
+                              {taxReportQ.isLoading
+                                ? '—'
+                                : taxReportQ.data?.accuracy?.score ?? '—'}
                               <span className="text-[11px] text-slate-500 font-medium">/100</span>
                             </div>
                           </div>
@@ -2557,12 +2744,19 @@ export default function ReportsPage() {
                         <div className="mt-3 h-2.5 rounded-full bg-white/[0.08] overflow-hidden border border-white/10">
                           <div
                             className="h-full rounded-full bg-gradient-to-r from-emerald-400/80 via-sky-400/70 to-blue-500/70 shadow-[0_0_18px_rgba(59,130,246,0.16)]"
-                            style={{ width: `${Math.max(0, Math.min(100, taxAccuracy.score))}%` }}
+                            style={{
+                              width: `${Math.max(
+                                0,
+                                Math.min(100, Number(taxReportQ.data?.accuracy?.score ?? 0))
+                              )}%`,
+                            }}
                           />
                         </div>
 
                         <div className="mt-2 text-[11px] text-slate-300">
-                          {taxAccuracy.sentence}
+                          {taxReportQ.isLoading
+                            ? 'Loading…'
+                            : taxReportQ.data?.accuracy?.sentence ?? '—'}
                         </div>
                         <div className="mt-1 text-[11px] text-slate-500">
                           Uses taxable net income, filing status brackets, and your category treatments.
@@ -2573,7 +2767,7 @@ export default function ReportsPage() {
                             Improve
                           </div>
                           <ul className="mt-2 space-y-1 text-[11px] text-slate-300">
-                            {taxAccuracy.checklist.map((t, idx) => (
+                            {(taxReportQ.data?.accuracy?.checklist ?? []).map((t: string, idx: number) => (
                               <li key={idx} className="flex gap-2">
                                 <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-500/80 shrink-0" />
                                 <span className="leading-relaxed">{t}</span>
@@ -2581,6 +2775,19 @@ export default function ReportsPage() {
                             ))}
                           </ul>
                         </div>
+
+                        {taxReportQ.isError && (
+                          <div className="mt-3 text-[11px] text-rose-300">
+                            {String((taxReportQ.error as any)?.message ?? 'Tax report failed to load.')}
+                          </div>
+                        )}
+
+                        {!taxReportQ.isLoading &&
+                          taxReportQ.data?.breakdown?.meta?.transactionCount === 0 && (
+                            <div className="mt-3 text-[11px] text-slate-400">
+                              No transactions in this range. Try YTD or widen the date window.
+                            </div>
+                          )}
                       </div>
 
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
@@ -2593,6 +2800,7 @@ export default function ReportsPage() {
                         <button
                           type="button"
                           onClick={() => setTaxBreakdownOpen(true)}
+                          disabled={taxReportQ.isLoading || Boolean(taxReportQ.error)}
                           className="mt-3 w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-slate-100 hover:bg-white/10 transition"
                         >
                           See breakdown
@@ -2615,10 +2823,10 @@ export default function ReportsPage() {
                               Setup (3 questions)
                             </div>
                             <div className="mt-1 text-[11px] text-slate-400">
-                              Entity, filing status, and state rate.
+                              Legal structure, state, and payroll.
                             </div>
                           </div>
-                          <div className="text-[11px] text-slate-300">
+                      <div className="text-[11px] text-slate-300">
                             {taxSetupOpen ? 'Hide' : 'Show'}
                           </div>
                         </button>
@@ -2627,18 +2835,19 @@ export default function ReportsPage() {
                           <div className="mt-4">
                             <div className="grid gap-2 sm:grid-cols-3">
                               <label className="text-[11px] text-slate-400">
-                                Entity
+                                Legal structure
                                 <select
                                   style={{ colorScheme: 'dark' }}
-                                  value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
+                                  value={String(taxSetupDraft.legal_structure ?? '')}
                                   onChange={(e) =>
-                                    setTaxProfileDraft((p: any) => ({
+                                    setTaxSetupDraft((p: any) => ({
                                       ...p,
-                                      entity_type: e.target.value as any,
+                                      legal_structure: e.target.value,
                                     }))
                                   }
                                   className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
                                 >
+                                  <option value="" className="bg-slate-950 text-slate-100">Select…</option>
                                   <option value="sole_prop" className="bg-slate-950 text-slate-100">Sole prop</option>
                                   <option value="llc_single" className="bg-slate-950 text-slate-100">Single-member LLC</option>
                                   <option value="llc_multi" className="bg-slate-950 text-slate-100">Multi-member LLC</option>
@@ -2649,42 +2858,35 @@ export default function ReportsPage() {
                               </label>
 
                               <label className="text-[11px] text-slate-400">
-                                Filing status
-                                <select
-                                  style={{ colorScheme: 'dark' }}
-                                  value={String(taxProfileDraft.filing_status ?? 'single')}
+                                State (2-letter)
+                                <input
+                                  value={String(taxSetupDraft.state_code ?? '')}
                                   onChange={(e) =>
-                                    setTaxProfileDraft((p: any) => ({
+                                    setTaxSetupDraft((p: any) => ({
                                       ...p,
-                                      filing_status: e.target.value as any,
+                                      state_code: e.target.value.toUpperCase().slice(0, 2),
                                     }))
                                   }
-                                  className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
-                                >
-                                  <option value="single" className="bg-slate-950 text-slate-100">Single</option>
-                                  <option value="married_joint" className="bg-slate-950 text-slate-100">Married (joint)</option>
-                                  <option value="married_separate" className="bg-slate-950 text-slate-100">Married (separate)</option>
-                                  <option value="head_of_household" className="bg-slate-950 text-slate-100">Head of household</option>
-                                </select>
+                                  placeholder="TX"
+                                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                                />
                               </label>
 
                               <label className="text-[11px] text-slate-400">
-                                State rate (%)
-                                <input
-                                  type="number"
-                                  inputMode="decimal"
-                                  step="0.1"
-                                  value={String((Number(taxProfileDraft.state_rate) || 0) * 100)}
-                                  onChange={(e) => {
-                                    const pct = Number(e.target.value);
-                                    setTaxProfileDraft((p: any) => ({
-                                      ...p,
-                                      state_rate: Number.isFinite(pct) ? pct / 100 : 0,
-                                    }));
-                                  }}
-                                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
-                                  placeholder="e.g. 5"
-                                />
+                                Payroll
+                                <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-300">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(taxSetupDraft.has_payroll)}
+                                    onChange={(e) =>
+                                      setTaxSetupDraft((p: any) => ({
+                                        ...p,
+                                        has_payroll: e.target.checked,
+                                      }))
+                                    }
+                                  />
+                                  <span>We run payroll</span>
+                                </div>
                               </label>
                             </div>
 
@@ -2694,11 +2896,11 @@ export default function ReportsPage() {
                               </div>
                               <button
                                 type="button"
-                                onClick={() => void saveTaxProfile()}
-                                disabled={!selectedBusinessId || taxProfileSaving}
+                                onClick={() => void saveTaxSetup()}
+                                disabled={!selectedBusinessId || taxSetupSaving}
                                 className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
                               >
-                                {taxProfileSaving ? 'Saving…' : 'Save'}
+                                {taxSetupSaving ? 'Saving…' : 'Save'}
                               </button>
                             </div>
                           </div>
@@ -2729,8 +2931,75 @@ export default function ReportsPage() {
                           <div className="mt-4 grid gap-3 md:grid-cols-2">
                             <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                               <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                                Options
+                                Business tax profile
                               </div>
+                              <div className="mt-1 text-[11px] text-slate-400">
+                                Filing status + state rate affect the estimate.
+                              </div>
+
+                              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                <label className="text-[11px] text-slate-400">
+                                  Entity
+                                  <select
+                                    style={{ colorScheme: 'dark' }}
+                                    value={String(taxProfileDraft.entity_type ?? 'sole_prop')}
+                                    onChange={(e) =>
+                                      setTaxProfileDraft((p: any) => ({
+                                        ...p,
+                                        entity_type: e.target.value as any,
+                                      }))
+                                    }
+                                    className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                                  >
+                                    <option value="sole_prop" className="bg-slate-950 text-slate-100">Sole prop</option>
+                                    <option value="llc_single" className="bg-slate-950 text-slate-100">Single-member LLC</option>
+                                    <option value="llc_multi" className="bg-slate-950 text-slate-100">Multi-member LLC</option>
+                                    <option value="partnership" className="bg-slate-950 text-slate-100">Partnership</option>
+                                    <option value="s_corp" className="bg-slate-950 text-slate-100">S-Corp</option>
+                                    <option value="c_corp" className="bg-slate-950 text-slate-100">C-Corp</option>
+                                  </select>
+                                </label>
+
+                                <label className="text-[11px] text-slate-400">
+                                  Filing status
+                                  <select
+                                    style={{ colorScheme: 'dark' }}
+                                    value={String(taxProfileDraft.filing_status ?? 'single')}
+                                    onChange={(e) =>
+                                      setTaxProfileDraft((p: any) => ({
+                                        ...p,
+                                        filing_status: e.target.value as any,
+                                      }))
+                                    }
+                                    className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-100 hover:bg-slate-950/80 hover:border-white/20"
+                                  >
+                                    <option value="single" className="bg-slate-950 text-slate-100">Single</option>
+                                    <option value="married_joint" className="bg-slate-950 text-slate-100">Married (joint)</option>
+                                    <option value="married_separate" className="bg-slate-950 text-slate-100">Married (separate)</option>
+                                    <option value="head_of_household" className="bg-slate-950 text-slate-100">Head of household</option>
+                                  </select>
+                                </label>
+
+                                <label className="text-[11px] text-slate-400">
+                                  State rate (%)
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="0.1"
+                                    value={String((Number(taxProfileDraft.state_rate) || 0) * 100)}
+                                    onChange={(e) => {
+                                      const pct = Number(e.target.value);
+                                      setTaxProfileDraft((p: any) => ({
+                                        ...p,
+                                        state_rate: Number.isFinite(pct) ? pct / 100 : 0,
+                                      }));
+                                    }}
+                                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
+                                    placeholder="e.g. 5"
+                                  />
+                                </label>
+                              </div>
+
                               <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-300">
                                 <input
                                   type="checkbox"
@@ -2856,20 +3125,20 @@ export default function ReportsPage() {
                               <div className="px-4 pb-4 text-[11px] text-slate-300 space-y-2">
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Gross income</span>
-                                  <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.totalIncome)}
+                        <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxReportQ.data?.breakdown?.income?.grossIncome ?? 0)}
                                   </span>
-                                </div>
+                      </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Non-taxable income</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.nonTaxableIncome || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.income?.nonTaxableIncome ?? 0)}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Taxable income</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.taxableIncome || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.income?.taxableIncome ?? 0)}
                                   </span>
                                 </div>
                               </div>
@@ -2899,26 +3168,26 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Deductible expenses</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(-taxSummary.deductibleExpenses)}
+                                    {formatCurrency(-(taxReportQ.data?.breakdown?.writeOffs?.deductibleExpenses ?? 0))}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Non-deductible expenses</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(-taxSummary.nonDeductibleExpenses)}
+                                    {formatCurrency(-(taxReportQ.data?.breakdown?.writeOffs?.nonDeductibleExpenses ?? 0))}
                                   </span>
                                 </div>
                                 <div className="h-px bg-white/10 my-1" />
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Standard deduction</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(-(taxSummary.profile?.standardDeduction ?? 0))}
+                                    {formatCurrency(-(taxReportQ.data?.breakdown?.writeOffs?.standardDeduction ?? 0))}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">SE half deduction</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(-(taxSummary.profile?.seHalfDeduction ?? 0))}
+                                    {formatCurrency(-(taxReportQ.data?.breakdown?.writeOffs?.seHalfDeduction ?? 0))}
                                   </span>
                                 </div>
                               </div>
@@ -2945,13 +3214,13 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Net profit</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.net || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.profit?.netProfit ?? 0)}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Taxable profit (estimate)</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.estimatedTaxableProfit || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.profit?.taxableProfit ?? 0)}
                                   </span>
                                 </div>
                               </div>
@@ -2978,26 +3247,38 @@ export default function ReportsPage() {
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Federal (estimate)</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.estFederal || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.federal ?? 0)}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">State (estimate)</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.estState || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.state ?? 0)}
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Self-employment (estimate)</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.estSelfEmployment || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.selfEmployment ?? 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Payroll taxes (employer)</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.payrollEmployer ?? 0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-4">
+                                  <span className="text-slate-400">Sales tax liability</span>
+                                  <span className="font-semibold text-slate-100">
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.salesTaxLiability ?? 0)}
                                   </span>
                                 </div>
                                 <div className="h-px bg-white/10 my-1" />
                                 <div className="flex items-center justify-between gap-4">
                                   <span className="text-slate-400">Total estimated tax</span>
                                   <span className="font-semibold text-slate-100">
-                                    {formatCurrency(taxSummary.estTotal || 0)}
+                                    {formatCurrency(taxReportQ.data?.breakdown?.taxes?.total ?? 0)}
                                   </span>
                                 </div>
                               </div>
@@ -3026,10 +3307,10 @@ export default function ReportsPage() {
                             </div>
                           ) : (
                             <PremiumBarChart
-                              data={salesByCustomer.rows.slice(0, 10).map((r) => ({
-                                label: r.name,
-                                value: r.amount,
-                              }))}
+                                data={salesByCustomer.rows.slice(0, 10).map((r) => ({
+                                  label: r.name,
+                                  value: r.amount,
+                                }))}
                               variant="green"
                               formatValue={(v) => fmtMoneyRounded(v)}
                               formatYAxisTick={(v) => fmtMoneyRounded(v)}
@@ -3049,10 +3330,10 @@ export default function ReportsPage() {
                             </div>
                           ) : (
                             <PremiumBarChart
-                              data={expensesByVendor.rows.slice(0, 10).map((r) => ({
-                                label: r.name.length > 12 ? `${r.name.slice(0, 12)}…` : r.name,
-                                value: r.amount,
-                              }))}
+                                data={expensesByVendor.rows.slice(0, 10).map((r) => ({
+                                  label: r.name.length > 12 ? `${r.name.slice(0, 12)}…` : r.name,
+                                  value: r.amount,
+                                }))}
                               variant="red"
                               formatValue={(v) => fmtMoneyRounded(-v)}
                               formatYAxisTick={(v) => fmtMoneyRounded(-v)}
@@ -3069,12 +3350,12 @@ export default function ReportsPage() {
                             </div>
                           ) : (
                             <PremiumBarChart
-                              data={[
-                                { label: 'Gross income', value: taxSummary.totalIncome },
+                                data={[
+                                  { label: 'Gross income', value: taxSummary.totalIncome },
                                 { label: 'Est. taxes', value: taxSummary.estTotal },
-                                {
-                                  label: 'Net after tax',
-                                  value:
+                                  {
+                                    label: 'Net after tax',
+                                    value:
                                     (taxSummary.net || 0) - (taxSummary.estTotal || 0),
                                 },
                               ]}
