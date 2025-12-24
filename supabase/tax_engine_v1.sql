@@ -98,4 +98,7 @@ using (
 create index if not exists payroll_runs_business_date_idx
   on public.payroll_runs (business_id, run_date);
 
+-- Ensure PostgREST schema cache refresh after applying this migration.
+notify pgrst, 'reload schema';
+
 

@@ -83,4 +83,7 @@ using (
   )
 );
 
+-- Ensure PostgREST schema cache refresh after applying this migration.
+notify pgrst, 'reload schema';
+
 

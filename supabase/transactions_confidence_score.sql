@@ -24,4 +24,7 @@ end $$;
 create index if not exists transactions_business_confidence_idx
   on public.transactions (business_id, confidence_score);
 
+-- Ensure PostgREST schema cache refresh after applying this migration.
+notify pgrst, 'reload schema';
+
 

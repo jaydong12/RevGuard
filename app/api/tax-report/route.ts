@@ -15,7 +15,13 @@ function isMissingTableOrColumnError(err: any): boolean {
   const code = String(err?.code ?? '');
   const msg = String(err?.message ?? '').toLowerCase();
   // Postgres: 42P01 undefined_table; PostgREST: PGRST204 schema cache miss
-  return code === '42P01' || code === 'PGRST204' || msg.includes('does not exist');
+  // Some environments surface missing table as PGRST205; treat as optional too.
+  return (
+    code === '42P01' ||
+    code === 'PGRST204' ||
+    code === 'PGRST205' ||
+    msg.includes('does not exist')
+  );
 }
 
 async function fetchAllRowsPaged(params: {
@@ -248,6 +254,7 @@ async function handle(req: Request, body: any) {
 
   // Load payroll runs if table exists; otherwise treat as empty.
   let payrollRuns: PayrollRunRow[] = [];
+  let payrollMissing = false;
   try {
     const rows = await fetchAllRowsPaged({
       supabase,
@@ -268,6 +275,7 @@ async function handle(req: Request, body: any) {
       );
     }
     payrollRuns = [];
+    payrollMissing = true;
   }
 
   const businessForEngine = {
@@ -303,6 +311,12 @@ async function handle(req: Request, body: any) {
   });
 
   const accuracy = computeAccuracyForUi(transactions as any[]);
+  if (payrollMissing) {
+    const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
+    const fix = 'Create/connect payroll (so payroll taxes can be included)';
+    if (!checklist.includes(fix)) checklist.push(fix);
+    (accuracy as any).checklist = checklist.slice(0, 4);
+  }
   const nextPayment = pickNextPayment(report as any);
 
   const taxableProfit = Number((report as any)?.totals?.taxable_profit) || 0;
