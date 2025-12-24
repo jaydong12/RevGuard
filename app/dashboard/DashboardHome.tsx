@@ -1137,7 +1137,6 @@ export default function DashboardHome() {
   }, [transactions, bills, invoices, healthDayKey]);
 
   const [lastReviewedKey, setLastReviewedKey] = useState<string | null>(null);
-  const [reviewedJustNow, setReviewedJustNow] = useState(false);
   const CHECKLIST_ITEMS = useMemo(
     () =>
       [
@@ -1158,7 +1157,6 @@ export default function DashboardHome() {
   const [calendarLoading, setCalendarLoading] = useState(false);
 
   useEffect(() => {
-    setReviewedJustNow(false);
     if (!selectedBusinessId) {
       setLastReviewedKey(null);
       return;
@@ -1297,52 +1295,43 @@ export default function DashboardHome() {
 
   function toggleChecklistItem(id: string) {
     setReviewChecklist((prev) => {
+      // Only mark a day as reviewed when all 3 items are checked.
+      // While incomplete, keep everything local-only (no DB writes, no error logs).
+      const prevComplete = Boolean(
+        prev?.reviewed_tx && prev?.checked_categories && prev?.noted_biggest
+      );
+
       const next = { ...prev, [id]: !prev?.[id] };
       persistChecklist(next);
-      // Sync to DB calendar for today.
+
       const progress = {
         transactions: Boolean(next.reviewed_tx),
         categories: Boolean(next.checked_categories),
         biggest_move: Boolean(next.noted_biggest),
       };
-      void upsertCalendarProgress(todayKey, progress);
+
+      // Update the calendar locally so partial progress is visible immediately.
+      setCalendarProgressByDay((m) => ({ ...m, [todayKey]: progress }));
+
+      const nextComplete = Boolean(
+        progress.transactions && progress.categories && progress.biggest_move
+      );
+
+      // If this click completed the set, mark reviewed + persist to DB once.
+      if (!prevComplete && nextComplete && selectedBusinessId) {
+        setLastReviewedKey(todayKey);
+        try {
+          localStorage.setItem(
+            `revguard:daily_review:${selectedBusinessId}`,
+            JSON.stringify({ lastDayKey: todayKey })
+          );
+        } catch {
+          // ignore
+        }
+        void upsertCalendarProgress(todayKey, progress);
+      }
       return next;
     });
-  }
-
-  function handleMarkReviewed() {
-    if (!selectedBusinessId) return;
-    setReviewedJustNow(false);
-    const already = lastReviewedKey === todayKey;
-    if (already) return;
-
-    setLastReviewedKey(todayKey);
-    setReviewedJustNow(true);
-
-    // Mark all checklist items complete for the day.
-    const allChecked: Record<string, boolean> = {};
-    for (const it of CHECKLIST_ITEMS) allChecked[it.id] = true;
-    setReviewChecklist(allChecked);
-    persistChecklist(allChecked);
-    void upsertCalendarProgress(todayKey, {
-      transactions: true,
-      categories: true,
-      biggest_move: true,
-    });
-
-    try {
-      localStorage.setItem(
-        `revguard:daily_review:${selectedBusinessId}`,
-        JSON.stringify({ lastDayKey: todayKey })
-      );
-    } catch {
-      // ignore
-    }
-    try {
-      window.setTimeout(() => setReviewedJustNow(false), 1400);
-    } catch {
-      // ignore
-    }
   }
 
   const filteredTransactions = useMemo(
@@ -2727,6 +2716,21 @@ export default function DashboardHome() {
                   <div className="text-[11px] text-slate-500 -mt-2">Loading calendar…</div>
                 )}
 
+                {(() => {
+                  const p = calendarProgressByDay[todayKey];
+                  const reviewedFromDb = Boolean(p?.transactions && p?.categories && p?.biggest_move);
+                  const reviewed = reviewedFromDb || lastReviewedKey === todayKey;
+                  return reviewed ? (
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+                      Reviewed — you’re all set for today.
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                      Check all three items to mark today complete.
+                    </div>
+                  );
+                })()}
+
                 <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
                     Review checklist
@@ -2734,12 +2738,15 @@ export default function DashboardHome() {
                   <div className="mt-2 space-y-2">
                     {CHECKLIST_ITEMS.map((it) => {
                       const checked = Boolean(reviewChecklist?.[it.id]);
+                      const p = calendarProgressByDay[todayKey];
+                      const reviewedFromDb = Boolean(p?.transactions && p?.categories && p?.biggest_move);
+                      const reviewed = reviewedFromDb || lastReviewedKey === todayKey;
                       return (
                         <button
                           key={it.id}
                           type="button"
                           onClick={() => toggleChecklistItem(it.id)}
-                          disabled={!selectedBusinessId}
+                          disabled={!selectedBusinessId || reviewed}
                           className="w-full flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed transition"
                         >
                           <div className="flex items-center gap-2">
@@ -2770,31 +2777,7 @@ export default function DashboardHome() {
                 </div>
               </div>
 
-              <div className="mt-5 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={handleMarkReviewed}
-                  disabled={!selectedBusinessId || lastReviewedKey === todayKey}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {lastReviewedKey === todayKey
-                    ? 'Reviewed — you’re all set for today'
-                    : reviewedJustNow
-                    ? 'Reviewed — you’re all set for today'
-                    : 'Mark reviewed'}
-                </button>
-                <div className="text-[11px] text-slate-400">
-                  {selectedBusinessId ? (
-                    lastReviewedKey === todayKey ? (
-                      <span>All set.</span>
-                    ) : (
-                      <span>One tap per day.</span>
-                    )
-                  ) : (
-                    <span>Sign in to mark reviewed.</span>
-                  )}
-                </div>
-              </div>
+              {/* No “Mark reviewed” button — completion is driven by checking all 3 items. */}
             </div>
           </div>
 
