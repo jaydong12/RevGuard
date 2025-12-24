@@ -62,7 +62,12 @@ function classify({ description, merchant, category, amount }) {
   const amt = Number(amount) || 0;
 
   if (!text) {
-    return { tax_category: 'uncategorized', tax_treatment: 'review', confidence_score: 0.2 };
+    return {
+      tax_category: 'uncategorized',
+      tax_treatment: 'review',
+      confidence_score: 0.2,
+      tax_reason: 'Missing description/merchant/category.',
+    };
   }
 
   if (hasAny(text, ['sales tax', 'salestax'])) {
@@ -70,46 +75,97 @@ function classify({ description, merchant, category, amount }) {
       tax_category: amt >= 0 ? 'sales_tax_collected' : 'sales_tax_paid',
       tax_treatment: 'review',
       confidence_score: 0.92,
+      tax_reason: 'Looks like sales tax activity.',
     };
   }
 
   if (hasAny(text, ['estimated tax', 'quarterly tax', 'irs es', '1040-es'])) {
-    return { tax_category: 'owner_estimated_tax', tax_treatment: 'review', confidence_score: 0.9 };
+    return {
+      tax_category: 'owner_estimated_tax',
+      tax_treatment: 'review',
+      confidence_score: 0.9,
+      tax_reason: 'Looks like an estimated tax payment.',
+    };
   }
 
   if (hasAny(text, ['payroll tax', 'fica', 'medicare', 'futa', 'suta', '941', '940', 'withholding'])) {
-    return { tax_category: 'payroll_taxes', tax_treatment: 'deductible', confidence_score: 0.88 };
+    return {
+      tax_category: 'payroll_taxes',
+      tax_treatment: 'deductible',
+      confidence_score: 0.88,
+      tax_reason: 'Looks like payroll tax deposit/withholding.',
+    };
   }
 
   if (amt < 0 && hasAny(text, ['payroll', 'wages', 'salary', 'gusto', 'adp', 'paychex'])) {
-    return { tax_category: 'payroll_wages', tax_treatment: 'deductible', confidence_score: 0.82 };
+    return {
+      tax_category: 'payroll_wages',
+      tax_treatment: 'deductible',
+      confidence_score: 0.82,
+      tax_reason: 'Looks like payroll wages.',
+    };
   }
 
   if (hasAny(text, ['loan']) && hasAny(text, ['principal'])) {
-    return { tax_category: 'loan_principal', tax_treatment: 'review', confidence_score: 0.85 };
+    return {
+      tax_category: 'loan_principal',
+      tax_treatment: 'review',
+      confidence_score: 0.85,
+      tax_reason: 'Loan principal repayment.',
+    };
   }
   if (hasAny(text, ['loan']) && hasAny(text, ['interest'])) {
-    return { tax_category: 'loan_interest', tax_treatment: 'deductible', confidence_score: 0.85 };
+    return {
+      tax_category: 'loan_interest',
+      tax_treatment: 'deductible',
+      confidence_score: 0.85,
+      tax_reason: 'Loan interest.',
+    };
   }
 
   if (hasAny(text, ['transfer', 'bank transfer', 'ach', 'wire', 'sweep'])) {
-    return { tax_category: 'transfer', tax_treatment: 'review', confidence_score: 0.85 };
+    return {
+      tax_category: 'transfer',
+      tax_treatment: 'review',
+      confidence_score: 0.85,
+      tax_reason: 'Transfer between accounts.',
+    };
   }
 
   if (hasAny(text, ['owner draw', 'owners draw', 'owner withdrawal', 'draw'])) {
-    return { tax_category: 'owner_draw', tax_treatment: 'non_deductible', confidence_score: 0.9 };
+    return {
+      tax_category: 'owner_draw',
+      tax_treatment: 'non_deductible',
+      confidence_score: 0.9,
+      tax_reason: 'Owner draw.',
+    };
   }
 
   if (hasAny(text, ['equipment', 'asset', 'capex', 'capital expense', 'computer', 'laptop'])) {
-    return { tax_category: 'capex', tax_treatment: 'capitalized', confidence_score: 0.8 };
+    return {
+      tax_category: 'capex',
+      tax_treatment: 'capitalized',
+      confidence_score: 0.8,
+      tax_reason: 'Capital purchase.',
+    };
   }
 
   if (amt >= 0) {
-    return { tax_category: 'gross_receipts', tax_treatment: 'review', confidence_score: 0.7 };
+    return {
+      tax_category: 'gross_receipts',
+      tax_treatment: 'review',
+      confidence_score: 0.7,
+      tax_reason: 'Defaulted positive amount to income.',
+    };
   }
 
   // Expense default
-  return { tax_category: 'uncategorized', tax_treatment: 'deductible', confidence_score: 0.55 };
+  return {
+    tax_category: 'uncategorized',
+    tax_treatment: 'deductible',
+    confidence_score: 0.55,
+    tax_reason: 'Defaulted negative amount to deductible (needs review).',
+  };
 }
 
 async function fetchPaged() {
@@ -152,6 +208,7 @@ for (const tx of rows) {
     tax_category: tag.tax_category,
     tax_treatment: tag.tax_treatment,
     confidence_score: clamp01(tag.confidence_score),
+    tax_reason: tag.tax_reason ?? null,
   };
 
   if (dryRun) continue;

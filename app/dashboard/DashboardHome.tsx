@@ -41,6 +41,7 @@ type Transaction = {
   tax_category?: string | null;
   tax_treatment?: string | null;
   confidence_score?: number | null;
+  tax_reason?: string | null;
 };
 
 type AiResult = {
@@ -2711,9 +2712,10 @@ export default function DashboardHome() {
       }
     }
 
-    // 2) Insert in chunks, with row-level fallback on errors.
+    // 2) Insert in chunks, then post-tag each inserted row (rules first, AI if needed).
     // NOTE: We intentionally do NOT rely on `external_id` (column not present in Supabase).
     let imported = 0;
+    let tagged = 0;
     let failed = 0;
     let lastErrorMessage: string | null = null;
     let firstFailedRow: any | null = null;
@@ -2725,53 +2727,57 @@ export default function DashboardHome() {
         return rest;
       });
 
-      // Tax tagging: classify each row before insert (rules-first, optional AI).
-      try {
-        const classifyRes = await fetch('/api/transactions/classify-tax', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            transactions: chunk.map((r: any) => ({
-              description: r.description ?? null,
-              merchant: null,
-              category: r.category ?? null,
-              amount: Number(r.amount) || 0,
-            })),
-          }),
-        });
-
-        if (classifyRes.ok) {
-          const json: any = await classifyRes.json();
-          const results: any[] = Array.isArray(json?.results) ? json.results : [];
-          for (let k = 0; k < chunk.length; k++) {
-            const tag = results[k] ?? null;
-            (chunk[k] as any).tax_category = String(tag?.tax_category ?? 'uncategorized');
-            (chunk[k] as any).tax_treatment = String(tag?.tax_treatment ?? 'review');
-            (chunk[k] as any).confidence_score = Number(tag?.confidence_score ?? 0.5);
-          }
-        } else {
-          // Fall back to defaults; user can fix via Needs review queue.
-          for (const r of chunk as any[]) {
-            r.tax_category = 'uncategorized';
-            r.tax_treatment = 'review';
-            r.confidence_score = 0.3;
-          }
-        }
-      } catch {
-        for (const r of chunk as any[]) {
-          r.tax_category = 'uncategorized';
-          r.tax_treatment = 'review';
-          r.confidence_score = 0.3;
-        }
-      }
-
-      const { error } = await supabase.from('transactions').insert(chunk as any);
+      const { data: insertedRows, error } = await supabase
+        .from('transactions')
+        .insert(chunk as any)
+        .select('id, description, category, amount');
 
       if (!error) {
         imported += chunk.length;
+        setImportLog(`Imported ${imported}/${mappedRows.length}. Tagging… ${tagged}/${imported}`);
+
+        // Post-insert tagging in batches (100)
+        try {
+          const classifyRes = await fetch('/api/transactions/classify-tax', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              transactions: (insertedRows ?? []).map((r: any) => ({
+                description: r.description ?? null,
+                merchant: null,
+                category: r.category ?? null,
+                amount: Number(r.amount) || 0,
+              })),
+            }),
+          });
+
+          const json: any = classifyRes.ok ? await classifyRes.json() : null;
+          const results: any[] = Array.isArray(json?.results) ? json.results : [];
+
+          const updates = (insertedRows ?? []).map((r: any, idx: number) => {
+            const tag = results[idx] ?? null;
+            return {
+              id: r.id,
+              tax_category: String(tag?.tax_category ?? 'uncategorized'),
+              tax_treatment: String(tag?.tax_treatment ?? 'review'),
+              confidence_score: Number(tag?.confidence_score ?? 0.5),
+              tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
+            };
+          });
+
+          if (updates.length) {
+            const { error: upErr } = await supabase
+              .from('transactions')
+              .upsert(updates as any, { onConflict: 'id' });
+            if (!upErr) tagged += updates.length;
+          }
+        } catch {
+          // ignore; these rows will appear in Needs review
+        }
+        setImportLog(`Imported ${imported}/${mappedRows.length}. Tagged ${tagged}/${imported}.`);
         continue;
       }
 
@@ -2785,9 +2791,11 @@ export default function DashboardHome() {
       // eslint-disable-next-line no-console
       console.error('IMPORT_BATCH_FAILED', lastErrorMessage, firstFailedRow);
       for (const row of chunk) {
-        const { error: rowError } = await supabase
+        const { data: ins, error: rowError } = await supabase
           .from('transactions')
-          .insert(row);
+          .insert(row as any)
+          .select('id, description, category, amount')
+          .single();
         if (rowError) {
           failed += 1;
           lastErrorMessage = rowError.message ?? String(rowError);
@@ -2799,6 +2807,42 @@ export default function DashboardHome() {
           console.error('IMPORT_ROW_FAILED', lastErrorMessage, row);
         } else {
           imported += 1;
+          // Tag this single row immediately
+          try {
+            const classifyRes = await fetch('/api/transactions/classify-tax', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                transactions: [
+                  {
+                    description: (ins as any)?.description ?? null,
+                    merchant: null,
+                    category: (ins as any)?.category ?? null,
+                    amount: Number((ins as any)?.amount) || 0,
+                  },
+                ],
+              }),
+            });
+            const json: any = classifyRes.ok ? await classifyRes.json() : null;
+            const tag = json?.results?.[0] ?? null;
+            await supabase
+              .from('transactions')
+              .update({
+                tax_category: String(tag?.tax_category ?? 'uncategorized'),
+                tax_treatment: String(tag?.tax_treatment ?? 'review'),
+                confidence_score: Number(tag?.confidence_score ?? 0.5),
+                tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
+              } as any)
+              .eq('id', (ins as any)?.id)
+              .eq('business_id', selectedBusinessId);
+            tagged += 1;
+          } catch {
+            // ignore
+          }
+          setImportLog(`Imported ${imported}/${mappedRows.length}. Tagged ${tagged}/${imported}.`);
         }
       }
     }
@@ -3058,7 +3102,7 @@ export default function DashboardHome() {
                 className="self-start inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <AlertTriangle className="h-4 w-4 text-amber-300" />
-                Needs review
+                Needs review{Number(smartTaxes?.needsReviewCount ?? 0) > 0 ? ` (${Number(smartTaxes?.needsReviewCount)})` : ''}
               </button>
             </div>
 
@@ -3091,7 +3135,7 @@ export default function DashboardHome() {
                   <SmartTaxStat
                     icon={<ReceiptText className="h-4 w-4 text-sky-200" />}
                     label="Estimated taxes owed (YTD)"
-                    value={formatCurrency(Number(smartTaxes?.simpleCards?.estimatedTaxesOwed?.value ?? 0) || 0)}
+                    value={formatCurrency(Number(smartTaxes?.simpleCards?.estimatedTaxesOwedYtd ?? 0) || 0)}
                     hint="Based on profit so far this year."
                   />
                   <SmartTaxStat

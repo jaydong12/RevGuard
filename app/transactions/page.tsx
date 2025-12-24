@@ -70,6 +70,7 @@ type Transaction = {
   tax_category?: string | null;
   tax_treatment?: string | null;
   confidence_score?: number | null;
+  tax_reason?: string | null;
 };
 
 // Form state for creating / editing a transaction.
@@ -253,6 +254,7 @@ export default function TransactionsPage() {
           tax_category: taxCategory,
           tax_treatment: taxTreatment,
           confidence_score: 1, // user-confirmed
+          tax_reason: 'User confirmed',
         } as any)
         .eq('id', taxTx.id)
         .eq('business_id', selectedBusinessId);
@@ -415,37 +417,6 @@ export default function TransactionsPage() {
         return;
       }
 
-      // Classify tax tags (rules-first, optional AI server-side)
-      const classifyRes = await fetch('/api/transactions/classify-tax', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          transactions: [
-            {
-              description: formValues.description,
-              merchant: null,
-              category: formValues.category,
-              amount: amountNumber,
-            },
-          ],
-        }),
-      });
-
-      if (!classifyRes.ok) {
-        const txt = await classifyRes.text().catch(() => '');
-        setFormError(txt || 'Could not classify transaction for tax tagging.');
-        return;
-      }
-
-      const classifyJson: any = await classifyRes.json();
-      const tag = classifyJson?.results?.[0] ?? null;
-      const tax_category = String(tag?.tax_category ?? 'uncategorized');
-      const tax_treatment = String(tag?.tax_treatment ?? 'review');
-      const confidence_score = Number(tag?.confidence_score ?? 0.5);
-
       if (formMode === 'create') {
         // Insert a new transaction.
         const { data: inserted, error } = await supabase
@@ -457,11 +428,8 @@ export default function TransactionsPage() {
             amount: amountNumber,
             customer_id: customerIdToSave,
             business_id: selectedBusinessId,
-            tax_category,
-            tax_treatment,
-            confidence_score,
           })
-          .select('*')
+          .select('id, date, description, category, amount')
           .single();
 
         if (error) {
@@ -471,9 +439,42 @@ export default function TransactionsPage() {
           return;
         }
 
-        await queryClient.invalidateQueries({
-          queryKey: ['transactions', selectedBusinessId],
-        });
+        // Post-insert tagging (rules first, AI if needed)
+        try {
+          const classifyRes = await fetch('/api/transactions/classify-tax', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              transactions: [
+                {
+                  description: inserted.description,
+                  merchant: null,
+                  category: inserted.category,
+                  amount: inserted.amount,
+                },
+              ],
+            }),
+          });
+          const json: any = classifyRes.ok ? await classifyRes.json() : null;
+          const tag = json?.results?.[0] ?? null;
+          const tax_category = String(tag?.tax_category ?? 'uncategorized');
+          const tax_treatment = String(tag?.tax_treatment ?? 'review');
+          const confidence_score = Number(tag?.confidence_score ?? 0.5);
+          const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
+
+          await supabase
+            .from('transactions')
+            .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
+            .eq('id', inserted.id)
+            .eq('business_id', selectedBusinessId);
+        } catch {
+          // ignore tagging errors; row still exists and will appear in Needs review
+        }
+
+        await queryClient.invalidateQueries({ queryKey: ['transactions', selectedBusinessId] });
       } else if (formMode === 'edit' && editingTx) {
         const { data: updated, error } = await supabase
           .from('transactions')
@@ -483,13 +484,10 @@ export default function TransactionsPage() {
             category: formValues.category,
             amount: amountNumber,
             customer_id: customerIdToSave,
-            tax_category,
-            tax_treatment,
-            confidence_score,
           })
           .eq('id', editingTx.id)
           .eq('business_id', selectedBusinessId)
-          .select('*')
+          .select('id, date, description, category, amount')
           .single();
 
         if (error) {
@@ -499,9 +497,42 @@ export default function TransactionsPage() {
           return;
         }
 
-        await queryClient.invalidateQueries({
-          queryKey: ['transactions', selectedBusinessId],
-        });
+        // Post-update tagging (keep tax tags synced)
+        try {
+          const classifyRes = await fetch('/api/transactions/classify-tax', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              transactions: [
+                {
+                  description: updated.description,
+                  merchant: null,
+                  category: updated.category,
+                  amount: updated.amount,
+                },
+              ],
+            }),
+          });
+          const json: any = classifyRes.ok ? await classifyRes.json() : null;
+          const tag = json?.results?.[0] ?? null;
+          const tax_category = String(tag?.tax_category ?? 'uncategorized');
+          const tax_treatment = String(tag?.tax_treatment ?? 'review');
+          const confidence_score = Number(tag?.confidence_score ?? 0.5);
+          const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
+
+          await supabase
+            .from('transactions')
+            .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
+            .eq('id', updated.id)
+            .eq('business_id', selectedBusinessId);
+        } catch {
+          // ignore tagging errors
+        }
+
+        await queryClient.invalidateQueries({ queryKey: ['transactions', selectedBusinessId] });
       }
 
       // On success: close the form and refresh the list

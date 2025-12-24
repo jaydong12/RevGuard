@@ -103,7 +103,13 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.json({ results: ruleResults });
+  // Return both `reasoning` and `tax_reason` for convenience in callers.
+  return NextResponse.json({
+    results: ruleResults.map((r: any) => ({
+      ...r,
+      tax_reason: String(r?.reasoning ?? ''),
+    })),
+  });
 }
 
 

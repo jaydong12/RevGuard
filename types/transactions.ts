@@ -23,6 +23,7 @@ export interface Transaction {
   tax_category?: string | null;
   tax_treatment?: string | null;
   confidence_score?: number | null;
+  tax_reason?: string | null;
   business_id?: string | null;
   created_at?: string | null;
   updated_at?: string | null;

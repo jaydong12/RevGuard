@@ -268,13 +268,50 @@ async function handle(req: Request, body: any) {
   let ownerDraw = 0;
   let capex = 0;
   let ownerEstimatedTax = 0;
+  let needsReviewCount = 0;
 
   const txs = transactions as any[];
   for (const tx of txs) {
     const amt = Number(tx?.amount) || 0;
     if (!Number.isFinite(amt) || amt === 0) continue;
-    const taxCat = String(tx?.tax_category ?? '').trim().toLowerCase();
-    const treatment = String(tx?.tax_treatment ?? '').trim().toLowerCase();
+    const rawTaxCat = String(tx?.tax_category ?? '').trim().toLowerCase();
+    const rawTreatment = String(tx?.tax_treatment ?? '').trim().toLowerCase();
+    const conf = Number(tx?.confidence_score ?? 1);
+
+    const isNeedsReview =
+      !rawTaxCat ||
+      rawTaxCat === 'uncategorized' ||
+      rawTaxCat === 'review' ||
+      !rawTreatment ||
+      rawTreatment === 'review' ||
+      (Number.isFinite(conf) && conf < 0.75);
+    if (isNeedsReview) needsReviewCount += 1;
+
+    // Normalize legacy/unset values without using description/category.
+    const taxCat = (() => {
+      if (!rawTaxCat || rawTaxCat === 'review') return amt > 0 ? 'gross_receipts' : 'uncategorized';
+      if (rawTaxCat === 'taxable') return amt > 0 ? 'gross_receipts' : 'uncategorized';
+      if (rawTaxCat === 'non_taxable') return 'transfer';
+      if (rawTaxCat === 'capitalized') return 'capex';
+      if (rawTaxCat === 'deductible' || rawTaxCat === 'non_deductible' || rawTaxCat === 'partial_deductible')
+        return 'uncategorized';
+      return rawTaxCat;
+    })();
+
+    const treatment = (() => {
+      if (
+        rawTreatment === 'deductible' ||
+        rawTreatment === 'non_deductible' ||
+        rawTreatment === 'partial_50' ||
+        rawTreatment === 'capitalized'
+      )
+        return rawTreatment;
+      if (rawTaxCat === 'deductible') return 'deductible';
+      if (rawTaxCat === 'non_deductible') return 'non_deductible';
+      if (rawTaxCat === 'partial_deductible') return 'partial_50';
+      if (rawTaxCat === 'capitalized') return 'capitalized';
+      return 'deductible'; // default for untagged rows (won't zero totals)
+    })();
 
     if (taxCat === 'sales_tax_collected') {
       if (amt > 0) salesTaxCollected += amt;
@@ -320,12 +357,12 @@ async function handle(req: Request, body: any) {
       else if (treatment === 'partial_50') {
         deductibleExpenses += abs * 0.5;
         nonDeductibleExpenses += abs * 0.5;
-      } else if (treatment === 'non_deductible' || treatment === 'review' || !treatment) {
+      } else if (treatment === 'non_deductible') {
         nonDeductibleExpenses += abs;
       } else if (treatment === 'capitalized') {
         // ignore here (capex should have its own bucket)
       } else {
-        nonDeductibleExpenses += abs;
+        deductibleExpenses += abs;
       }
     }
   }
@@ -392,6 +429,12 @@ async function handle(req: Request, body: any) {
   });
 
   const accuracy = computeAccuracyForUi(transactions as any[]);
+  if (needsReviewCount > 0) {
+    const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
+    const fix = `Review ${needsReviewCount} transaction${needsReviewCount === 1 ? '' : 's'} in Needs review`;
+    if (!checklist.includes(fix)) checklist.unshift(fix);
+    (accuracy as any).checklist = checklist.slice(0, 4);
+  }
   if (payrollMissing) {
     const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
     const fix = 'Create/connect payroll (so payroll taxes can be included)';
@@ -418,6 +461,7 @@ async function handle(req: Request, body: any) {
   }
 
   return NextResponse.json({
+    needsReviewCount,
     simpleCards: {
       taxSetAside: { amount: taxesOwed, pct: setAsidePct },
       estimatedTaxesOwedYtd: taxesOwed,

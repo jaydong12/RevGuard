@@ -14,6 +14,10 @@ add column if not exists tax_category text not null default 'taxable';
 alter table public.transactions
 add column if not exists tax_treatment text not null default 'review';
 
+-- Free-form explanation of why the transaction was tagged a certain way.
+alter table public.transactions
+add column if not exists tax_reason text;
+
 alter table public.transactions
 add column if not exists tax_status text not null default 'not_taxed';
 

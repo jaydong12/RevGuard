@@ -336,6 +336,7 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
   }
 
   // TaxEngine v2: use ONLY tax_category + tax_treatment (no description/category heuristics).
+  // IMPORTANT: For untagged rows, fall back using ONLY amount sign so totals don't collapse to $0.
   let grossIncome = 0; // gross_receipts (+ uncategorized income)
   let nonTaxableIncome = 0; // transfers + loan principal
   let deductibleExpenses = 0; // based on tax_treatment
@@ -348,8 +349,32 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
     const amt = num(tx.amount);
     if (!Number.isFinite(amt) || amt === 0) continue;
 
-    const taxCat = String(tx.tax_category ?? '').trim().toLowerCase();
-    const treatment = String(tx.tax_treatment ?? '').trim().toLowerCase();
+    const rawTaxCat = String(tx.tax_category ?? '').trim().toLowerCase();
+    const rawTreatment = String(tx.tax_treatment ?? '').trim().toLowerCase();
+
+    // Normalize legacy/unset values without using description/category.
+    const taxCat = (() => {
+      if (!rawTaxCat || rawTaxCat === 'review') return amt > 0 ? 'gross_receipts' : 'uncategorized';
+      if (rawTaxCat === 'taxable') return amt > 0 ? 'gross_receipts' : 'uncategorized';
+      if (rawTaxCat === 'non_taxable') return 'transfer';
+      if (rawTaxCat === 'deductible') return 'uncategorized';
+      if (rawTaxCat === 'non_deductible') return 'uncategorized';
+      if (rawTaxCat === 'partial_deductible') return 'uncategorized';
+      if (rawTaxCat === 'capitalized') return 'capex';
+      return rawTaxCat;
+    })();
+
+    const treatment = (() => {
+      if (rawTreatment === 'deductible' || rawTreatment === 'non_deductible' || rawTreatment === 'partial_50' || rawTreatment === 'capitalized')
+        return rawTreatment;
+      // Legacy treatment embedded in tax_category
+      if (rawTaxCat === 'deductible') return 'deductible';
+      if (rawTaxCat === 'non_deductible') return 'non_deductible';
+      if (rawTaxCat === 'partial_deductible') return 'partial_50';
+      if (rawTaxCat === 'capitalized') return 'capitalized';
+      // Default for untagged: assume deductible for estimates but it will show in Needs review.
+      return 'deductible';
+    })();
 
     if (taxCat === 'sales_tax_collected') {
       if (amt > 0) salesTaxCollected += amt;
@@ -392,13 +417,12 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
       } else if (treatment === 'partial_50') {
         deductibleExpenses += abs * 0.5;
         nonDeductibleExpenses += abs * 0.5;
-      } else if (treatment === 'non_deductible' || treatment === 'review' || !treatment) {
-        // conservative: review counts as non-deductible until corrected
+      } else if (treatment === 'non_deductible') {
         nonDeductibleExpenses += abs;
       } else if (treatment === 'capitalized') {
         // ignore in period
       } else {
-        nonDeductibleExpenses += abs;
+        deductibleExpenses += abs;
       }
     }
   }
