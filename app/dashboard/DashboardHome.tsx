@@ -1253,43 +1253,27 @@ export default function DashboardHome() {
     if (!selectedBusinessId) return;
     // optimistic update
     setCalendarProgressByDay((prev) => ({ ...prev, [day]: progress }));
-    try {
-      const payload = {
-        business_id: selectedBusinessId,
-        date: day,
-        tx_done: progress.transactions,
-        categories_done: progress.categories,
-        biggest_done: progress.biggest_move,
-        completed: Boolean(progress.transactions && progress.categories && progress.biggest_move),
-      };
-      const { data, error } = await supabase
-        .from('daily_review_calendar')
-        .upsert(
-          {
-            business_id: selectedBusinessId,
-            date: day,
-            transactions: progress.transactions,
-            categories: progress.categories,
-            biggest_move: progress.biggest_move,
-          } as any,
-          { onConflict: 'business_id,date' }
-        )
-        .select('date,transactions,categories,biggest_move')
-        .maybeSingle();
+    const payload = {
+      business_id: selectedBusinessId,
+      date: day,
+      transactions: progress.transactions,
+      categories: progress.categories,
+      biggest_move: progress.biggest_move,
+    };
 
+    const { data, error } = await supabase
+      .from('daily_review_calendar')
+      .upsert(payload as any, { onConflict: 'business_id,date' })
+      .select()
+      .maybeSingle();
+
+    if (error) {
       // eslint-disable-next-line no-console
-      console.log('DAILY_REVIEW_CALENDAR_UPSERT_RESULT', { error, data, payload });
-      if (error) throw error;
-    } catch (e) {
-      const err: any = e;
-      // eslint-disable-next-line no-console
-      console.error('DAILY_REVIEW_CALENDAR_UPSERT_ERROR', {
-        message: err?.message ?? String(err ?? ''),
-        code: err?.code ?? null,
-        details: err?.details ?? null,
-        hint: err?.hint ?? null,
-      });
+      console.error('CAL_UPSERT_ERROR', error, { payload });
+      return;
     }
+    // eslint-disable-next-line no-console
+    console.log('CAL_UPSERT_OK', data);
   }
 
   function persistChecklist(next: Record<string, boolean>) {
