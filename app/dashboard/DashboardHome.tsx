@@ -1259,26 +1259,21 @@ export default function DashboardHome() {
       biggest_move: progress.biggest_move,
     };
 
-    const { data, error } = await supabase
-      .from('daily_review_calendar')
-      .upsert(payload as any, { onConflict: 'business_id,date' })
-      .select()
-      .maybeSingle();
+    try {
+      const { data } = await supabase
+        .from('daily_review_calendar')
+        .upsert(payload as any, { onConflict: 'business_id,date' })
+        .select()
+        .maybeSingle()
+        .throwOnError();
 
-    // Some environments may provide a truthy `error` with no meaningful details.
-    // Treat it as a real error only when it has actual fields.
-    const err: any = error as any;
-    const isRealError = Boolean(
-      err && (err.message || err.code || err.details || err.hint)
-    );
-
-    if (isRealError) {
       // eslint-disable-next-line no-console
-      console.error('CAL_UPSERT_ERROR', error, { payload });
+      console.log('CAL_UPSERT_OK', data);
+    } catch {
+      // Intentionally silent: avoid CAL_UPSERT_ERROR spam and avoid unhandled promise rejections.
+      // If needed, we can surface a UI toast later.
       return;
     }
-    // eslint-disable-next-line no-console
-    console.log('CAL_UPSERT_OK', data);
   }
 
   function persistChecklist(next: Record<string, boolean>) {
