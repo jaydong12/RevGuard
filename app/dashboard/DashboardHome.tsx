@@ -26,7 +26,7 @@ import { formatCurrency } from '../../lib/formatCurrency';
 import { computeHealthSystem } from '../../lib/healthSystem';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
-import { Sparkles } from 'lucide-react';
+import { CheckCircle2, FileText, Sparkles, Target } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -963,6 +963,33 @@ export default function DashboardHome() {
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
+  // Force daily recompute for "today" insights even if data doesn't change,
+  // and flip automatically at midnight local time.
+  const [healthDayKey, setHealthDayKey] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
+
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+      0,
+      0,
+      2
+    );
+    const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
+    const t = window.setTimeout(() => {
+      const d = new Date();
+      setHealthDayKey(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      );
+    }, ms);
+    return () => window.clearTimeout(t);
+  }, [healthDayKey]);
+
   const {
     todayKey,
     yesterdayKey,
@@ -970,6 +997,8 @@ export default function DashboardHome() {
     netYesterday,
     moneyMovesTakeaway,
     moneyMoves,
+    todaysSnapshot,
+    oneFocusTomorrow,
     lowData,
   } =
     useMemo(() => {
@@ -1067,6 +1096,50 @@ export default function DashboardHome() {
         return null;
       })();
 
+      // Today's Snapshot (1–2 sentences)
+      const snapshot = (() => {
+        if (todayTxs.length === 0) {
+          return 'No transactions recorded today yet. If you had activity, import or sync so your numbers stay accurate.';
+        }
+        let income = 0;
+        let out = 0;
+        for (const tx of todayTxs) {
+          const amt = Number((tx as any)?.amount) || 0;
+          if (amt >= 0) income += amt;
+          else out += Math.abs(amt);
+        }
+        const net = income - out;
+        const biggest = biggestAbs
+          ? `${formatCurrency(Number((biggestAbs as any)?.amount) || 0)} ${String(
+              (biggestAbs as any)?.category ?? 'Uncategorized'
+            )}`
+          : null;
+        const s1 = `Today: ${todayTxs.length} tx • ${formatCurrency(income)} in • ${formatCurrency(
+          out
+        )} out • Net ${net >= 0 ? '+' : '-'}${formatCurrency(Math.abs(net))}.`;
+        const s2 = biggest ? `Biggest move: ${biggest}.` : '';
+        return `${s1} ${s2}`.trim();
+      })();
+
+      // One Focus for Tomorrow (single actionable suggestion)
+      const focus = (() => {
+        const uncategorized = todayTxs.filter(
+          (t) => String((t as any)?.category ?? '').trim().toLowerCase() === 'uncategorized'
+        ).length;
+        if (todayTxs.length === 0) {
+          return 'Tomorrow: import your transactions and tag the top 10 so trends are reliable.';
+        }
+        if (uncategorized > 0) {
+          return `Tomorrow: clean up categories (start with ${uncategorized} Uncategorized item${
+            uncategorized === 1 ? '' : 's'
+          }) to improve accuracy.`;
+        }
+        if (topOut && topOut[0]) {
+          return `Tomorrow: review ${topOut[0]} spend and decide what to keep vs cut.`;
+        }
+        return 'Tomorrow: scan for any surprise expenses and set one simple cap for the biggest category.';
+      })();
+
       return {
         todayKey: tKey,
         yesterdayKey: yKey,
@@ -1074,29 +1147,11 @@ export default function DashboardHome() {
         netYesterday: yesterdayNet,
         moneyMovesTakeaway: takeaway,
         moneyMoves: bullets.slice(0, 3),
+        todaysSnapshot: snapshot,
+        oneFocusTomorrow: focus,
         lowData: low,
       };
-    }, [transactions]);
-
-  // Ensure the Health System (especially "Fix this first") refreshes daily even if
-  // the underlying data doesn't change, and automatically flips at midnight local time.
-  const [healthDayKey, setHealthDayKey] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  });
-
-  useEffect(() => {
-    const now = new Date();
-    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2);
-    const ms = Math.max(1000, nextMidnight.getTime() - now.getTime());
-    const t = window.setTimeout(() => {
-      const d = new Date();
-      setHealthDayKey(
-        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      );
-    }, ms);
-    return () => window.clearTimeout(t);
-  }, [healthDayKey]);
+    }, [transactions, healthDayKey]);
 
   const health = useMemo(() => {
     return computeHealthSystem({
@@ -1109,6 +1164,16 @@ export default function DashboardHome() {
 
   const [lastReviewedKey, setLastReviewedKey] = useState<string | null>(null);
   const [reviewedJustNow, setReviewedJustNow] = useState(false);
+  const CHECKLIST_ITEMS = useMemo(
+    () =>
+      [
+        { id: 'reviewed_tx', label: 'Reviewed transactions' },
+        { id: 'checked_categories', label: 'Checked categories' },
+        { id: 'noted_biggest', label: 'Noted biggest move' },
+      ] as const,
+    []
+  );
+  const [reviewChecklist, setReviewChecklist] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setReviewedJustNow(false);
@@ -1129,6 +1194,47 @@ export default function DashboardHome() {
     }
   }, [selectedBusinessId]);
 
+  useEffect(() => {
+    // Load checklist per business + day
+    if (!selectedBusinessId) {
+      setReviewChecklist({});
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(
+        `revguard:daily_review_checklist:${selectedBusinessId}:${todayKey}`
+      );
+      if (!raw) {
+        setReviewChecklist({});
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      setReviewChecklist(parsed && typeof parsed === 'object' ? parsed : {});
+    } catch {
+      setReviewChecklist({});
+    }
+  }, [selectedBusinessId, todayKey]);
+
+  function persistChecklist(next: Record<string, boolean>) {
+    if (!selectedBusinessId) return;
+    try {
+      localStorage.setItem(
+        `revguard:daily_review_checklist:${selectedBusinessId}:${todayKey}`,
+        JSON.stringify(next)
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  function toggleChecklistItem(id: string) {
+    setReviewChecklist((prev) => {
+      const next = { ...prev, [id]: !prev?.[id] };
+      persistChecklist(next);
+      return next;
+    });
+  }
+
   function handleMarkReviewed() {
     if (!selectedBusinessId) return;
     setReviewedJustNow(false);
@@ -1137,6 +1243,12 @@ export default function DashboardHome() {
 
     setLastReviewedKey(todayKey);
     setReviewedJustNow(true);
+
+    // Mark all checklist items complete for the day.
+    const allChecked: Record<string, boolean> = {};
+    for (const it of CHECKLIST_ITEMS) allChecked[it.id] = true;
+    setReviewChecklist(allChecked);
+    persistChecklist(allChecked);
 
     try {
       localStorage.setItem(
@@ -2524,6 +2636,61 @@ export default function DashboardHome() {
                 </div>
               </div>
 
+              {/* Snapshot + checklist + focus */}
+              <div className="mt-4 space-y-4">
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    <FileText className="h-4 w-4 text-slate-300/80" />
+                    Today’s Snapshot
+                  </div>
+                  <div className="mt-2 text-sm text-slate-200 leading-relaxed">
+                    {todaysSnapshot}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    Review checklist
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {CHECKLIST_ITEMS.map((it) => {
+                      const checked = Boolean(reviewChecklist?.[it.id]);
+                      return (
+                        <button
+                          key={it.id}
+                          type="button"
+                          onClick={() => toggleChecklistItem(it.id)}
+                          disabled={!selectedBusinessId}
+                          className="w-full flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                        >
+                          <div className="flex items-center gap-2">
+                            {checked ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-300" />
+                            ) : (
+                              <span className="h-4 w-4 rounded-full border border-white/20 bg-white/5" />
+                            )}
+                            <span className="text-sm text-slate-200">{it.label}</span>
+                          </div>
+                          <span className="text-[11px] text-slate-500">
+                            {checked ? 'Done' : 'Tap'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                    <Target className="h-4 w-4 text-slate-300/80" />
+                    One Focus for Tomorrow
+                  </div>
+                  <div className="mt-2 text-sm text-slate-200 leading-relaxed">
+                    {oneFocusTomorrow}
+                  </div>
+                </div>
+              </div>
+
               <div className="mt-5 flex items-center justify-between gap-3">
                 <button
                   type="button"
@@ -2532,14 +2699,18 @@ export default function DashboardHome() {
                   className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {lastReviewedKey === todayKey
-                    ? 'Reviewed today ✓'
+                    ? 'Reviewed — you’re all set for today'
                     : reviewedJustNow
-                    ? 'Reviewed today ✓'
+                    ? 'Reviewed — you’re all set for today'
                     : 'Mark reviewed'}
                 </button>
                 <div className="text-[11px] text-slate-400">
                   {selectedBusinessId ? (
-                    lastReviewedKey === todayKey ? <span>All set.</span> : <span>One tap per day.</span>
+                    lastReviewedKey === todayKey ? (
+                      <span>All set.</span>
+                    ) : (
+                      <span>One tap per day.</span>
+                    )
                   ) : (
                     <span>Sign in to mark reviewed.</span>
                   )}
