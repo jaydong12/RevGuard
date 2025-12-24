@@ -12,7 +12,6 @@ import {
   Activity,
   TrendingUp,
   Wallet,
-  LineChart,
   Info,
   ChevronRight,
 } from 'lucide-react';
@@ -56,13 +55,11 @@ function formatPct(p: number | null) {
 function Tooltip({
   title,
   what,
-  bulletsTitle,
   calc,
   good,
 }: {
   title: string;
   what: string;
-  bulletsTitle?: string;
   calc: string[];
   good: string;
 }) {
@@ -70,9 +67,9 @@ function Tooltip({
     <div className="pointer-events-none absolute left-1/2 top-full z-30 mt-2 w-[280px] -translate-x-1/2 rounded-2xl border border-slate-800/80 bg-slate-950/80 backdrop-blur px-3 py-2 shadow-[0_18px_60px_rgba(0,0,0,0.45)] opacity-0 translate-y-1 transition group-hover:opacity-100 group-hover:translate-y-0">
       <div className="text-xs font-semibold text-slate-100">{title}</div>
       <div className="mt-1 text-[11px] text-slate-300 leading-relaxed">{what}</div>
-      <div className="mt-2 text-[11px] text-slate-400">{bulletsTitle ?? 'How it’s scored'}</div>
+      <div className="mt-2 text-[11px] text-slate-400">It goes up when…</div>
       <ul className="mt-1 space-y-0.5 text-[11px] text-slate-300">
-        {calc.slice(0, 4).map((c, i) => (
+        {calc.slice(0, 3).map((c, i) => (
           <li key={i} className="flex gap-2">
             <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-600/80 shrink-0" />
             <span>{c}</span>
@@ -89,48 +86,32 @@ function Tooltip({
 function InfoTip({
   title,
   what,
-  bulletsTitle,
   calc,
   good,
 }: {
   title: string;
   what: string;
-  bulletsTitle?: string;
   calc: string[];
   good: string;
 }) {
   return (
     <span className="group relative inline-flex items-center">
       <Info className="h-3.5 w-3.5 text-slate-500 group-hover:text-slate-200 transition" />
-      <Tooltip title={title} what={what} bulletsTitle={bulletsTitle} calc={calc} good={good} />
+      <Tooltip title={title} what={what} calc={calc} good={good} />
     </span>
   );
 }
 
-function SegmentedBar({ score, state }: { score: number; state: HealthState }) {
+function ProgressBar({ score, state }: { score: number; state: HealthState }) {
   const pct = Math.max(0, Math.min(100, Math.round(score)));
-  // Slightly fewer segments + thinner bars = calmer, more modern look.
-  const segments = 18;
-  const filled = Math.round((pct / 100) * segments);
   return (
-    <div className="flex items-center gap-[3px]">
-      {Array.from({ length: segments }).map((_, i) => {
-        const on = i < filled;
-        const rounded =
-          i === 0 ? 'rounded-l-full' : i === segments - 1 ? 'rounded-r-full' : 'rounded-sm';
-        return (
-          <div
-            key={i}
-            className={`h-2 flex-1 ${rounded} ${
-              on
-                ? `bg-gradient-to-r ${barFillClasses(
-                    state
-                  )} shadow-[0_0_14px_rgba(56,189,248,0.10)]`
-                : 'bg-white/[0.08]'
-            }`}
-          />
-        );
-      })}
+    <div className="h-2.5 rounded-full bg-white/[0.08] overflow-hidden">
+      <div
+        className={`h-full rounded-full bg-gradient-to-r ${barFillClasses(
+          state
+        )} shadow-[0_0_16px_rgba(56,189,248,0.12)]`}
+        style={{ width: `${pct}%` }}
+      />
     </div>
   );
 }
@@ -143,9 +124,8 @@ function metricIcon(key: HealthPillar['key']) {
       return <TrendingUp className="h-4 w-4 text-sky-200" />;
     case 'expenseControl':
       return <Wallet className="h-4 w-4 text-amber-200" />;
-    case 'forecastStability':
     default:
-      return <LineChart className="h-4 w-4 text-violet-200" />;
+      return <Activity className="h-4 w-4 text-slate-200" />;
   }
 }
 
@@ -163,14 +143,13 @@ function HealthMetric({ pillar }: { pillar: HealthPillar }) {
               <InfoTip
                 title={pillar.label}
                 what={pillar.help.what}
-                bulletsTitle={pillar.help.bulletsTitle}
                 calc={pillar.help.calc}
                 good={pillar.help.good}
               />
             </div>
           </div>
         </div>
-        <SegmentedBar score={pillar.score} state={pillar.state} />
+        <ProgressBar score={pillar.score} state={pillar.state} />
         {pillar.key === 'cashFlow' && pillar.whatThisMeans && (
           <div className="text-[11px] text-slate-400 leading-relaxed">
             {pillar.whatThisMeans}
@@ -247,7 +226,6 @@ export default function BusinessHealthSystemCard({ health }: { health: HealthSys
         <HealthMetric pillar={pillars.cashFlow} />
         <HealthMetric pillar={pillars.profit} />
         <HealthMetric pillar={pillars.expenseControl} />
-        <HealthMetric pillar={pillars.forecastStability} />
       </div>
 
       <div className="mt-5">

@@ -3,8 +3,7 @@ export type HealthState = 'Healthy' | 'Caution' | 'At Risk' | 'Critical';
 export type HealthPillarKey =
   | 'cashFlow'
   | 'profit'
-  | 'expenseControl'
-  | 'forecastStability';
+  | 'expenseControl';
 
 export type HealthPillar = {
   key: HealthPillarKey;
@@ -14,7 +13,6 @@ export type HealthPillar = {
   whatThisMeans?: string;
   help: {
     what: string;
-    bulletsTitle?: string;
     calc: string[];
     good: string;
   };
@@ -96,19 +94,6 @@ function pctChange(current: number, prev: number): number | null {
   return (c - p) / Math.abs(p);
 }
 
-function sumNetByDay(txs: Tx[], start: Date, endInclusive: Date): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const tx of txs) {
-    const d = parseTxDateLocal(tx.date ?? null);
-    if (!d) continue;
-    if (d < start || d > endInclusive) continue;
-    const k = dayKey(d);
-    const amt = Number((tx as any)?.amount) || 0;
-    out.set(k, (out.get(k) ?? 0) + amt);
-  }
-  return out;
-}
-
 function sumByRange(txs: Tx[], start: Date, endInclusive: Date) {
   let income = 0;
   let expenses = 0;
@@ -123,14 +108,6 @@ function sumByRange(txs: Tx[], start: Date, endInclusive: Date) {
     else expenses += Math.abs(amt);
   }
   return { income, expenses, net };
-}
-
-function stdDev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const mean = values.reduce((s, v) => s + v, 0) / values.length;
-  const variance =
-    values.reduce((s, v) => s + (v - mean) * (v - mean), 0) / (values.length - 1);
-  return Math.sqrt(Math.max(0, variance));
 }
 
 function pickExpenseSpike(txs: Tx[], now: Date) {
@@ -289,62 +266,17 @@ export function computeHealthSystem(params: {
   const volPenalty = clamp100(Math.min(25, expVol * 30));
   const expenseControlScore = clamp100(ratioScore - volPenalty + 10);
 
-  // ---------- Pillar: Forecast Stability ----------
-  const netByDay30 = sumNetByDay(txs, start30, end);
-  const daily = [];
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(start30);
-    d.setDate(start30.getDate() + i);
-    daily.push(netByDay30.get(dayKey(d)) ?? 0);
-  }
-  const sd = stdDev(daily);
-  const typical = Math.max(1, cur30.income / 30);
-  // lower sd relative to typical inflow => higher stability
-  const rel = sd / typical; // 0..?
-  const stabilityScore = clamp100((1 - clamp01(rel / 1.2)) * 100);
-
-  // Optional: if upcoming invoices/bills exist, nudge stability based on coverage.
-  // We keep this schema-flexible (only if due_date + amount exist).
-  const upcomingWindowDays = 14;
-  const dueEnd = new Date(end);
-  dueEnd.setDate(end.getDate() + upcomingWindowDays);
-  const sumUpcoming = (rows: any[], positive: boolean) => {
-    let sum = 0;
-    for (const r of rows ?? []) {
-      const rawDate =
-        (r as any)?.due_date ?? (r as any)?.dueDate ?? (r as any)?.date ?? null;
-      const d = parseTxDateLocal(rawDate);
-      if (!d) continue;
-      if (d < end || d > dueEnd) continue;
-      const rawAmt = (r as any)?.amount ?? (r as any)?.total ?? (r as any)?.balance ?? 0;
-      const amt = Number(rawAmt) || 0;
-      // invoices are positive receivables, bills positive payables
-      sum += positive ? Math.abs(amt) : Math.abs(amt);
-    }
-    return sum;
-  };
-  const upcomingReceivables = sumUpcoming(params.invoices ?? [], true);
-  const upcomingPayables = sumUpcoming(params.bills ?? [], false);
-  const coverage =
-    upcomingPayables > 0 ? clamp01(upcomingReceivables / upcomingPayables) : null;
-  const forecastScore = clamp100(
-    stabilityScore + (coverage === null ? 0 : (coverage - 0.9) * 20)
-  );
-
   const weights: Record<HealthPillarKey, number> = {
-    cashFlow: params.weights?.cashFlow ?? 0.35,
-    profit: params.weights?.profit ?? 0.3,
-    expenseControl: params.weights?.expenseControl ?? 0.2,
-    forecastStability: params.weights?.forecastStability ?? 0.15,
+    cashFlow: params.weights?.cashFlow ?? 0.4,
+    profit: params.weights?.profit ?? 0.35,
+    expenseControl: params.weights?.expenseControl ?? 0.25,
   };
-  const weightSum =
-    weights.cashFlow + weights.profit + weights.expenseControl + weights.forecastStability;
+  const weightSum = weights.cashFlow + weights.profit + weights.expenseControl;
 
   const overallScore = clamp100(
     (cashScore * weights.cashFlow +
       profitScore * weights.profit +
-      expenseControlScore * weights.expenseControl +
-      forecastScore * weights.forecastStability) /
+      expenseControlScore * weights.expenseControl) /
       (weightSum || 1)
   );
 
@@ -357,7 +289,6 @@ export function computeHealthSystem(params: {
       whatThisMeans: `What this means: ${cashWhatThisMeans}`,
       help: {
         what: 'Tells you if money in is keeping up with money out lately.',
-        bulletsTitle: 'It goes up when…',
         calc: [
           'You’re bringing in more than you’re spending',
           'Your spending is steady (fewer surprise swings)',
@@ -376,12 +307,13 @@ export function computeHealthSystem(params: {
       score: profitScore,
       state: stateFromScore(profitScore),
       help: {
-        what: 'Measures how profitable you are recently.',
+        what: 'Tells you if you’re keeping profit after expenses lately.',
         calc: [
-          '30-day net margin = (income − expenses) / income',
-          'Higher margin → higher score',
+          'You’re earning more than you’re spending',
+          'Costs stay under control as income comes in',
+          'Your margin stays positive and consistent',
         ],
-        good: '80+ usually means consistently positive margin (healthy buffer).',
+        good: '80+ means you’re consistently profitable and building a buffer.',
       },
       notes:
         margin30 === null
@@ -394,26 +326,13 @@ export function computeHealthSystem(params: {
       score: expenseControlScore,
       state: stateFromScore(expenseControlScore),
       help: {
-        what: 'Measures whether spending is under control (and not spiking).',
+        what: 'Tells you if spending is staying under control lately.',
         calc: [
-          '30-day expense ratio = expenses / income',
-          'Penalty for week-over-week expense spikes',
+          'Spending doesn’t jump week to week',
+          'Expenses don’t grow faster than income',
+          'Big one-off spikes are rare',
         ],
-        good: '80+ means expenses are predictable and reasonable vs income.',
-      },
-    },
-    forecastStability: {
-      key: 'forecastStability',
-      label: 'Forecast Stability',
-      score: forecastScore,
-      state: stateFromScore(forecastScore),
-      help: {
-        what: 'Measures how “swingy” your day-to-day net is.',
-        calc: [
-          '30-day daily net volatility (standard deviation)',
-          'Optional 14-day receivable vs payable coverage when available',
-        ],
-        good: '80+ means fewer surprise swings and easier planning.',
+        good: '80+ means spending is steady and under control.',
       },
     },
   };
@@ -423,10 +342,8 @@ export function computeHealthSystem(params: {
     calc: [
       `Weighted average of: cash flow (${Math.round(weights.cashFlow * 100)}%), profit (${Math.round(
         weights.profit * 100
-      )}%), expense control (${Math.round(weights.expenseControl * 100)}%), forecast stability (${Math.round(
-        weights.forecastStability * 100
-      )}%).`,
-      'Each pillar is scored 0–100 using simple last-30-day heuristics.',
+      )}%), expense control (${Math.round(weights.expenseControl * 100)}%).`,
+      'Each pillar is scored 0–100 using simple recent heuristics.',
     ],
     good: '80+ means the business is financially stable with healthy margins and predictability.',
   };
@@ -457,8 +374,6 @@ export function computeHealthSystem(params: {
         ? 'Profit is negative — focus on margin (pricing, COGS, or cutting low-ROI spend).'
         : 'Profit margin is thin — improve margin before scaling volume.',
     expenseControl: 'Expenses are drifting — identify and cap the categories growing fastest.',
-    forecastStability:
-      'Your net swings a lot day-to-day — stabilize by smoothing expenses and building predictable inflows.',
   };
 
   if (worst) {
@@ -519,14 +434,6 @@ export function computeHealthSystem(params: {
         flow: 'expenses',
         category: biggestExpenseToday.category,
       }),
-    });
-  }
-
-  // Volatility warning if forecast pillar is weak.
-  if (pillars.forecastStability.score < 35) {
-    fixFirst.push({
-      text: 'Your daily net is very swingy — smooth expenses and build more predictable inflows.',
-      href: txHref({ from: toIso(start30), to: toIso(end), flow: 'all' }),
     });
   }
 
