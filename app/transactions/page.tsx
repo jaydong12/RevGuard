@@ -150,7 +150,7 @@ export default function TransactionsPage() {
   }
 
   // Optional deep-link hydration (used by Dashboard "Fix this first" links).
-  // Supported params: q, from, to, category, flow, min, max
+  // Supported params: q, from, to, category, flow, min, max, needsReview=1
   useEffect(() => {
     try {
       const q = String(sp.get('q') ?? '');
@@ -160,6 +160,7 @@ export default function TransactionsPage() {
       const flow = String(sp.get('flow') ?? '');
       const min = String(sp.get('min') ?? '');
       const max = String(sp.get('max') ?? '');
+      const needsReview = String(sp.get('needsReview') ?? '');
 
       if (q) setSearch(q);
       if (from) {
@@ -175,9 +176,10 @@ export default function TransactionsPage() {
       if (max) setAmountMax(max);
       if (flow === 'income') setFlowFilter('income');
       if (flow === 'expenses') setFlowFilter('expenses');
+      if (needsReview === '1' || needsReview.toLowerCase() === 'true') setNeedsReviewOnly(true);
 
       // If any filters are present, reset paging for the filtered view.
-      if (q || from || to || cat || flow || min || max) {
+      if (q || from || to || cat || flow || min || max || needsReview) {
         setCurrentPage(1);
       }
     } catch {
@@ -469,7 +471,8 @@ export default function TransactionsPage() {
     Boolean(flowFilter !== 'all') ||
     Boolean(categoryFilter.trim()) ||
     Boolean(amountMin.trim()) ||
-    Boolean(amountMax.trim());
+    Boolean(amountMax.trim()) ||
+    Boolean(needsReviewOnly);
 
   function clearFilters() {
     setSearch('');
@@ -481,6 +484,7 @@ export default function TransactionsPage() {
     setCategoryFilter('');
     setAmountMin('');
     setAmountMax('');
+    setNeedsReviewOnly(false);
     setCurrentPage(1);
   }
 

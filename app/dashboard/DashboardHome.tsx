@@ -27,7 +27,7 @@ import { formatCurrency } from '../../lib/formatCurrency';
 import { computeHealthSystem } from '../../lib/healthSystem';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
-import { CheckCircle2, Sparkles, Target } from 'lucide-react';
+import { CheckCircle2, Sparkles, Target, ReceiptText, CalendarClock, PiggyBank, AlertTriangle } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -38,6 +38,9 @@ type Transaction = {
   customer_name?: string;
   user_id?: string;
   business_id?: string;
+  tax_category?: string | null;
+  tax_treatment?: string | null;
+  confidence_score?: number | null;
 };
 
 type AiResult = {
@@ -244,6 +247,31 @@ function generateAlerts(transactions: Transaction[], totals: Totals): string[] {
     );
   }
   return alerts;
+}
+
+function SmartTaxStat({
+  icon,
+  label,
+  value,
+  hint,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-2 text-xl font-semibold text-slate-50 tracking-tight tabular-nums">
+        {value}
+      </div>
+      <div className="mt-1 text-xs text-slate-400 leading-relaxed">{hint}</div>
+    </div>
+  );
 }
 
 function getBreakdown(
@@ -1147,6 +1175,169 @@ export default function DashboardHome() {
     []
   );
   const [reviewChecklist, setReviewChecklist] = useState<Record<string, boolean>>({});
+
+  // ---------- Smart Taxes (plain-English) ----------
+  const [smartTaxesLoading, setSmartTaxesLoading] = useState(false);
+  const [smartTaxesError, setSmartTaxesError] = useState<string | null>(null);
+  const [smartTaxes, setSmartTaxes] = useState<any | null>(null);
+
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const ytdStartIso = useMemo(() => `${new Date().getFullYear()}-01-01`, []);
+
+  useEffect(() => {
+    if (!selectedBusinessId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        setSmartTaxesLoading(true);
+        setSmartTaxesError(null);
+
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token ?? null;
+        if (!token) throw new Error('Please log in again.');
+
+        const res = await fetch('/api/tax-report', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            businessId: selectedBusinessId,
+            startDate: ytdStartIso,
+            endDate: todayIso,
+          }),
+        });
+
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '');
+          throw new Error(txt || `Smart Taxes failed (HTTP ${res.status}).`);
+        }
+
+        const json = await res.json();
+        if (!cancelled) setSmartTaxes(json);
+      } catch (e: any) {
+        if (!cancelled) setSmartTaxesError(e?.message ?? 'Could not load Smart Taxes.');
+      } finally {
+        if (!cancelled) setSmartTaxesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBusinessId, ytdStartIso, todayIso]);
+
+  const todaysTaxableProfit = useMemo(() => {
+    const todays = (transactions as any[]).filter((t) => String(t?.date ?? '') === todayIso);
+    if (!todays.length) return 0;
+
+    let income = 0;
+    let deductible = 0;
+
+    for (const tx of todays) {
+      const amt = Number(tx?.amount) || 0;
+      if (!Number.isFinite(amt) || amt === 0) continue;
+      const taxCat = String(tx?.tax_category ?? '').trim().toLowerCase();
+      const treat = String(tx?.tax_treatment ?? '').trim().toLowerCase();
+
+      // Exclusions / non-operating buckets
+      if (
+        taxCat === 'sales_tax_collected' ||
+        taxCat === 'sales_tax_paid' ||
+        taxCat === 'transfer' ||
+        taxCat === 'loan_principal' ||
+        taxCat === 'owner_draw' ||
+        taxCat === 'capex' ||
+        taxCat === 'owner_estimated_tax'
+      ) {
+        continue;
+      }
+
+      if (taxCat === 'gross_receipts' && amt > 0) {
+        income += amt;
+        continue;
+      }
+      if (taxCat === 'uncategorized' && amt > 0) {
+        income += amt;
+        continue;
+      }
+
+      if (amt < 0) {
+        const abs = Math.abs(amt);
+        if (treat === 'deductible') deductible += abs;
+        else if (treat === 'partial_50') deductible += abs * 0.5;
+      }
+    }
+
+    return Math.max(0, income - deductible);
+  }, [transactions, todayIso]);
+
+  const todaySetAside = useMemo(() => {
+    const pct = Number(smartTaxes?.simpleCards?.taxSetAside?.pct);
+    if (!Number.isFinite(pct) || pct <= 0) return 0;
+    return Math.max(0, todaysTaxableProfit * pct);
+  }, [smartTaxes?.simpleCards?.taxSetAside?.pct, todaysTaxableProfit]);
+
+  const smartTaxAlerts = useMemo(() => {
+    const alerts: string[] = [];
+    if (!selectedBusinessId) return alerts;
+
+    const salesTaxOwed = Number(smartTaxes?.breakdown?.taxes?.salesTaxLiability ?? 0) || 0;
+    if (salesTaxOwed > 25) {
+      const lastPay = (transactions as any[])
+        .filter((t) => String(t?.tax_category ?? '').toLowerCase() === 'sales_tax_paid')
+        .map((t) => String(t?.date ?? ''))
+        .filter(Boolean)
+        .sort()
+        .pop();
+      if (!lastPay) {
+        alerts.push('You’re collecting sales tax, but we don’t see a sales tax payment yet.');
+      } else {
+        const daysSince =
+          (new Date(todayIso).getTime() - new Date(`${lastPay}T00:00:00Z`).getTime()) /
+          (1000 * 60 * 60 * 24);
+        if (daysSince > 45) {
+          alerts.push('Sales tax looks owed, but your last sales tax payment was a while ago.');
+        }
+      }
+    }
+
+    const uncSpend = (transactions as any[])
+      .filter((t) => String(t?.date ?? '') >= ytdStartIso && String(t?.date ?? '') <= todayIso)
+      .filter(
+        (t) =>
+          (Number(t?.amount) || 0) < 0 &&
+          (String(t?.tax_category ?? '').toLowerCase() === 'uncategorized' ||
+            String(t?.tax_treatment ?? '').toLowerCase() === 'review' ||
+            Number(t?.confidence_score ?? 1) < 0.75)
+      )
+      .reduce((sum, t) => sum + Math.abs(Number(t?.amount) || 0), 0);
+    if (uncSpend > 250) {
+      alerts.push('Some spending needs review—fixing it will tighten your tax estimate.');
+    }
+
+    const misclassifiedTransfers = (transactions as any[]).filter((t) => {
+      const taxCat = String(t?.tax_category ?? '').toLowerCase();
+      if (taxCat !== 'gross_receipts') return false;
+      const txt = `${t?.description ?? ''} ${t?.category ?? ''}`.toLowerCase();
+      return txt.includes('transfer') || txt.includes('loan');
+    }).length;
+    if (misclassifiedTransfers > 0) {
+      alerts.push('Some transactions look like transfers/loans but are tagged as income—worth a quick review.');
+    }
+
+    const ownerPayments = (transactions as any[]).filter((t) => {
+      const tc = String(t?.tax_category ?? '').toLowerCase();
+      return tc === 'owner_draw' || tc === 'owner_estimated_tax';
+    }).length;
+    if (ownerPayments > 0) {
+      alerts.push('We detected owner-related payments. These shouldn’t be counted as business expenses.');
+    }
+
+    return alerts.slice(0, 4);
+  }, [selectedBusinessId, smartTaxes, transactions, todayIso, ytdStartIso]);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -2400,7 +2591,6 @@ export default function DashboardHome() {
         description: string;
         category: string;
         amount: number;
-        user_id: string;
         business_id: string;
         customer_id: string | null;
         _raw_customer: string;
@@ -2829,6 +3019,99 @@ export default function DashboardHome() {
           {/* Weekly Overview */}
           <div className="mt-6 rg-enter rg-d2">
             <WeeklyOverviewChart transactions={transactions as any} showNetLine />
+          </div>
+
+          {/* Smart Taxes (plain-English) */}
+          <div className="mt-6 rg-enter rg-d2 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                  <ReceiptText className="h-4 w-4 text-emerald-300" />
+                  Smart Taxes
+                </div>
+                <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
+                  Today’s tax snapshot
+                </div>
+                <div className="mt-1 text-sm text-slate-300 leading-relaxed">
+                  Plain-English estimates based on your tagged transactions.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => router.push('/transactions?needsReview=1')}
+                disabled={!selectedBusinessId}
+                className="self-start inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <AlertTriangle className="h-4 w-4 text-amber-300" />
+                Needs review
+              </button>
+            </div>
+
+            {!selectedBusinessId ? (
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+                Sign in to see Smart Taxes.
+              </div>
+            ) : smartTaxesLoading ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-[88px] rounded-2xl border border-white/10 bg-white/5 animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : smartTaxesError ? (
+              <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                {smartTaxesError}
+              </div>
+            ) : (
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <SmartTaxStat
+                    icon={<PiggyBank className="h-4 w-4 text-emerald-200" />}
+                    label="Set aside (today)"
+                    value={formatCurrency(todaySetAside)}
+                    hint="So taxes don’t surprise you."
+                  />
+                  <SmartTaxStat
+                    icon={<ReceiptText className="h-4 w-4 text-sky-200" />}
+                    label="Estimated taxes owed (YTD)"
+                    value={formatCurrency(Number(smartTaxes?.simpleCards?.estimatedTaxesOwed?.value ?? 0) || 0)}
+                    hint="Based on profit so far this year."
+                  />
+                  <SmartTaxStat
+                    icon={<CalendarClock className="h-4 w-4 text-violet-200" />}
+                    label="Next due date + suggested payment"
+                    value={`${formatCurrency(Number(smartTaxes?.nextPayment?.amount ?? 0) || 0)} • ${String(
+                      smartTaxes?.nextPayment?.dueDate ?? ''
+                    )}`}
+                    hint="A simple plan for the next quarter."
+                  />
+                  <SmartTaxStat
+                    icon={<ReceiptText className="h-4 w-4 text-amber-200" />}
+                    label="Sales tax owed"
+                    value={formatCurrency(Number(smartTaxes?.breakdown?.taxes?.salesTaxLiability ?? 0) || 0)}
+                    hint="What you’ve collected minus what you’ve paid."
+                  />
+                </div>
+
+                {smartTaxAlerts.length > 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                      Heads up
+                    </div>
+                    <ul className="mt-2 space-y-2 text-sm text-slate-200">
+                      {smartTaxAlerts.map((a) => (
+                        <li key={a} className="flex items-start gap-2">
+                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-300/90" />
+                          <span className="leading-relaxed">{a}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* AI Insights (Today) */}
