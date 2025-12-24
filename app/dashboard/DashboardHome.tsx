@@ -1218,15 +1218,15 @@ export default function DashboardHome() {
         const { start, end } = monthBoundsIso(calendarMonth);
         const res = await supabase
           .from('daily_review_calendar')
-          .select('day,transactions,categories,biggest_move')
+          .select('date,transactions,categories,biggest_move')
           .eq('business_id', selectedBusinessId)
-          .gte('day', start)
-          .lte('day', end);
+          .gte('date', start)
+          .lte('date', end);
         if (res.error) throw res.error;
 
         const map: Record<string, { transactions: boolean; categories: boolean; biggest_move: boolean }> = {};
         for (const row of (res.data as any[]) ?? []) {
-          const day = String((row as any).day ?? '').slice(0, 10);
+          const day = String((row as any).date ?? '').slice(0, 10);
           if (!day) continue;
           map[day] = {
             transactions: Boolean((row as any).transactions),
@@ -1262,21 +1262,23 @@ export default function DashboardHome() {
         biggest_done: progress.biggest_move,
         completed: Boolean(progress.transactions && progress.categories && progress.biggest_move),
       };
-      // eslint-disable-next-line no-console
-      console.log('DAILY_REVIEW_CALENDAR_UPSERT_PAYLOAD', payload);
-
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('daily_review_calendar')
         .upsert(
           {
             business_id: selectedBusinessId,
-            day,
+            date: day,
             transactions: progress.transactions,
             categories: progress.categories,
             biggest_move: progress.biggest_move,
           } as any,
-          { onConflict: 'business_id,day' }
-        );
+          { onConflict: 'business_id,date' }
+        )
+        .select('date,transactions,categories,biggest_move')
+        .maybeSingle();
+
+      // eslint-disable-next-line no-console
+      console.log('DAILY_REVIEW_CALENDAR_UPSERT_RESULT', { error, data, payload });
       if (error) throw error;
     } catch (e) {
       const err: any = e;

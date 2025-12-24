@@ -5,12 +5,34 @@
 create table if not exists public.daily_review_calendar (
   business_id uuid not null,
   day date not null,
+  -- New canonical column name used by the app for upserts / conflict targets.
+  -- Kept alongside `day` for backwards compatibility.
+  date date,
   transactions boolean not null default false,
   categories boolean not null default false,
   biggest_move boolean not null default false,
   updated_at timestamptz not null default now(),
   primary key (business_id, day)
 );
+
+-- Backfill / keep `date` aligned for existing rows
+alter table public.daily_review_calendar
+  alter column date set default null;
+
+update public.daily_review_calendar
+  set date = day
+  where date is null;
+
+-- Ensure (business_id, date) can be used as an upsert conflict target.
+do $$
+begin
+  begin
+    alter table public.daily_review_calendar
+      add constraint daily_review_calendar_business_id_date_key unique (business_id, date);
+  exception when duplicate_object then
+    null;
+  end;
+end $$;
 
 do $$
 begin
