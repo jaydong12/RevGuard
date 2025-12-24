@@ -103,11 +103,9 @@ function InfoTip({
 function ProgressBar({ score, state }: { score: number; state: HealthState }) {
   const pct = Math.max(0, Math.min(100, Math.round(score)));
   return (
-    <div className="h-2.5 rounded-full bg-white/[0.08] overflow-hidden">
+    <div className="h-6 sm:h-7 rounded-full bg-white/[0.08] overflow-hidden border border-white/10">
       <div
-        className={`h-full rounded-full bg-gradient-to-r ${barFillClasses(
-          state
-        )} shadow-[0_0_16px_rgba(56,189,248,0.12)]`}
+        className={`h-full rounded-full bg-gradient-to-r ${barFillClasses(state)} shadow-[0_0_26px_rgba(56,189,248,0.18)]`}
         style={{ width: `${pct}%` }}
       />
     </div>
@@ -129,8 +127,8 @@ function metricIcon(key: HealthPillar['key']) {
 
 function HealthMetric({ pillar }: { pillar: HealthPillar }) {
   return (
-    <div className="grid grid-cols-[1fr,64px] gap-3 items-center">
-      <div className="space-y-2">
+    <div className="grid grid-cols-[1fr,64px] gap-4 items-start">
+      <div className="space-y-3">
         <div className="flex items-center gap-2 min-w-0">
           <span className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5">
             {metricIcon(pillar.key)}
@@ -148,7 +146,7 @@ function HealthMetric({ pillar }: { pillar: HealthPillar }) {
           </div>
         </div>
         <ProgressBar score={pillar.score} state={pillar.state} />
-        {pillar.key === 'cashFlow' && pillar.whatThisMeans && (
+        {pillar.whatThisMeans && (
           <div className="text-[11px] text-slate-400 leading-relaxed">
             {pillar.whatThisMeans}
           </div>
@@ -165,7 +163,7 @@ export default function BusinessHealthSystemCard({ health }: { health: HealthSys
   const { overallScore, overallState, overallHelp, todayVsTrend, pillars } = health;
 
   return (
-    <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
+    <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           {/* Row 1: Title */}
@@ -220,10 +218,14 @@ export default function BusinessHealthSystemCard({ health }: { health: HealthSys
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4">
-        <HealthMetric pillar={pillars.cashFlow} />
-        <HealthMetric pillar={pillars.profit} />
-        <HealthMetric pillar={pillars.expenseControl} />
+      <div className="mt-3">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+          <div className="grid gap-7">
+            <HealthMetric pillar={pillars.cashFlow} />
+            <HealthMetric pillar={pillars.profit} />
+            <HealthMetric pillar={pillars.expenseControl} />
+          </div>
+        </div>
       </div>
     </div>
   );

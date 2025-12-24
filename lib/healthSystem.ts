@@ -239,6 +239,14 @@ export function computeHealthSystem(params: {
       label: 'Profit Health',
       score: profitScore,
       state: stateFromScore(profitScore),
+      whatThisMeans:
+        margin30 === null
+          ? 'What this means: Add more income data to get a reliable profit read.'
+          : margin30 < 0
+            ? 'What this means: You’re losing money lately—either costs are too high or income is too low.'
+            : margin30 < 0.12
+              ? 'What this means: Profit is thin—small expense spikes can wipe out gains.'
+              : 'What this means: Profit looks healthy—keep expenses from creeping up as you grow.',
       help: {
         what: 'Tells you if you’re keeping profit after expenses lately.',
         calc: [
@@ -258,6 +266,12 @@ export function computeHealthSystem(params: {
       label: 'Expense Control',
       score: expenseControlScore,
       state: stateFromScore(expenseControlScore),
+      whatThisMeans:
+        expVol > 0.55
+          ? 'What this means: Spending is jumpy—big week-to-week swings make it harder to plan.'
+          : expVol > 0.35
+            ? 'What this means: Spending is a bit uneven—watch for categories drifting up.'
+            : 'What this means: Spending looks steady—fewer surprises week to week.',
       help: {
         what: 'Tells you if spending is staying under control lately.',
         calc: [
