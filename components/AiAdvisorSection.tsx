@@ -187,6 +187,11 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
     setUiError(null);
     setLastUiError(null);
 
+    const requestUrl =
+      typeof window !== 'undefined'
+        ? new URL('/api/ai-advisor', window.location.origin).toString()
+        : '/api/ai-advisor';
+
     try {
       requestIdRef.current += 1;
       const requestId = requestIdRef.current;
@@ -200,7 +205,13 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
         throw new Error('AUTH_REQUIRED');
       }
 
-      const res = await fetch('/api/ai-advisor', {
+      console.log('AI_ADVISOR_FETCH', {
+        url: requestUrl,
+        businessId: effectiveBusinessId,
+        requestId,
+      });
+
+      const res = await fetch(requestUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -225,8 +236,28 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
         signal: controller.signal,
       });
 
-      if (!res.ok || !res.body) {
-        throw new Error('AI Advisor failed to respond.');
+      if (!res.ok) {
+        let bodyText = '';
+        try {
+          bodyText = (await res.text()).slice(0, 2500);
+        } catch {
+          bodyText = '';
+        }
+        console.error('AI_ADVISOR_HTTP_ERROR', {
+          url: requestUrl,
+          status: res.status,
+          bodyText,
+        });
+        throw new Error(
+          `AI Advisor request failed (HTTP ${res.status})${
+            bodyText ? `: ${bodyText}` : ''
+          }`
+        );
+      }
+
+      if (!res.body) {
+        console.error('AI_ADVISOR_NO_BODY', { url: requestUrl });
+        throw new Error('AI Advisor response body was empty.');
       }
 
       // SSE stream: meta + delta + done
@@ -299,19 +330,36 @@ const AiAdvisorSection: React.FC<AiAdvisorSectionProps> = ({ businessId }) => {
           }
         }
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return;
+      }
+
+      console.error('AI_ADVISOR_CLIENT_ERROR', {
+        url: requestUrl,
+        error: err,
+      });
+
+      const message =
+        err?.message === 'AUTH_REQUIRED'
+          ? 'Please sign in again to use the AI Advisor.'
+          : typeof err?.message === 'string' && err.message.includes('Failed to fetch')
+            ? `Failed to fetch AI Advisor (${requestUrl}). Check the server is running and there’s no HTTP/HTTPS or CORS issue.`
+            : typeof err?.message === 'string'
+              ? err.message
+              : 'Network error talking to AI Advisor.';
+
       setMessages((prev) => {
         if (!prev.length) return prev;
         const next = [...prev];
         next[next.length - 1] = {
           role: 'assistant',
-          content:
-            'Something went wrong connecting to the AI Advisor. Please try again later.',
+          content: message,
         };
         return next;
       });
-      setLastUiError('Network error talking to AI Advisor.');
-      setUiError('Network error talking to AI Advisor.');
+      setLastUiError(message);
+      setUiError(message);
     } finally {
       setSending(false);
     }
