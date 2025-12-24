@@ -32,13 +32,28 @@ begin
       add constraint transactions_tax_category_check
       check (
         tax_category in (
+          -- legacy (v0)
           'taxable',
           'non_taxable',
           'deductible',
           'non_deductible',
           'partial_deductible',
           'capitalized',
-          'review'
+          'review',
+          -- strict buckets (v1)
+          'gross_receipts',
+          'deductible_expense',
+          'non_deductible_expense',
+          'sales_tax_collected',
+          'sales_tax_paid',
+          'payroll_wages',
+          'payroll_taxes',
+          'loan_principal',
+          'loan_interest',
+          'capex',
+          'owner_draw',
+          'transfer',
+          'uncategorized'
         )
       );
   end if;
@@ -86,5 +101,8 @@ create index if not exists transactions_business_tax_status_date_idx
 
 create index if not exists transactions_business_tax_year_date_idx
   on public.transactions (business_id, tax_year, date);
+
+-- Ensure PostgREST schema cache refresh after applying this migration.
+notify pgrst, 'reload schema';
 
 

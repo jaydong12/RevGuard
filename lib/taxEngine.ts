@@ -1,3 +1,5 @@
+import { sumBuckets } from './taxBuckets';
+
 export type TaxCategory =
   | 'taxable'
   | 'non_taxable'
@@ -257,11 +259,6 @@ function shouldApplySelfEmployment(b: BusinessTaxFlags): boolean {
   return et.includes('sole') || et.includes('llc_single') || et.includes('single');
 }
 
-function textHasSalesTaxSignal(s: string) {
-  const t = s.toLowerCase();
-  return t.includes('sales tax') || t.includes('salestax');
-}
-
 function computeAccuracy(transactions: TransactionRow[]) {
   const txs = transactions;
   if (!txs.length) {
@@ -275,6 +272,7 @@ function computeAccuracy(transactions: TransactionRow[]) {
   let hasNonEmptyCategory = 0;
   let confCount = 0;
   let confSum = 0;
+  let uncategorizedCount = 0;
 
   for (const tx of txs) {
     const tc = String((tx as any)?.tax_category ?? '').trim();
@@ -282,6 +280,7 @@ function computeAccuracy(transactions: TransactionRow[]) {
 
     const cat = String((tx as any)?.category ?? '').trim();
     if (cat && cat.toLowerCase() !== 'uncategorized') hasNonEmptyCategory += 1;
+    if (!cat || cat.toLowerCase() === 'uncategorized') uncategorizedCount += 1;
 
     const c = num((tx as any)?.confidence_score);
     if (c > 0) {
@@ -294,13 +293,14 @@ function computeAccuracy(transactions: TransactionRow[]) {
   const categoryCoverage = hasNonEmptyCategory / txs.length; // 0..1
   const avgConfidence = confCount ? confSum / confCount : 0.5;
 
-  const score =
-    40 * taxCatCoverage + 20 * categoryCoverage + 40 * clamp01(avgConfidence);
+  const uncategorizedPenalty = Math.min(25, (uncategorizedCount / txs.length) * 40);
+  const score = 40 * taxCatCoverage + 20 * categoryCoverage + 40 * clamp01(avgConfidence) - uncategorizedPenalty;
 
   const tips: string[] = [];
   if (taxCatCoverage < 0.9) tips.push('Mark more transactions with the correct tax category to improve accuracy.');
   if (categoryCoverage < 0.9) tips.push('Categorize more transactions (avoid “Uncategorized”) to improve tax estimates.');
   if (avgConfidence < 0.75) tips.push('Review low-confidence transaction classifications to improve estimate quality.');
+  if (uncategorizedCount > 0) tips.push('Classify uncategorized transactions to improve accuracy and reduce surprises.');
 
   return { score: clamp100(score), tips };
 }
@@ -318,14 +318,7 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
   const sellsTaxable = Boolean(business.sells_taxable_goods_services);
   const seEnabled = shouldApplySelfEmployment(business);
 
-  let grossIncome = 0;
-  let nonTaxableIncome = 0;
-  let deductibleExpenses = 0;
-  let nonDeductibleExpenses = 0;
-
-  let salesTaxCollected = 0;
-  let salesTaxPaid = 0;
-
+  // Range-filtered transactions
   const txsInRange: TransactionRow[] = [];
   for (const tx of transactions) {
     const iso = (tx as any)?.date;
@@ -334,44 +327,43 @@ export function computeTaxReport(input: TaxReportInput): TaxReport {
     txsInRange.push(tx);
   }
 
-  for (const tx of txsInRange) {
-    const amt = num((tx as any)?.amount);
-    const taxCat = String((tx as any)?.tax_category ?? '').trim().toLowerCase();
-    const cat = String((tx as any)?.category ?? '');
-    const desc = String((tx as any)?.description ?? '');
+  // Strict tax bucket mapping drives income/profit totals.
+  const bucketed = sumBuckets(
+    txsInRange.map((t) => ({
+      amount: num((t as any)?.amount),
+      date: (t as any)?.date ?? null,
+      category: (t as any)?.category ?? null,
+      description: (t as any)?.description ?? null,
+      tax_category: String((t as any)?.tax_category ?? '') || null,
+      confidence_score: Number((t as any)?.confidence_score) || null,
+    }))
+  );
 
-    const looksLikeSalesTax = textHasSalesTaxSignal(cat) || textHasSalesTaxSignal(desc);
-    if (looksLikeSalesTax) {
-      if (amt > 0) salesTaxCollected += amt;
-      if (amt < 0) salesTaxPaid += Math.abs(amt);
-      continue;
-    }
+  const b = bucketed.totals;
+  const uncIncome = Math.max(0, b.uncategorized || 0);
+  const uncExpense = Math.abs(Math.min(0, b.uncategorized || 0));
 
-    if (amt > 0) {
-      if (taxCat === 'non_taxable') nonTaxableIncome += amt;
-      else grossIncome += amt;
-      continue;
-    }
-    if (amt < 0) {
-      const abs = Math.abs(amt);
-      if (taxCat === 'non_deductible') {
-        nonDeductibleExpenses += abs;
-      } else if (taxCat === 'partial_deductible') {
-        deductibleExpenses += abs * 0.5;
-        nonDeductibleExpenses += abs * 0.5;
-      } else if (taxCat === 'capitalized') {
-        // v1: treat as non-deductible for current period (improvement tip will mention it)
-        nonDeductibleExpenses += abs;
-      } else if (taxCat === 'review') {
-        // conservative default: count as deductible but lower accuracy, and recommend review
-        deductibleExpenses += abs;
-      } else {
-        // deductible or unknown
-        deductibleExpenses += abs;
-      }
-    }
-  }
+  // Income/profit exclusions requested:
+  // - Exclude sales tax collected/paid
+  // - Exclude transfers
+  // - Exclude loan principal
+  const grossIncome = (b.gross_receipts || 0) + uncIncome;
+  const nonTaxableIncome = Math.abs(b.transfer || 0);
 
+  const deductibleExpenses =
+    Math.abs(b.deductible_expense || 0) +
+    Math.abs(b.payroll_wages || 0) +
+    Math.abs(b.payroll_taxes || 0) +
+    Math.abs(b.loan_interest || 0) +
+    uncExpense;
+
+  const nonDeductibleExpenses =
+    Math.abs(b.non_deductible_expense || 0) + Math.abs(b.owner_draw || 0);
+
+  const salesTaxCollected = Math.max(0, b.sales_tax_collected || 0);
+  const salesTaxPaid = Math.abs(b.sales_tax_paid || 0);
+
+  // Capex and loan principal are excluded from profit/tax base by default.
   const taxableProfit = Math.max(0, grossIncome - deductibleExpenses);
 
   const standardDeduction = getStandardDeduction(filingStatus);

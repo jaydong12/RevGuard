@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../lib/requireActiveSubscription';
 import { computeTaxReport, type PayrollRunRow, type TransactionRow } from '../../../lib/taxEngine';
+import { sumBuckets } from '../../../lib/taxBuckets';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -247,10 +248,33 @@ async function handle(req: Request, body: any) {
   }
 
   // Provide a simple net profit computed from transactions (keeps UI consistent even if tax engine excludes some items).
-  let netProfit = 0;
-  for (const tx of transactions as any[]) {
-    netProfit += Number((tx as any)?.amount) || 0;
-  }
+  const bucketed = sumBuckets(
+    (transactions as any[]).map((t) => ({
+      amount: Number((t as any)?.amount) || 0,
+      date: (t as any)?.date ?? null,
+      category: (t as any)?.category ?? null,
+      description: (t as any)?.description ?? null,
+      tax_category: String((t as any)?.tax_category ?? '') || null,
+      confidence_score: Number((t as any)?.confidence_score) || null,
+    }))
+  );
+  const b = bucketed.totals;
+
+  // Profit from transactions with exclusions:
+  // - exclude sales tax (collected/paid)
+  // - exclude transfers
+  // - exclude loan principal
+  // - exclude owner draws and capex (not operating profit)
+  const incomeIncluded =
+    Math.max(0, b.gross_receipts || 0) + Math.max(0, b.uncategorized || 0);
+  const expensesIncluded =
+    Math.abs(Math.min(0, b.deductible_expense || 0)) +
+    Math.abs(Math.min(0, b.non_deductible_expense || 0)) +
+    Math.abs(Math.min(0, b.loan_interest || 0)) +
+    Math.abs(Math.min(0, b.payroll_wages || 0)) +
+    Math.abs(Math.min(0, b.payroll_taxes || 0)) +
+    Math.abs(Math.min(0, b.uncategorized || 0));
+  const netProfit = incomeIncluded - expensesIncluded;
 
   // Load payroll runs if table exists; otherwise treat as empty.
   let payrollRuns: PayrollRunRow[] = [];
@@ -311,6 +335,15 @@ async function handle(req: Request, body: any) {
   });
 
   const accuracy = computeAccuracyForUi(transactions as any[]);
+  if (bucketed.uncategorizedCount > 0) {
+    const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
+    const fix = 'Fix uncategorized transactions (so totals match reality)';
+    if (!checklist.includes(fix)) checklist.unshift(fix);
+    (accuracy as any).checklist = checklist.slice(0, 4);
+    // Penalize score for uncategorized rows
+    const penalty = Math.min(25, (bucketed.uncategorizedCount / Math.max(1, bucketed.totalCount)) * 40);
+    (accuracy as any).score = clamp100(Number((accuracy as any).score ?? 0) - penalty);
+  }
   if (payrollMissing) {
     const checklist = Array.isArray((accuracy as any)?.checklist) ? (accuracy as any).checklist : [];
     const fix = 'Create/connect payroll (so payroll taxes can be included)';
@@ -319,9 +352,29 @@ async function handle(req: Request, body: any) {
   }
   const nextPayment = pickNextPayment(report as any);
 
-  const taxableProfit = Number((report as any)?.totals?.taxable_profit) || 0;
+  // Breakdown totals must come only from summed transactions (bucket sums).
+  const deductibleForTaxableProfit =
+    Math.abs(Math.min(0, b.deductible_expense || 0)) +
+    Math.abs(Math.min(0, b.payroll_wages || 0)) +
+    Math.abs(Math.min(0, b.payroll_taxes || 0)) +
+    Math.abs(Math.min(0, b.loan_interest || 0)) +
+    Math.abs(Math.min(0, b.uncategorized || 0));
+
+  const taxableProfit =
+    incomeIncluded -
+    deductibleForTaxableProfit;
   const taxesOwed = Number((report as any)?.estimates?.total_estimated_tax) || 0;
   const setAsidePct = taxableProfit > 0 ? clamp01(taxesOwed / taxableProfit) : null;
+
+  const reconciliationNotes: string[] = [];
+  const r1 = Math.abs(netProfit - (incomeIncluded - expensesIncluded));
+  if (r1 > 0.01) {
+    reconciliationNotes.push(`Profit mismatch: ${r1.toFixed(2)}`);
+  }
+  const r2 = Math.abs(taxableProfit - (incomeIncluded - deductibleForTaxableProfit));
+  if (r2 > 0.01) {
+    reconciliationNotes.push(`Taxable profit mismatch: ${r2.toFixed(2)}`);
+  }
 
   return NextResponse.json({
     simpleCards: {
@@ -333,13 +386,13 @@ async function handle(req: Request, body: any) {
     breakdown: {
       meta: { transactionCount: (transactions as any[])?.length ?? 0 },
       income: {
-        grossIncome: Number((report as any)?.totals?.gross_income) || 0,
-        nonTaxableIncome: Number((report as any)?.totals?.non_taxable_income) || 0,
-        taxableIncome: Number((report as any)?.totals?.gross_income) || 0,
+        grossIncome: Math.max(0, b.gross_receipts || 0) + Math.max(0, b.uncategorized || 0),
+        nonTaxableIncome: Math.abs(b.transfer || 0) + Math.abs(b.loan_principal || 0),
+        taxableIncome: incomeIncluded,
       },
       writeOffs: {
-        deductibleExpenses: Number((report as any)?.totals?.deductible_expenses) || 0,
-        nonDeductibleExpenses: Number((report as any)?.totals?.non_deductible_expenses) || 0,
+        deductibleExpenses: deductibleForTaxableProfit,
+        nonDeductibleExpenses: Math.abs(Math.min(0, b.non_deductible_expense || 0)),
         standardDeduction: Number((report as any)?.meta?.standard_deduction) || 0,
         seHalfDeduction: Number((report as any)?.meta?.se_half_deduction) || 0,
       },
@@ -352,12 +405,27 @@ async function handle(req: Request, body: any) {
         state: Number((report as any)?.estimates?.state_income_tax) || 0,
         selfEmployment: Number((report as any)?.estimates?.self_employment_tax) || 0,
         payrollEmployer: Number((report as any)?.estimates?.employer_payroll_taxes) || 0,
-        salesTaxLiability: Number((report as any)?.totals?.sales_tax_liability) || 0,
+        salesTaxLiability:
+          Math.max(0, b.sales_tax_collected || 0) - Math.abs(Math.min(0, b.sales_tax_paid || 0)),
         total: taxesOwed,
+      },
+      excluded: {
+        salesTaxCollected: Math.max(0, b.sales_tax_collected || 0),
+        salesTaxPaid: Math.abs(Math.min(0, b.sales_tax_paid || 0)),
+        transfers: Math.abs(b.transfer || 0),
+        loanPrincipal: Math.abs(b.loan_principal || 0),
+        capex: Math.abs(Math.min(0, b.capex || 0)),
+        ownerDraw: Math.abs(Math.min(0, b.owner_draw || 0)),
       },
     },
     accuracy,
     nextPayment,
+    reconciliation: {
+      ok: reconciliationNotes.length === 0,
+      notes: reconciliationNotes.length
+        ? reconciliationNotes
+        : ['Breakdown totals are computed from bucketed transaction sums for this business/date range.'],
+    },
   });
 }
 
