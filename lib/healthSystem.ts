@@ -39,10 +39,6 @@ export type HealthSystemResult = {
   };
   pillars: Record<HealthPillarKey, HealthPillar>;
   todayVsTrend: TodayVsTrend;
-  fixFirst: Array<{
-    text: string;
-    href?: string; // optional deep-link to /transactions with filters
-  }>;
 };
 
 type Tx = { date?: string | null; amount?: any; category?: any };
@@ -108,69 +104,6 @@ function sumByRange(txs: Tx[], start: Date, endInclusive: Date) {
     else expenses += Math.abs(amt);
   }
   return { income, expenses, net };
-}
-
-function pickExpenseSpike(txs: Tx[], now: Date) {
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start7 = new Date(end);
-  start7.setDate(end.getDate() - 6);
-  const prevEnd = new Date(start7);
-  prevEnd.setDate(start7.getDate() - 1);
-  const prevStart = new Date(prevEnd);
-  prevStart.setDate(prevEnd.getDate() - 6);
-
-  const sumByCat = (start: Date, endInc: Date) => {
-    const m = new Map<string, number>();
-    for (const tx of txs) {
-      const d = parseTxDateLocal(tx.date ?? null);
-      if (!d) continue;
-      if (d < start || d > endInc) continue;
-      const amt = Number((tx as any)?.amount) || 0;
-      if (amt >= 0) continue;
-      const cat = String((tx as any)?.category ?? 'Uncategorized') || 'Uncategorized';
-      m.set(cat, (m.get(cat) ?? 0) + Math.abs(amt));
-    }
-    return m;
-  };
-
-  const cur = sumByCat(start7, end);
-  const prev = sumByCat(prevStart, prevEnd);
-
-  let best: { cat: string; cur: number; prev: number; pct: number | null } | null = null;
-  for (const [cat, curAmt] of cur.entries()) {
-    const prevAmt = prev.get(cat) ?? 0;
-    const pct = pctChange(curAmt, prevAmt);
-    if (pct === null) continue;
-    // Favor meaningful spikes (both relative + absolute).
-    const score = pct * 100 + Math.min(50, curAmt / 200); // small absolute nudge
-    if (!best || score > (best.pct ?? 0) * 100 + Math.min(50, best.cur / 200)) {
-      best = { cat, cur: curAmt, prev: prevAmt, pct };
-    }
-  }
-
-  if (!best) return null;
-  if (best.cur < 150) return null; // too small to call out
-  if ((best.pct ?? 0) < 0.25) return null; // < 25% increase
-  return best;
-}
-
-function pickMarginDrop(txs: Tx[], now: Date) {
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start7 = new Date(end);
-  start7.setDate(end.getDate() - 6);
-  const prevEnd = new Date(start7);
-  prevEnd.setDate(start7.getDate() - 1);
-  const prevStart = new Date(prevEnd);
-  prevStart.setDate(prevEnd.getDate() - 6);
-
-  const cur = sumByRange(txs, start7, end);
-  const prev = sumByRange(txs, prevStart, prevEnd);
-  const curMargin = cur.income > 0 ? (cur.net / cur.income) * 100 : null;
-  const prevMargin = prev.income > 0 ? (prev.net / prev.income) * 100 : null;
-  if (curMargin === null || prevMargin === null) return null;
-  const dropPts = prevMargin - curMargin;
-  if (dropPts < 7) return null;
-  return { curMargin, prevMargin, dropPts };
 }
 
 export function computeHealthSystem(params: {
@@ -348,109 +281,6 @@ export function computeHealthSystem(params: {
     good: '80+ means the business is financially stable with healthy margins and predictability.',
   };
 
-  // Fix-this-first list (top 3) — generated from TODAY and recent comparisons.
-  const fixFirst: Array<{ text: string; href?: string }> = [];
-
-  const toIso = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const qs = (params: Record<string, string>) =>
-    Object.entries(params)
-      .filter(([, v]) => v !== '')
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join('&');
-  const txHref = (p: Record<string, string>) => `/transactions?${qs(p)}`;
-  const byWorst = (Object.values(pillars) as HealthPillar[]).sort((a, b) => a.score - b.score);
-  const worst = byWorst[0];
-
-  const worstCopy: Record<HealthPillarKey, string> = {
-    cashFlow:
-      cashBalance <= 0 && cur30.net < 0
-        ? 'Cash is trending down — reduce burn or collect cash faster this week.'
-        : cur30.net < 0
-          ? 'Cash flow is negative lately — tighten spend and accelerate collections.'
-          : 'Cash flow looks OK — keep it steady with weekly reviews.',
-    profit:
-      margin30 !== null && margin30 < 0
-        ? 'Profit is negative — focus on margin (pricing, COGS, or cutting low-ROI spend).'
-        : 'Profit margin is thin — improve margin before scaling volume.',
-    expenseControl: 'Expenses are drifting — identify and cap the categories growing fastest.',
-  };
-
-  if (worst) {
-    // Provide a broad link to expenses if the pillar relates to spend.
-    const baseLink =
-      worst.key === 'profit' || worst.key === 'cashFlow'
-        ? txHref({ from: toIso(start7), to: toIso(end), flow: 'all' })
-        : worst.key === 'expenseControl'
-          ? txHref({ from: toIso(start7), to: toIso(end), flow: 'expenses' })
-          : txHref({ from: toIso(start30), to: toIso(end), flow: 'all' });
-    fixFirst.push({ text: worstCopy[worst.key], href: baseLink });
-  }
-
-  const spike = pickExpenseSpike(txs, now);
-  if (spike) {
-    fixFirst.push({
-      text: `${spike.cat} spending spiked ${(spike.pct! * 100).toFixed(0)}% vs last week.`,
-      href: txHref({
-        from: toIso(start7),
-        to: toIso(end),
-        flow: 'expenses',
-        category: spike.cat,
-      }),
-    });
-  }
-
-  const marginDrop = pickMarginDrop(txs, now);
-  if (marginDrop) {
-    fixFirst.push({
-      text: `Margin dropped ${marginDrop.dropPts.toFixed(0)} pts vs last week (${marginDrop.curMargin.toFixed(
-        0
-      )}% now).`,
-      href: txHref({ from: toIso(start7), to: toIso(end), flow: 'all' }),
-    });
-  }
-
-  // Largest expense today (deterministic “today” item).
-  const todayStart = new Date(end);
-  const todayEnd = new Date(end);
-  const todayTxs: Array<{ amount: number; category: string; date: string }> = [];
-  for (const tx of txs) {
-    const d = parseTxDateLocal((tx as any)?.date ?? null);
-    if (!d) continue;
-    if (d < todayStart || d > todayEnd) continue;
-    const amt = Number((tx as any)?.amount) || 0;
-    const cat = String((tx as any)?.category ?? 'Uncategorized') || 'Uncategorized';
-    todayTxs.push({ amount: amt, category: cat, date: toIso(d) });
-  }
-  const biggestExpenseToday = todayTxs
-    .filter((t) => t.amount < 0)
-    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
-  if (biggestExpenseToday) {
-    fixFirst.push({
-      text: `Largest expense today: ${biggestExpenseToday.category}. Verify it’s correct and expected.`,
-      href: txHref({
-        from: toIso(end),
-        to: toIso(end),
-        flow: 'expenses',
-        category: biggestExpenseToday.category,
-      }),
-    });
-  }
-
-  if (fixFirst.length < 3 && txs.length < 10) {
-    fixFirst.push({
-      text: 'Add more transactions (at least a week) to make health scores more reliable.',
-      href: txHref({ from: toIso(start7), to: toIso(end), flow: 'all' }),
-    });
-  }
-
-  while (fixFirst.length < 3) {
-    fixFirst.push({
-      text: 'Review your largest transactions today and confirm categories are correct.',
-      href: txHref({ from: toIso(end), to: toIso(end), flow: 'all' }),
-    });
-  }
-
   return {
     overallScore,
     overallState: stateFromScore(overallScore),
@@ -463,7 +293,6 @@ export function computeHealthSystem(params: {
       net7d: cur7.net,
       net30d: cur30.net,
     },
-    fixFirst: fixFirst.slice(0, 3),
   };
 }
 

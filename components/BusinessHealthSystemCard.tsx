@@ -1,7 +1,6 @@
 'use client';
 
 import React from 'react';
-import Link from 'next/link';
 import { formatCurrency } from '../lib/formatCurrency';
 import type {
   HealthPillar,
@@ -13,7 +12,6 @@ import {
   TrendingUp,
   Wallet,
   Info,
-  ChevronRight,
 } from 'lucide-react';
 
 function pillClasses(state: HealthState) {
@@ -164,7 +162,7 @@ function HealthMetric({ pillar }: { pillar: HealthPillar }) {
 }
 
 export default function BusinessHealthSystemCard({ health }: { health: HealthSystemResult }) {
-  const { overallScore, overallState, overallHelp, todayVsTrend, pillars, fixFirst } = health;
+  const { overallScore, overallState, overallHelp, todayVsTrend, pillars } = health;
 
   return (
     <div className="rg-enter rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)] flex flex-col justify-between">
@@ -226,32 +224,6 @@ export default function BusinessHealthSystemCard({ health }: { health: HealthSys
         <HealthMetric pillar={pillars.cashFlow} />
         <HealthMetric pillar={pillars.profit} />
         <HealthMetric pillar={pillars.expenseControl} />
-      </div>
-
-      <div className="mt-5">
-        <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">
-          Fix this first
-        </div>
-        <ul className="mt-2 space-y-1.5 text-[11px] text-slate-300">
-          {fixFirst.slice(0, 3).map((item, idx) => (
-            <li key={idx} className="group">
-              {item.href ? (
-                <Link
-                  href={item.href}
-                  className="flex items-start justify-between gap-3 rounded-xl border border-white/5 bg-white/0 px-2.5 py-2 hover:bg-white/5 transition"
-                >
-                  <span className="leading-relaxed">{item.text}</span>
-                  <ChevronRight className="h-4 w-4 text-slate-500 group-hover:text-slate-200 mt-0.5 shrink-0" />
-                </Link>
-              ) : (
-                <div className="flex gap-2">
-                  <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-slate-500/80 shrink-0" />
-                  <span className="leading-relaxed">{item.text}</span>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
       </div>
     </div>
   );
