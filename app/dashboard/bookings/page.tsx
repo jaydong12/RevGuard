@@ -23,6 +23,8 @@ function pad2(n: number) {
   return String(Math.floor(Math.abs(n))).padStart(2, '0');
 }
 
+type AmPm = 'AM' | 'PM';
+
 function formatLocalPretty(iso: string): string {
   const d = new Date(String(iso ?? ''));
   if (Number.isNaN(d.getTime())) return '';
@@ -31,51 +33,48 @@ function formatLocalPretty(iso: string): string {
   return `${date} · ${time}`;
 }
 
-function formatLocalEditable(iso: string): string {
-  const d = new Date(String(iso ?? ''));
-  if (Number.isNaN(d.getTime())) return '';
-  const mm = pad2(d.getMonth() + 1);
-  const dd = pad2(d.getDate());
-  const yyyy = d.getFullYear();
-  const mins = pad2(d.getMinutes());
-  let h = d.getHours();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  h = h % 12;
-  if (h === 0) h = 12;
-  return `${mm}/${dd}/${yyyy} · ${h}:${mins} ${ampm}`;
+function formatMaskedStart(digits: string, ampm: AmPm): string {
+  const ds = String(digits ?? '').replace(/\D/g, '').slice(0, 12);
+  const m1 = ds[0] ?? '_';
+  const m2 = ds[1] ?? '_';
+  const d1 = ds[2] ?? '_';
+  const d2 = ds[3] ?? '_';
+  const y1 = ds[4] ?? '_';
+  const y2 = ds[5] ?? '_';
+  const y3 = ds[6] ?? '_';
+  const y4 = ds[7] ?? '_';
+  const h1 = ds[8] ?? '_';
+  const h2 = ds[9] ?? '_';
+  const n1 = ds[10] ?? '_';
+  const n2 = ds[11] ?? '_';
+  return `${m1}${m2}/${d1}${d2}/${y1}${y2}${y3}${y4} · ${h1}${h2}:${n1}${n2} ${ampm}`;
 }
 
-function parseLocalStartToIso(input: string): string | null {
-  const s = String(input ?? '').trim();
-  if (!s) return null;
-  // Accept: "MM/DD/YYYY · HH:MM AM" (dot optional), also allow "MM/DD/YYYY HH:MM AM".
-  const m = s.match(
-    /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(?:·|\-|\||,)?\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\s*$/i
-  );
-  if (!m) return null;
-  const month = Number(m[1]);
-  const day = Number(m[2]);
-  const year = Number(m[3]);
-  let hour = Number(m[4]);
-  const minute = Number(m[5]);
-  const ampm = String(m[6]).toUpperCase();
+function parseMaskedDigitsToIso(digits: string, ampm: AmPm): string | null {
+  const ds = String(digits ?? '').replace(/\D/g, '').slice(0, 12);
+  if (ds.length !== 12) return null;
+  const month = Number(ds.slice(0, 2));
+  const day = Number(ds.slice(2, 4));
+  const year = Number(ds.slice(4, 8));
+  let hour12 = Number(ds.slice(8, 10));
+  const minute = Number(ds.slice(10, 12));
 
   if (!(month >= 1 && month <= 12)) return null;
   if (!(day >= 1 && day <= 31)) return null;
   if (!(year >= 2000 && year <= 2100)) return null;
-  if (!(hour >= 1 && hour <= 12)) return null;
+  if (!(hour12 >= 1 && hour12 <= 12)) return null;
   if (!(minute >= 0 && minute <= 59)) return null;
 
-  if (ampm === 'PM' && hour !== 12) hour += 12;
-  if (ampm === 'AM' && hour === 12) hour = 0;
+  let hour24 = hour12 % 12;
+  if (ampm === 'PM') hour24 += 12;
 
-  const d = new Date(year, month - 1, day, hour, minute, 0, 0); // local time
+  const d = new Date(year, month - 1, day, hour24, minute, 0, 0); // local time
   // Validate (catches invalid days like 02/31).
   if (
     d.getFullYear() !== year ||
     d.getMonth() !== month - 1 ||
     d.getDate() !== day ||
-    d.getHours() !== hour ||
+    d.getHours() !== hour24 ||
     d.getMinutes() !== minute
   ) {
     return null;
@@ -101,12 +100,13 @@ export default function BookingsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createServiceId, setCreateServiceId] = useState<string>('');
   const [createCustomerId, setCreateCustomerId] = useState<string>('');
-  const [createStartInput, setCreateStartInput] = useState<string>('');
-  const [createStartIso, setCreateStartIso] = useState<string>('');
-  const [createStartFocused, setCreateStartFocused] = useState(false);
+  const [createStartDigits, setCreateStartDigits] = useState<string>('');
+  const [createStartAmPm, setCreateStartAmPm] = useState<AmPm>('AM');
   const [createNotes, setCreateNotes] = useState<string>('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [createSaving, setCreateSaving] = useState(false);
+
+  const createStartIso = useMemo(() => parseMaskedDigitsToIso(createStartDigits, createStartAmPm), [createStartDigits, createStartAmPm]);
 
   function isUuid(v: any): boolean {
     const s = String(v ?? '').trim();
@@ -362,9 +362,8 @@ export default function BookingsPage() {
       setCreateNotes('');
       setCreateCustomerId('');
       setCreateServiceId('');
-      setCreateStartInput('');
-      setCreateStartIso('');
-      setCreateStartFocused(false);
+      setCreateStartDigits('');
+      setCreateStartAmPm('AM');
 
       await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
       await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
@@ -662,32 +661,64 @@ export default function BookingsPage() {
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Start time</div>
-                <input
-                  type="text"
-                  inputMode="text"
-                  autoComplete="off"
-                  placeholder="MM/DD/YYYY · HH:MM AM"
-                  value={createStartInput}
-                  onFocus={() => {
-                    setCreateStartFocused(true);
-                    if (createStartIso) setCreateStartInput(formatLocalEditable(createStartIso));
-                  }}
-                  onBlur={() => {
-                    setCreateStartFocused(false);
-                    if (createStartIso) setCreateStartInput(formatLocalPretty(createStartIso));
-                  }}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setCreateStartInput(next);
-                    const iso = parseLocalStartToIso(next);
-                    setCreateStartIso(iso ?? '');
-                  }}
-                  className={`mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 transition-opacity ${
-                    createStartFocused ? 'opacity-100' : createStartIso ? 'opacity-100' : 'opacity-70'
-                  } focus:opacity-100`}
-                />
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="MM/DD/YYYY · HH:MM AM"
+                    value={createStartDigits ? formatMaskedStart(createStartDigits, createStartAmPm) : ''}
+                    onKeyDown={(e) => {
+                      const k = e.key;
+                      if (k === 'Backspace') {
+                        e.preventDefault();
+                        setCreateStartDigits((prev) => String(prev ?? '').slice(0, -1));
+                        return;
+                      }
+                      if (k === 'Tab' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') return;
+                      // Allow digits only; block free typing of punctuation/letters.
+                      if (/^\d$/.test(k)) return;
+                      e.preventDefault();
+                    }}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const txt = e.clipboardData.getData('text') ?? '';
+                      const digits = String(txt).replace(/\D/g, '').slice(0, 12);
+                      if (!digits) return;
+                      setCreateStartDigits(digits);
+                    }}
+                    onChange={(e) => {
+                      // Fallback: if browser inserts something, keep only digits.
+                      const digits = String(e.target.value ?? '').replace(/\D/g, '').slice(0, 12);
+                      setCreateStartDigits(digits);
+                    }}
+                    className={`h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 transition-opacity ${
+                      createStartDigits ? 'opacity-100' : 'opacity-70'
+                    } focus:opacity-100`}
+                  />
+                  <div className="flex shrink-0 rounded-xl border border-white/10 bg-white/5 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setCreateStartAmPm('AM')}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                        createStartAmPm === 'AM' ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+                      }`}
+                    >
+                      AM
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateStartAmPm('PM')}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                        createStartAmPm === 'PM' ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+                      }`}
+                    >
+                      PM
+                    </button>
+                  </div>
+                </div>
                 <div className="mt-1 text-[11px] text-slate-400">
-                  {createStartIso ? `Saved as timestamptz · ${createStartIso}` : 'Saved as timezone-safe timestamptz.'}
+                  {createStartIso ? `Saved as timestamptz · ${formatLocalPretty(createStartIso)}` : 'Enter a valid date/time to continue.'}
                 </div>
               </div>
               <div>
