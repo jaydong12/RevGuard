@@ -19,6 +19,21 @@ function isIso(iso: any) {
   return s && !Number.isNaN(d.getTime());
 }
 
+function isUuid(v: any): boolean {
+  const s = String(v ?? '').trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+
+function parsePositiveInt(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
 function addMinutesIso(startIso: string, mins: number) {
   const d = new Date(startIso);
   return new Date(d.getTime() + mins * 60 * 1000).toISOString();
@@ -33,13 +48,16 @@ export async function POST(request: Request) {
 
   const body: any = await request.json().catch(() => null);
   const businessId = String(body?.businessId ?? '');
-  const serviceId = Number(body?.serviceId);
-  const customerId = body?.customerId === null || body?.customerId === undefined ? null : Number(body.customerId);
+  const serviceId = parsePositiveInt(body?.serviceId);
+  const customerId = body?.customerId === null || body?.customerId === undefined ? null : parsePositiveInt(body.customerId);
   const startAt = String(body?.startAt ?? '');
   const notes = String(body?.notes ?? '').trim() || null;
 
-  if (!businessId) return NextResponse.json({ error: 'businessId is required' }, { status: 400 });
-  if (!Number.isFinite(serviceId)) return NextResponse.json({ error: 'serviceId is required' }, { status: 400 });
+  if (!businessId || !isUuid(businessId)) return NextResponse.json({ error: 'businessId must be a valid UUID' }, { status: 400 });
+  if (!serviceId) return NextResponse.json({ error: 'serviceId must be a positive integer' }, { status: 400 });
+  if (body?.customerId !== null && body?.customerId !== undefined && !customerId) {
+    return NextResponse.json({ error: 'customerId must be a positive integer or null' }, { status: 400 });
+  }
   if (!isIso(startAt)) return NextResponse.json({ error: 'startAt must be ISO timestamptz' }, { status: 400 });
 
   const supabase = createClient(
@@ -86,40 +104,48 @@ export async function POST(request: Request) {
     if (cust?.name) clientName = String(cust.name);
   }
 
-  // Create booking first
+  // Create booking + calendar event + invoice as one flow. If invoice creation fails, roll back booking/event.
+  const bookingPayload: any = {
+    business_id: businessId,
+    customer_id: customerId,
+    service_id: serviceId,
+    start_at: startAt,
+    end_at: endAt,
+    status: 'scheduled',
+    notes,
+  };
+  // eslint-disable-next-line no-console
+  console.log('BOOKING_CREATE_SERVER_PAYLOAD', bookingPayload);
+
   const { data: booking, error: bErr } = await supabase
     .from('bookings')
-    .insert({
-      business_id: businessId,
-      customer_id: customerId,
-      service_id: serviceId,
-      start_at: startAt,
-      end_at: endAt,
-      status: 'scheduled',
-      notes,
-    } as any)
+    .insert(bookingPayload)
     .select('*')
     .single();
   if (bErr || !booking) return NextResponse.json({ error: bErr?.message ?? 'Failed to create booking' }, { status: 400 });
 
-  // Create calendar event
   const title = `${String((svc as any).name ?? 'Service')} • ${clientName}`;
-  const { error: evErr } = await supabase.from('calendar_events').insert({
-    business_id: businessId,
-    booking_id: (booking as any).id,
-    title,
-    start_at: startAt,
-    end_at: endAt,
-    timezone: 'UTC',
-  } as any);
-  if (evErr) {
-    // Non-fatal; booking still exists.
+  const { data: ev, error: evErr } = await supabase
+    .from('calendar_events')
+    .insert({
+      business_id: businessId,
+      booking_id: (booking as any).id,
+      title,
+      start_at: startAt,
+      end_at: endAt,
+      timezone: 'UTC',
+    } as any)
+    .select('*')
+    .single();
+
+  if (evErr || !ev) {
+    // Roll back booking if calendar event fails.
+    await supabase.from('bookings').delete().eq('business_id', businessId).eq('id', (booking as any).id);
+    return NextResponse.json({ error: evErr?.message ?? 'Failed to create calendar event' }, { status: 400 });
   }
 
-  // Create invoice + item using the existing Smart Invoice system logic (shared helper).
-  let invoice: any | null = null;
   try {
-    invoice = await createSmartInvoiceForBooking({
+    const invoice = await createSmartInvoiceForBooking({
       supabase,
       businessId,
       bookingId: Number((booking as any).id),
@@ -131,19 +157,22 @@ export async function POST(request: Request) {
       endAtIso: endAt,
     });
 
-    await supabase
+    const { error: linkErr } = await supabase
       .from('bookings')
       .update({ invoice_id: invoice.id } as any)
       .eq('id', (booking as any).id)
       .eq('business_id', businessId);
-  } catch {
-    invoice = null;
-  }
+    if (linkErr) throw linkErr;
 
-  return NextResponse.json({
-    booking,
-    invoice: invoice ?? null,
-  });
+    return NextResponse.json({ booking, calendar_event: ev, invoice });
+  } catch (e: any) {
+    // Roll back calendar event + booking if invoice creation fails.
+    await supabase.from('calendar_events').delete().eq('business_id', businessId).eq('id', (ev as any).id);
+    await supabase.from('bookings').delete().eq('business_id', businessId).eq('id', (booking as any).id);
+    // eslint-disable-next-line no-console
+    console.error('BOOKING_CREATE_INVOICE_ERROR', e);
+    return NextResponse.json({ error: e?.message ?? 'Failed to create invoice for booking' }, { status: 400 });
+  }
 }
 
 

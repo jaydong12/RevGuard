@@ -339,24 +339,39 @@ export default function BookingsPage() {
       const token = sess.session?.access_token ?? null;
       if (!token) throw new Error('Not signed in');
 
+      const payload = {
+        businessId,
+        serviceId: serviceIdNum,
+        customerId: customerIdNum,
+        startAt: startIso,
+        notes: createNotes.trim() || null,
+      };
+      // eslint-disable-next-line no-console
+      console.log('BOOKING_CREATE_PAYLOAD', payload);
+
       const res = await fetch('/api/booking/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          businessId,
-          serviceId: serviceIdNum,
-          customerId: customerIdNum,
-          startAt: startIso,
-          notes: createNotes.trim() || null,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const txt = await res.text().catch(() => '');
-        throw new Error(txt || 'Could not create booking.');
+        // eslint-disable-next-line no-console
+        console.log('BOOKING_CREATE_NON_OK', { status: res.status, txt });
+        try {
+          const j = JSON.parse(txt);
+          throw new Error(String(j?.error ?? txt ?? 'Could not create booking.'));
+        } catch {
+          throw new Error(txt || 'Could not create booking.');
+        }
       }
+
+      const json = await res.json().catch(() => null);
+      // eslint-disable-next-line no-console
+      console.log('BOOKING_CREATE_OK', json);
 
       setCreateOpen(false);
       setCreateNotes('');
@@ -743,7 +758,7 @@ export default function BookingsPage() {
               <button
                 type="button"
                 onClick={() => void handleCreateBooking()}
-                disabled={createSaving || !isUuid(businessId) || !parsePositiveInt(createServiceId) || !createStartIso}
+                disabled={createSaving}
                 className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
               >
                 {createSaving ? 'Creating…' : 'Create booking'}
