@@ -1002,8 +1002,8 @@ function BookingDrawer({
 
 function ServicesPanel({ businessId, services }: { businessId: string | null; services: any[] }) {
   const [name, setName] = useState('');
-  const [durationHours, setDurationHours] = useState('1');
-  const [price, setPrice] = useState('0');
+  const [durationHours, setDurationHours] = useState('');
+  const [price, setPrice] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -1034,17 +1034,18 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     const mins = hoursToMinutes(durationHours);
     try {
       setSaving(true);
+      const priceNum = Number(String(price ?? '').replace(/[^0-9.]/g, '')) || 0;
       const { error } = await supabase.from('services').insert({
         business_id: businessId,
         name: name.trim(),
         duration_minutes: mins,
-        price: Number(price) || 0,
+        price: priceNum,
         active: true,
       } as any);
       if (error) throw error;
       setName('');
-      setDurationHours('1');
-      setPrice('0');
+      setDurationHours('');
+      setPrice('');
     } catch (e: any) {
       setErr(e?.message ?? 'Could not save service.');
     } finally {
@@ -1053,10 +1054,10 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   }
 
   const durationHelper = useMemo(() => {
-    const mins = hoursToMinutes(durationHours);
-    // Requirement example: “1.5 = 1 hour 30 minutes”
-    return `${durationHours || '1'} = ${minutesToHuman(mins)}`;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const raw = String(durationHours ?? '').trim();
+    if (!raw) return '1.5 = 1 hour 30 minutes';
+    const mins = hoursToMinutes(raw);
+    return `${raw} = ${minutesToHuman(mins)}`;
   }, [durationHours]);
 
   return (
@@ -1128,7 +1129,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Weekly lawn care"
-              className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+              className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 opacity-80 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
             />
           </div>
 
@@ -1140,28 +1141,23 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
               value={durationHours}
               onChange={(e) => setDurationHours(e.target.value)}
               inputMode="decimal"
-              placeholder="0.5, 1, 1.5, 2"
-              className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+              placeholder="e.g. 1.5 hours"
+              className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 opacity-80 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
             />
             <div className="mt-1 text-[11px] text-slate-400">
-              {durationHelper} (example: 1.5 = 1 hour 30 minutes)
+              {durationHelper}
             </div>
           </div>
 
           <div className="sm:col-span-1">
             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Price</div>
-            <div className="mt-2 relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                $
-              </span>
-              <input
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                inputMode="decimal"
-                placeholder="0.00"
-                className="h-10 w-full rounded-xl border border-white/10 bg-white/5 pl-7 pr-3 text-sm text-slate-100"
-              />
-            </div>
+            <input
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              inputMode="decimal"
+              placeholder="$150"
+              className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 opacity-80 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+            />
           </div>
         </div>
 
