@@ -552,7 +552,7 @@ export default function BookingsPage() {
                   <option value="" className="bg-slate-950 text-slate-100">Choose…</option>
                   {(servicesQ.data ?? []).map((s: any) => (
                     <option key={s.id} value={String(s.id)} className="bg-slate-950 text-slate-100">
-                      {s.name} • {Number(s.price || 0).toFixed(2)}
+                  {s.name} • ${(Number(s.price_cents || 0) / 100).toFixed(2)}
                     </option>
                   ))}
                 </select>
@@ -1046,12 +1046,13 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     const mins = hoursToMinutes(durationHours);
     try {
       setSaving(true);
-      const priceNum = Number(String(price ?? '').replace(/[^0-9.]/g, '')) || 0;
+      const priceDollars = Number(String(price ?? '').replace(/[^0-9.]/g, '')) || 0;
+      const priceCents = Math.max(0, Math.round(priceDollars * 100));
       const { error } = await supabase.from('services').insert({
         business_id: businessId,
         name: name.trim(),
         duration_minutes: mins,
-        price: priceNum,
+        price_cents: priceCents,
         is_active: true,
       } as any);
       if (error) {
@@ -1139,7 +1140,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
               <div key={s.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                 <div className="text-sm font-semibold text-slate-100">{s.name}</div>
                 <div className="mt-1 text-xs text-slate-400">
-                  {minutesToHuman(mins)} • ${Number(s.price || 0).toFixed(2)}
+                  {minutesToHuman(mins)} • ${(Number(s.price_cents || 0) / 100).toFixed(2)}
                 </div>
               </div>
             );

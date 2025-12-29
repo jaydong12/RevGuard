@@ -10,7 +10,7 @@ create table if not exists public.services (
   name text not null,
   description text,
   duration_minutes integer not null default 60,
-  price numeric(12,2) not null default 0,
+  price_cents integer not null default 0,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -30,6 +30,22 @@ begin
     create trigger services_set_updated_at_trg
       before update on public.services
       for each row execute function public.services_set_updated_at();
+  end if;
+end $$;
+
+-- Backward-compat: if an older DB created `price` (numeric dollars), create `price_cents` and backfill.
+alter table if exists public.services
+  add column if not exists price_cents integer not null default 0;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='services' and column_name='price'
+  ) then
+    update public.services
+    set price_cents = greatest(0, round(coalesce(price, 0) * 100)::int)
+    where price_cents is null or price_cents = 0;
   end if;
 end $$;
 

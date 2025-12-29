@@ -48,10 +48,10 @@ export async function POST(request: Request) {
     { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false, autoRefreshToken: false } }
   );
 
-  // Load service (duration + price)
+  // Load service (duration + price_cents)
   const { data: svc, error: sErr } = await supabase
     .from('services')
-    .select('id,name,duration_minutes,price')
+    .select('id,name,duration_minutes,price_cents')
     .eq('business_id', businessId)
     .eq('id', serviceId)
     .single();
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
       bookingId: Number((booking as any).id),
       clientName,
       serviceName: String((svc as any).name ?? 'Service'),
-      price: Number((svc as any).price) || 0,
+      price: (Number((svc as any).price_cents) || 0) / 100,
       notes: notes,
       startAtIso: startAt,
       endAtIso: endAt,
