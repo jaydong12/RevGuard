@@ -100,7 +100,7 @@ export async function POST(request: Request) {
     service_id: serviceId,
     start_at: startAt,
     end_at: endAt,
-    status: 'scheduled',
+    status: 'pending',
     notes,
     customer_name: customer_name || null,
     customer_email: customer_email || null,

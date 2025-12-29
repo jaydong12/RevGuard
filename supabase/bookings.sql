@@ -191,7 +191,7 @@ create table if not exists public.bookings (
   customer_phone text,
   start_at timestamptz not null,
   end_at timestamptz not null,
-  status text not null default 'scheduled' check (status in ('scheduled','cancelled','completed')),
+  status text not null default 'pending' check (status in ('pending','confirmed','cancelled','completed')),
   notes text,
   invoice_id bigint references public.invoices(id) on delete set null,
   created_at timestamptz not null default now(),

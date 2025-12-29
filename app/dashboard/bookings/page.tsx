@@ -246,12 +246,16 @@ export default function BookingsPage() {
   const stats = useMemo(() => {
     const all = (bookingsQ.data ?? []) as any[];
     const now = Date.now();
-    const upcoming = all.filter((b) => String(b.status) === 'scheduled' && new Date(b.start_at).getTime() >= now).length;
+    const upcoming = all.filter((b) => {
+      const s = String(b.status);
+      return (s === 'pending' || s === 'confirmed') && new Date(b.start_at).getTime() >= now;
+    }).length;
     const weekFrom = startOfWeek(new Date()).getTime();
     const weekTo = endOfWeek(new Date()).getTime();
     const thisWeek = all.filter((b) => {
       const t = new Date(b.start_at).getTime();
-      return String(b.status) === 'scheduled' && t >= weekFrom && t <= weekTo;
+      const s = String(b.status);
+      return (s === 'pending' || s === 'confirmed') && t >= weekFrom && t <= weekTo;
     }).length;
 
     let unpaid = 0;
