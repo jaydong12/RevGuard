@@ -34,6 +34,16 @@ function parsePositiveInt(v: any): number | null {
   return n;
 }
 
+function serializeSupabaseError(err: any) {
+  if (!err) return { message: 'Unknown error', code: null, details: null, hint: null };
+  return {
+    message: String(err?.message ?? err?.error_description ?? err?.error ?? 'Unknown error'),
+    code: err?.code ?? null,
+    details: err?.details ?? null,
+    hint: err?.hint ?? null,
+  };
+}
+
 function addMinutesIso(startIso: string, mins: number) {
   const d = new Date(startIso);
   return new Date(d.getTime() + mins * 60 * 1000).toISOString();
@@ -54,6 +64,7 @@ export async function POST(request: Request) {
   const customer_phone = body?.customer_phone ? String(body.customer_phone).trim() : null;
   const startAt = String(body?.startAt ?? '');
   const notes = String(body?.notes ?? '').trim() || null;
+  const status = String(body?.status ?? 'pending').trim() || 'pending';
 
   if (!businessId || !isUuid(businessId)) return NextResponse.json({ error: 'businessId must be a valid UUID' }, { status: 400 });
   if (!serviceId || !isUuid(serviceId)) return NextResponse.json({ error: 'serviceId must be a valid UUID' }, { status: 400 });
@@ -72,7 +83,7 @@ export async function POST(request: Request) {
     .eq('business_id', businessId)
     .eq('id', serviceId)
     .single();
-  if (sErr || !svc) return NextResponse.json({ error: sErr?.message ?? 'Service not found' }, { status: 400 });
+  if (sErr || !svc) return NextResponse.json({ error: serializeSupabaseError(sErr) }, { status: 400 });
 
   const duration = Math.max(5, Number((svc as any).duration_minutes) || 60);
   const endAt = addMinutesIso(startAt, duration);
@@ -86,7 +97,7 @@ export async function POST(request: Request) {
     .lt('start_at', endAt)
     .gt('end_at', startAt)
     .limit(1);
-  if (cErr) return NextResponse.json({ error: cErr.message }, { status: 400 });
+  if (cErr) return NextResponse.json({ error: serializeSupabaseError(cErr) }, { status: 400 });
   if ((conflicts ?? []).length > 0) {
     return NextResponse.json({ error: 'That time is no longer available.' }, { status: 409 });
   }
@@ -100,11 +111,11 @@ export async function POST(request: Request) {
     service_id: serviceId,
     start_at: startAt,
     end_at: endAt,
-    status: 'pending',
-    notes,
-    customer_name: customer_name || null,
-    customer_email: customer_email || null,
-    customer_phone: customer_phone || null,
+    status,
+    notes: notes ?? '',
+    customer_name: customer_name ?? '',
+    customer_email: customer_email ?? '',
+    customer_phone: customer_phone ?? '',
   };
   // eslint-disable-next-line no-console
   console.log('BOOKING_CREATE_SERVER_PAYLOAD', bookingPayload);
@@ -114,7 +125,7 @@ export async function POST(request: Request) {
     .insert(bookingPayload)
     .select('*')
     .single();
-  if (bErr || !booking) return NextResponse.json({ error: bErr?.message ?? 'Failed to create booking' }, { status: 400 });
+  if (bErr || !booking) return NextResponse.json({ error: serializeSupabaseError(bErr) }, { status: 400 });
 
   const title = `${String((svc as any).name ?? 'Service')} • ${clientName}`;
   const { data: ev, error: evErr } = await supabase
@@ -133,7 +144,7 @@ export async function POST(request: Request) {
   if (evErr || !ev) {
     // Roll back booking if calendar event fails.
     await supabase.from('bookings').delete().eq('business_id', businessId).eq('id', (booking as any).id);
-    return NextResponse.json({ error: evErr?.message ?? 'Failed to create calendar event' }, { status: 400 });
+    return NextResponse.json({ error: serializeSupabaseError(evErr) }, { status: 400 });
   }
 
   try {
@@ -163,7 +174,7 @@ export async function POST(request: Request) {
     await supabase.from('bookings').delete().eq('business_id', businessId).eq('id', (booking as any).id);
     // eslint-disable-next-line no-console
     console.error('BOOKING_CREATE_INVOICE_ERROR', e);
-    return NextResponse.json({ error: e?.message ?? 'Failed to create invoice for booking' }, { status: 400 });
+    return NextResponse.json({ error: serializeSupabaseError(e) }, { status: 400 });
   }
 }
 

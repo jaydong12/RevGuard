@@ -103,7 +103,7 @@ export default function BookingsPage() {
   const [createStartDigits, setCreateStartDigits] = useState<string>('');
   const [createStartAmPm, setCreateStartAmPm] = useState<AmPm>('AM');
   const [createNotes, setCreateNotes] = useState<string>('');
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createErrors, setCreateErrors] = useState<string[]>([]);
   const [createSaving, setCreateSaving] = useState(false);
 
   const createStartIso = useMemo(() => parseMaskedDigitsToIso(createStartDigits, createStartAmPm), [createStartDigits, createStartAmPm]);
@@ -316,26 +316,34 @@ export default function BookingsPage() {
   }
 
   async function handleCreateBooking() {
-    setCreateError(null);
-    if (!businessId || !isUuid(businessId)) {
-      setCreateError('Select a valid business before creating a booking.');
-      return;
-    }
+    const issues: string[] = [];
+    setCreateErrors([]);
+
+    if (!businessId || !isUuid(businessId)) issues.push('Select a valid business.');
+
     const serviceIdStr = String(createServiceId ?? '').trim();
-    if (!serviceIdStr || !isUuid(serviceIdStr)) {
-      setCreateError('Choose a service.');
-      return;
-    }
-    if (!createStartIso) {
-      setCreateError('Choose a date/time.');
-      return;
-    }
+    if (!serviceIdStr) issues.push('Choose a service.');
+    else if (!isUuid(serviceIdStr)) issues.push('Selected service is invalid. Please re-select.');
+
+    if (!createStartIso) issues.push('Enter a valid start date/time.');
+    else if (Number.isNaN(new Date(createStartIso).getTime())) issues.push('Start date/time is invalid.');
+
     const customerKey = createCustomerId ? String(createCustomerId).trim() : null;
-    const selectedCustomer = customerKey ? customerById.get(String(customerKey)) ?? null : null;
-    if (customerKey && !selectedCustomer) {
-      setCreateError('Customer selection is invalid. Please re-select.');
+    const selectedCustomer = customerKey ? (customerById.get(String(customerKey)) ?? null) : null;
+    if (!selectedCustomer) {
+      issues.push('Choose a customer.');
+    } else {
+      const nm = String(selectedCustomer?.name ?? '').trim();
+      const em = String(selectedCustomer?.email ?? '').trim();
+      if (!nm) issues.push('Customer is missing a name.');
+      if (!em) issues.push('Customer is missing an email.');
+    }
+
+    if (issues.length) {
+      setCreateErrors(issues);
       return;
     }
+
     const startIso = createStartIso;
 
     try {
@@ -344,14 +352,21 @@ export default function BookingsPage() {
       const token = sess.session?.access_token ?? null;
       if (!token) throw new Error('Not signed in');
 
+      // Normalize payload so we never send nulls for required columns.
+      const normalizedCustomerName = String(selectedCustomer?.name ?? '').trim();
+      const normalizedCustomerEmail = String(selectedCustomer?.email ?? '').trim();
+      const normalizedCustomerPhone = String(selectedCustomer?.phone ?? '').trim();
+      const normalizedNotes = String(createNotes ?? '').trim();
+
       const payload = {
         businessId,
         serviceId: serviceIdStr,
-        customer_name: selectedCustomer?.name ? String(selectedCustomer.name) : null,
-        customer_email: selectedCustomer?.email ? String(selectedCustomer.email) : null,
-        customer_phone: selectedCustomer?.phone ? String(selectedCustomer.phone) : null,
+        customer_name: normalizedCustomerName,
+        customer_email: normalizedCustomerEmail,
+        customer_phone: normalizedCustomerPhone,
         startAt: startIso,
-        notes: createNotes.trim() || null,
+        notes: normalizedNotes,
+        status: 'pending',
       };
       // eslint-disable-next-line no-console
       console.log('BOOKING_CREATE_PAYLOAD', payload);
@@ -370,7 +385,19 @@ export default function BookingsPage() {
         console.log('BOOKING_CREATE_NON_OK', { status: res.status, txt });
         try {
           const j = JSON.parse(txt);
-          throw new Error(String(j?.error ?? txt ?? 'Could not create booking.'));
+          const err = (j as any)?.error ?? null;
+          if (err && typeof err === 'object') {
+            const code = (err as any)?.code ?? null;
+            const msg = (err as any)?.message ?? (err as any)?.error ?? null;
+            const details = (err as any)?.details ?? null;
+            throw new Error(
+              `Could not create booking.\n` +
+                `code: ${code ?? 'n/a'}\n` +
+                `message: ${msg ?? 'n/a'}\n` +
+                `details: ${details ?? 'n/a'}`
+            );
+          }
+          throw new Error(String(err ?? txt ?? 'Could not create booking.'));
         } catch {
           throw new Error(txt || 'Could not create booking.');
         }
@@ -386,11 +413,13 @@ export default function BookingsPage() {
       setCreateServiceId(null);
       setCreateStartDigits('');
       setCreateStartAmPm('AM');
+      setCreateErrors([]);
 
       await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
       await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
     } catch (e: any) {
-      setCreateError(e?.message ?? 'Could not create booking.');
+      const msg = String(e?.message ?? 'Could not create booking.');
+      setCreateErrors(msg.split('\n').filter(Boolean));
     } finally {
       setCreateSaving(false);
     }
@@ -642,9 +671,14 @@ export default function BookingsPage() {
               </button>
             </div>
 
-            {createError && (
+            {createErrors.length > 0 && (
               <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {createError}
+                <div className="text-[11px] uppercase tracking-[0.18em] opacity-80">Fix these</div>
+                <ul className="mt-2 list-disc pl-5 space-y-1 text-sm">
+                  {createErrors.map((e, idx) => (
+                    <li key={`${idx}-${e}`}>{e}</li>
+                  ))}
+                </ul>
               </div>
             )}
 
