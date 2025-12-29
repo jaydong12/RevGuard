@@ -1005,6 +1005,8 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   const [durationHours, setDurationHours] = useState('');
   const [price, setPrice] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [lastSupabaseError, setLastSupabaseError] = useState<any | null>(null);
+  const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
 
   function hoursToMinutes(raw: string): number {
@@ -1027,6 +1029,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   async function addService() {
     if (!businessId) return;
     setErr(null);
+    setLastSupabaseError(null);
     if (!name.trim()) {
       setErr('Service name is required.');
       return;
@@ -1042,12 +1045,41 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
         price: priceNum,
         active: true,
       } as any);
-      if (error) throw error;
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error('SUPABASE SERVICES INSERT ERROR', error);
+        setLastSupabaseError(error);
+        const code = (error as any)?.code ?? null;
+        const msg = (error as any)?.message ?? 'Could not save service.';
+        const details = (error as any)?.details ?? null;
+        const hint = (error as any)?.hint ?? null;
+        setErr(
+          `Could not save service.\n` +
+            `code: ${code ?? 'n/a'}\n` +
+            `message: ${msg}\n` +
+            `details: ${details ?? 'n/a'}\n` +
+            `hint: ${hint ?? 'n/a'}`
+        );
+        return;
+      }
       setName('');
       setDurationHours('');
       setPrice('');
     } catch (e: any) {
-      setErr(e?.message ?? 'Could not save service.');
+      // eslint-disable-next-line no-console
+      console.error('SERVICES INSERT UNEXPECTED ERROR', e);
+      setLastSupabaseError(e ?? null);
+      const code = e?.code ?? null;
+      const msg = e?.message ?? 'Could not save service.';
+      const details = e?.details ?? null;
+      const hint = e?.hint ?? null;
+      setErr(
+        `Could not save service.\n` +
+          `code: ${code ?? 'n/a'}\n` +
+          `message: ${msg}\n` +
+          `details: ${details ?? 'n/a'}\n` +
+          `hint: ${hint ?? 'n/a'}`
+      );
     } finally {
       setSaving(false);
     }
@@ -1119,7 +1151,36 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
           </div>
         </div>
 
-        {err && <div className="mt-3 text-sm text-rose-200">{err}</div>}
+        {err && (
+          <div className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-rose-100">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.18em] opacity-80">
+                  Error
+                </div>
+                <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-relaxed text-rose-100/95">
+                  {err}
+                </pre>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const payload = JSON.stringify(lastSupabaseError ?? { message: err }, null, 2);
+                    await navigator.clipboard.writeText(payload);
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1200);
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className="shrink-0 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 hover:bg-rose-500/15"
+              >
+                {copied ? 'Copied' : 'Copy error'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="sm:col-span-1">
