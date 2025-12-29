@@ -1017,6 +1017,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   const [lastSupabaseError, setLastSupabaseError] = useState<any | null>(null);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
 
   function hoursToMinutes(raw: string): number {
     const n = Number(raw);
@@ -1036,7 +1037,10 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   }
 
   async function addService() {
-    if (!businessId) return;
+    if (!businessId) {
+      setErr('No business selected. Please select a business first.');
+      return;
+    }
     setErr(null);
     setLastSupabaseError(null);
     if (!name.trim()) {
@@ -1048,19 +1052,32 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
       setSaving(true);
       const priceDollars = Number(String(price ?? '').replace(/[^0-9.]/g, '')) || 0;
       const priceCents = Math.max(0, Math.round(priceDollars * 100));
-      const { error } = await supabase.from('services').insert({
+      const payload = {
         business_id: businessId,
         name: name.trim(),
         duration_minutes: mins,
         price_cents: priceCents,
         is_active: true,
-      } as any);
-      if (error) {
+      } as any;
+
+      // eslint-disable-next-line no-console
+      console.log('SERVICES_INSERT_PAYLOAD', payload);
+
+      const { data, error } = await supabase
+        .from('services')
+        .insert(payload)
+        .select('*')
+        .single();
+
+      // eslint-disable-next-line no-console
+      console.log('SERVICES_INSERT_RESULT', { data, error });
+
+      if (error || !data) {
         // eslint-disable-next-line no-console
         console.error('SUPABASE SERVICES INSERT ERROR', error);
-        setLastSupabaseError(error);
+        setLastSupabaseError(error ?? { message: 'No data returned from insert.' });
         const code = (error as any)?.code ?? null;
-        const msg = (error as any)?.message ?? 'Could not save service.';
+        const msg = (error as any)?.message ?? 'No data returned from insert.';
         const details = (error as any)?.details ?? null;
         const hint = (error as any)?.hint ?? null;
         setErr(
@@ -1075,6 +1092,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
       setName('');
       setDurationHours('');
       setPrice('');
+      await queryClient.invalidateQueries({ queryKey: ['services', businessId] });
     } catch (e: any) {
       // eslint-disable-next-line no-console
       console.error('SERVICES INSERT UNEXPECTED ERROR', e);
