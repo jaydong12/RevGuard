@@ -48,16 +48,15 @@ export async function POST(request: Request) {
 
   const body: any = await request.json().catch(() => null);
   const businessId = String(body?.businessId ?? '');
-  const serviceId = parsePositiveInt(body?.serviceId);
-  const customerId = body?.customerId === null || body?.customerId === undefined ? null : parsePositiveInt(body.customerId);
+  const serviceId = String(body?.serviceId ?? '').trim();
+  const customerId =
+    body?.customerId === null || body?.customerId === undefined ? null : String(body.customerId ?? '').trim();
   const startAt = String(body?.startAt ?? '');
   const notes = String(body?.notes ?? '').trim() || null;
 
   if (!businessId || !isUuid(businessId)) return NextResponse.json({ error: 'businessId must be a valid UUID' }, { status: 400 });
-  if (!serviceId) return NextResponse.json({ error: 'serviceId must be a positive integer' }, { status: 400 });
-  if (body?.customerId !== null && body?.customerId !== undefined && !customerId) {
-    return NextResponse.json({ error: 'customerId must be a positive integer or null' }, { status: 400 });
-  }
+  if (!serviceId || !isUuid(serviceId)) return NextResponse.json({ error: 'serviceId must be a valid UUID' }, { status: 400 });
+  if (customerId && !isUuid(customerId)) return NextResponse.json({ error: 'customerId must be a valid UUID or null' }, { status: 400 });
   if (!isIso(startAt)) return NextResponse.json({ error: 'startAt must be ISO timestamptz' }, { status: 400 });
 
   const supabase = createClient(

@@ -98,8 +98,8 @@ export default function BookingsPage() {
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [createServiceId, setCreateServiceId] = useState<string>('');
-  const [createCustomerId, setCreateCustomerId] = useState<string>('');
+  const [createServiceId, setCreateServiceId] = useState<string | null>(null);
+  const [createCustomerId, setCreateCustomerId] = useState<string | null>(null);
   const [createStartDigits, setCreateStartDigits] = useState<string>('');
   const [createStartAmPm, setCreateStartAmPm] = useState<AmPm>('AM');
   const [createNotes, setCreateNotes] = useState<string>('');
@@ -317,8 +317,8 @@ export default function BookingsPage() {
       setCreateError('Select a valid business before creating a booking.');
       return;
     }
-    const serviceIdNum = parsePositiveInt(createServiceId);
-    if (!serviceIdNum) {
+    const serviceIdStr = String(createServiceId ?? '').trim();
+    if (!serviceIdStr || !isUuid(serviceIdStr)) {
       setCreateError('Choose a service.');
       return;
     }
@@ -326,8 +326,8 @@ export default function BookingsPage() {
       setCreateError('Choose a date/time.');
       return;
     }
-    const customerIdNum = createCustomerId ? parsePositiveInt(createCustomerId) : null;
-    if (createCustomerId && !customerIdNum) {
+    const customerIdStr = createCustomerId ? String(createCustomerId).trim() : null;
+    if (customerIdStr && !isUuid(customerIdStr)) {
       setCreateError('Customer selection is invalid. Please re-select.');
       return;
     }
@@ -341,8 +341,8 @@ export default function BookingsPage() {
 
       const payload = {
         businessId,
-        serviceId: serviceIdNum,
-        customerId: customerIdNum,
+        serviceId: serviceIdStr,
+        customerId: customerIdStr,
         startAt: startIso,
         notes: createNotes.trim() || null,
       };
@@ -375,8 +375,8 @@ export default function BookingsPage() {
 
       setCreateOpen(false);
       setCreateNotes('');
-      setCreateCustomerId('');
-      setCreateServiceId('');
+      setCreateCustomerId(null);
+      setCreateServiceId(null);
       setCreateStartDigits('');
       setCreateStartAmPm('AM');
 
@@ -646,8 +646,11 @@ export default function BookingsPage() {
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Service</div>
                 <select
                   style={{ colorScheme: 'dark' }}
-                  value={createServiceId}
-                  onChange={(e) => setCreateServiceId(e.target.value)}
+                  value={createServiceId ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCreateServiceId(v ? v : null);
+                  }}
                   className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100"
                 >
                   <option value="" className="bg-slate-950 text-slate-100">Choose…</option>
@@ -662,8 +665,11 @@ export default function BookingsPage() {
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Customer</div>
                 <select
                   style={{ colorScheme: 'dark' }}
-                  value={createCustomerId}
-                  onChange={(e) => setCreateCustomerId(e.target.value)}
+                  value={createCustomerId ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCreateCustomerId(v ? v : null);
+                  }}
                   className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100"
                 >
                   <option value="" className="bg-slate-950 text-slate-100">Optional…</option>
