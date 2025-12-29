@@ -315,16 +315,16 @@ export default function BookingsPage() {
       <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
-            <TabButton active={tab === 'calendar'} onClick={() => setTab('calendar')} icon={<CalendarDays className="h-4 w-4" />}>
+            <TabButton is_active={tab === 'calendar'} onClick={() => setTab('calendar')} icon={<CalendarDays className="h-4 w-4" />}>
               Calendar
             </TabButton>
-            <TabButton active={tab === 'list'} onClick={() => setTab('list')} icon={<List className="h-4 w-4" />}>
+            <TabButton is_active={tab === 'list'} onClick={() => setTab('list')} icon={<List className="h-4 w-4" />}>
               List
             </TabButton>
-            <TabButton active={tab === 'services'} onClick={() => setTab('services')} icon={<SlidersHorizontal className="h-4 w-4" />}>
+            <TabButton is_active={tab === 'services'} onClick={() => setTab('services')} icon={<SlidersHorizontal className="h-4 w-4" />}>
               Services
             </TabButton>
-            <TabButton active={tab === 'availability'} onClick={() => setTab('availability')} icon={<Settings2 className="h-4 w-4" />}>
+            <TabButton is_active={tab === 'availability'} onClick={() => setTab('availability')} icon={<Settings2 className="h-4 w-4" />}>
               Availability
             </TabButton>
           </div>
@@ -403,9 +403,9 @@ export default function BookingsPage() {
               </div>
 
               <div className="flex items-center gap-2">
-                <SegmentButton active={view === 'day'} onClick={() => setView('day')}>Day</SegmentButton>
-                <SegmentButton active={view === 'week'} onClick={() => setView('week')}>Week</SegmentButton>
-                <SegmentButton active={view === 'month'} onClick={() => setView('month')}>Month</SegmentButton>
+                <SegmentButton is_active={view === 'day'} onClick={() => setView('day')}>Day</SegmentButton>
+                <SegmentButton is_active={view === 'week'} onClick={() => setView('week')}>Week</SegmentButton>
+                <SegmentButton is_active={view === 'month'} onClick={() => setView('month')}>Month</SegmentButton>
               </div>
             </div>
 
@@ -633,12 +633,12 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
 }
 
 function TabButton({
-  active,
+  is_active,
   onClick,
   icon,
   children,
 }: {
-  active: boolean;
+  is_active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   children: React.ReactNode;
@@ -648,7 +648,7 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-        active ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+        is_active ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
       }`}
     >
       {icon}
@@ -657,13 +657,21 @@ function TabButton({
   );
 }
 
-function SegmentButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function SegmentButton({
+  is_active,
+  onClick,
+  children,
+}: {
+  is_active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-        active ? 'bg-white/10 text-slate-50' : 'border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+        is_active ? 'bg-white/10 text-slate-50' : 'border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
       }`}
     >
       {children}
