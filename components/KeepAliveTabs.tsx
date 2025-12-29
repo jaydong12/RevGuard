@@ -12,6 +12,7 @@ type Props = {
 const KEEP_ALIVE_PATHS = new Set<string>([
   '/',
   '/dashboard',
+  '/dashboard/bookings',
   '/transactions',
   '/invoices',
   '/bills',
