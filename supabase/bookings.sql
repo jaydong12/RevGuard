@@ -11,7 +11,7 @@ create table if not exists public.services (
   description text,
   duration_minutes integer not null default 60,
   price numeric(12,2) not null default 0,
-  active boolean not null default true,
+  is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -33,8 +33,24 @@ begin
   end if;
 end $$;
 
+-- Backward-compat: if an older DB created `active`, create `is_active` and backfill.
+alter table if exists public.services
+  add column if not exists is_active boolean not null default true;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='services' and column_name='active'
+  ) then
+    update public.services
+    set is_active = coalesce(is_active, active)
+    where is_active is null;
+  end if;
+end $$;
+
 create index if not exists services_business_active_idx
-  on public.services (business_id, active);
+  on public.services (business_id, is_active);
 
 alter table public.services enable row level security;
 drop policy if exists "services_select_own" on public.services;

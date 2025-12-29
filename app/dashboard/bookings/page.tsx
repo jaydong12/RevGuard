@@ -1043,7 +1043,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
         name: name.trim(),
         duration_minutes: mins,
         price: priceNum,
-        active: true,
+        is_active: true,
       } as any);
       if (error) {
         // eslint-disable-next-line no-console
