@@ -19,6 +19,70 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
+function pad2(n: number) {
+  return String(Math.floor(Math.abs(n))).padStart(2, '0');
+}
+
+function formatLocalPretty(iso: string): string {
+  const d = new Date(String(iso ?? ''));
+  if (Number.isNaN(d.getTime())) return '';
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function formatLocalEditable(iso: string): string {
+  const d = new Date(String(iso ?? ''));
+  if (Number.isNaN(d.getTime())) return '';
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const yyyy = d.getFullYear();
+  const mins = pad2(d.getMinutes());
+  let h = d.getHours();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${mm}/${dd}/${yyyy} · ${h}:${mins} ${ampm}`;
+}
+
+function parseLocalStartToIso(input: string): string | null {
+  const s = String(input ?? '').trim();
+  if (!s) return null;
+  // Accept: "MM/DD/YYYY · HH:MM AM" (dot optional), also allow "MM/DD/YYYY HH:MM AM".
+  const m = s.match(
+    /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(?:·|\-|\||,)?\s*(\d{1,2})\s*:\s*(\d{2})\s*(am|pm)\s*$/i
+  );
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  const year = Number(m[3]);
+  let hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const ampm = String(m[6]).toUpperCase();
+
+  if (!(month >= 1 && month <= 12)) return null;
+  if (!(day >= 1 && day <= 31)) return null;
+  if (!(year >= 2000 && year <= 2100)) return null;
+  if (!(hour >= 1 && hour <= 12)) return null;
+  if (!(minute >= 0 && minute <= 59)) return null;
+
+  if (ampm === 'PM' && hour !== 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+
+  const d = new Date(year, month - 1, day, hour, minute, 0, 0); // local time
+  // Validate (catches invalid days like 02/31).
+  if (
+    d.getFullYear() !== year ||
+    d.getMonth() !== month - 1 ||
+    d.getDate() !== day ||
+    d.getHours() !== hour ||
+    d.getMinutes() !== minute
+  ) {
+    return null;
+  }
+  return d.toISOString();
+}
+
 export default function BookingsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -37,10 +101,26 @@ export default function BookingsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createServiceId, setCreateServiceId] = useState<string>('');
   const [createCustomerId, setCreateCustomerId] = useState<string>('');
-  const [createStartLocal, setCreateStartLocal] = useState<string>('');
+  const [createStartInput, setCreateStartInput] = useState<string>('');
+  const [createStartIso, setCreateStartIso] = useState<string>('');
+  const [createStartFocused, setCreateStartFocused] = useState(false);
   const [createNotes, setCreateNotes] = useState<string>('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [createSaving, setCreateSaving] = useState(false);
+
+  function isUuid(v: any): boolean {
+    const s = String(v ?? '').trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+  }
+
+  function parsePositiveInt(v: any): number | null {
+    const s = String(v ?? '').trim();
+    if (!s) return null;
+    if (!/^\d+$/.test(s)) return null;
+    const n = Number(s);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  }
 
   function startOfWeek(d: Date) {
     const x = new Date(d);
@@ -233,20 +313,25 @@ export default function BookingsPage() {
 
   async function handleCreateBooking() {
     setCreateError(null);
-    if (!businessId) {
-      setCreateError('Loading business…');
+    if (!businessId || !isUuid(businessId)) {
+      setCreateError('Select a valid business before creating a booking.');
       return;
     }
-    if (!createServiceId) {
+    const serviceIdNum = parsePositiveInt(createServiceId);
+    if (!serviceIdNum) {
       setCreateError('Choose a service.');
       return;
     }
-    if (!createStartLocal) {
+    if (!createStartIso) {
       setCreateError('Choose a date/time.');
       return;
     }
-
-    const startIso = new Date(createStartLocal).toISOString();
+    const customerIdNum = createCustomerId ? parsePositiveInt(createCustomerId) : null;
+    if (createCustomerId && !customerIdNum) {
+      setCreateError('Customer selection is invalid. Please re-select.');
+      return;
+    }
+    const startIso = createStartIso;
 
     try {
       setCreateSaving(true);
@@ -262,8 +347,8 @@ export default function BookingsPage() {
         },
         body: JSON.stringify({
           businessId,
-          serviceId: Number(createServiceId),
-          customerId: createCustomerId ? Number(createCustomerId) : null,
+          serviceId: serviceIdNum,
+          customerId: customerIdNum,
           startAt: startIso,
           notes: createNotes.trim() || null,
         }),
@@ -277,7 +362,9 @@ export default function BookingsPage() {
       setCreateNotes('');
       setCreateCustomerId('');
       setCreateServiceId('');
-      setCreateStartLocal('');
+      setCreateStartInput('');
+      setCreateStartIso('');
+      setCreateStartFocused(false);
 
       await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
       await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
@@ -576,12 +663,32 @@ export default function BookingsPage() {
               <div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Start time</div>
                 <input
-                  type="datetime-local"
-                  value={createStartLocal}
-                  onChange={(e) => setCreateStartLocal(e.target.value)}
-                  className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+                  type="text"
+                  inputMode="text"
+                  autoComplete="off"
+                  placeholder="MM/DD/YYYY · HH:MM AM"
+                  value={createStartInput}
+                  onFocus={() => {
+                    setCreateStartFocused(true);
+                    if (createStartIso) setCreateStartInput(formatLocalEditable(createStartIso));
+                  }}
+                  onBlur={() => {
+                    setCreateStartFocused(false);
+                    if (createStartIso) setCreateStartInput(formatLocalPretty(createStartIso));
+                  }}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setCreateStartInput(next);
+                    const iso = parseLocalStartToIso(next);
+                    setCreateStartIso(iso ?? '');
+                  }}
+                  className={`mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 transition-opacity ${
+                    createStartFocused ? 'opacity-100' : createStartIso ? 'opacity-100' : 'opacity-70'
+                  } focus:opacity-100`}
                 />
-                <div className="mt-1 text-[11px] text-slate-400">Saved as timezone-safe timestamptz.</div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {createStartIso ? `Saved as timestamptz · ${createStartIso}` : 'Saved as timezone-safe timestamptz.'}
+                </div>
               </div>
               <div>
                 <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Notes</div>
@@ -605,7 +712,7 @@ export default function BookingsPage() {
               <button
                 type="button"
                 onClick={() => void handleCreateBooking()}
-                disabled={createSaving}
+                disabled={createSaving || !isUuid(businessId) || !parsePositiveInt(createServiceId) || !createStartIso}
                 className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
               >
                 {createSaving ? 'Creating…' : 'Create booking'}
