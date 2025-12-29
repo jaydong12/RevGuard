@@ -326,8 +326,9 @@ export default function BookingsPage() {
       setCreateError('Choose a date/time.');
       return;
     }
-    const customerIdStr = createCustomerId ? String(createCustomerId).trim() : null;
-    if (customerIdStr && !isUuid(customerIdStr)) {
+    const customerKey = createCustomerId ? String(createCustomerId).trim() : null;
+    const selectedCustomer = customerKey ? customerById.get(String(customerKey)) ?? null : null;
+    if (customerKey && !selectedCustomer) {
       setCreateError('Customer selection is invalid. Please re-select.');
       return;
     }
@@ -342,7 +343,9 @@ export default function BookingsPage() {
       const payload = {
         businessId,
         serviceId: serviceIdStr,
-        customerId: customerIdStr,
+        customer_name: selectedCustomer?.name ? String(selectedCustomer.name) : null,
+        customer_email: selectedCustomer?.email ? String(selectedCustomer.email) : null,
+        customer_phone: selectedCustomer?.phone ? String(selectedCustomer.phone) : null,
         startAt: startIso,
         notes: createNotes.trim() || null,
       };
@@ -547,7 +550,7 @@ export default function BookingsPage() {
                 <tbody>
                   {bookings.map((b) => {
                     const when = new Date(b.start_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-                    const cust = b.customer_id ? customerById.get(String(b.customer_id))?.name : '—';
+                    const cust = String(b.customer_name ?? '').trim() || '—';
                     const svc = b.service_id ? serviceById.get(String(b.service_id))?.name : '—';
                     const inv = invoiceByBookingId.get(String(b.id));
                     return (
@@ -595,7 +598,7 @@ export default function BookingsPage() {
             setDrawerOpen(false);
             setActiveBooking(null);
           }}
-          customerName={activeBooking.customer_id ? customerById.get(String(activeBooking.customer_id))?.name ?? 'Customer' : 'Customer'}
+          customerName={String(activeBooking.customer_name ?? '').trim() || 'Customer'}
           serviceName={activeBooking.service_id ? serviceById.get(String(activeBooking.service_id))?.name ?? 'Service' : 'Service'}
           invoice={invoiceByBookingId.get(String(activeBooking.id)) ?? null}
           onViewInvoice={() => router.push('/invoices')}

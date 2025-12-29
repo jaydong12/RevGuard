@@ -49,14 +49,14 @@ export async function POST(request: Request) {
   const body: any = await request.json().catch(() => null);
   const businessId = String(body?.businessId ?? '');
   const serviceId = String(body?.serviceId ?? '').trim();
-  const customerId =
-    body?.customerId === null || body?.customerId === undefined ? null : String(body.customerId ?? '').trim();
+  const customer_name = body?.customer_name ? String(body.customer_name).trim() : null;
+  const customer_email = body?.customer_email ? String(body.customer_email).trim() : null;
+  const customer_phone = body?.customer_phone ? String(body.customer_phone).trim() : null;
   const startAt = String(body?.startAt ?? '');
   const notes = String(body?.notes ?? '').trim() || null;
 
   if (!businessId || !isUuid(businessId)) return NextResponse.json({ error: 'businessId must be a valid UUID' }, { status: 400 });
   if (!serviceId || !isUuid(serviceId)) return NextResponse.json({ error: 'serviceId must be a valid UUID' }, { status: 400 });
-  if (customerId && !isUuid(customerId)) return NextResponse.json({ error: 'customerId must be a valid UUID or null' }, { status: 400 });
   if (!isIso(startAt)) return NextResponse.json({ error: 'startAt must be ISO timestamptz' }, { status: 400 });
 
   const supabase = createClient(
@@ -91,27 +91,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'That time is no longer available.' }, { status: 409 });
   }
 
-  // Resolve customer name for invoice
-  let clientName = 'Customer';
-  if (customerId) {
-    const { data: cust } = await supabase
-      .from('customers')
-      .select('id,name')
-      .eq('business_id', businessId)
-      .eq('id', customerId)
-      .maybeSingle();
-    if (cust?.name) clientName = String(cust.name);
-  }
+  // Customer fields are stored directly on the booking (no FK).
+  const clientName = customer_name?.trim() ? String(customer_name).trim() : 'Customer';
 
   // Create booking + calendar event + invoice as one flow. If invoice creation fails, roll back booking/event.
   const bookingPayload: any = {
     business_id: businessId,
-    customer_id: customerId,
     service_id: serviceId,
     start_at: startAt,
     end_at: endAt,
     status: 'scheduled',
     notes,
+    customer_name: customer_name || null,
+    customer_email: customer_email || null,
+    customer_phone: customer_phone || null,
   };
   // eslint-disable-next-line no-console
   console.log('BOOKING_CREATE_SERVER_PAYLOAD', bookingPayload);

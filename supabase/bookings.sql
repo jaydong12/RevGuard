@@ -185,8 +185,10 @@ create policy "availability_rules_delete_own"
 create table if not exists public.bookings (
   id bigserial primary key,
   business_id uuid not null references public.business(id) on delete cascade,
-  customer_id bigint references public.customers(id) on delete set null,
   service_id bigint references public.services(id) on delete set null,
+  customer_name text,
+  customer_email text,
+  customer_phone text,
   start_at timestamptz not null,
   end_at timestamptz not null,
   status text not null default 'scheduled' check (status in ('scheduled','cancelled','completed')),
@@ -195,6 +197,14 @@ create table if not exists public.bookings (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Backward-compat: if bookings already exists, ensure customer fields exist.
+alter table if exists public.bookings
+  add column if not exists customer_name text;
+alter table if exists public.bookings
+  add column if not exists customer_email text;
+alter table if exists public.bookings
+  add column if not exists customer_phone text;
 
 do $$
 begin
