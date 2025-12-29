@@ -90,6 +90,7 @@ export default function BookingsPage() {
         .from('services')
         .select('*')
         .eq('business_id', businessId!)
+        .eq('is_active', true)
         .order('created_at', { ascending: true });
       if (error) throw error;
       return (data ?? []) as any[];
