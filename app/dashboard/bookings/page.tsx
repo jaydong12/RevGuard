@@ -134,7 +134,7 @@ export default function BookingsPage() {
       if (!bookingIds.length) return [] as any[];
       const { data, error } = await supabase
         .from('invoices')
-        .select('id,business_id,status,total,invoice_number,booking_id')
+        .select('*')
         .eq('business_id', businessId!)
         .in('booking_id', bookingIds as any);
       if (error) throw error;
@@ -190,12 +190,6 @@ export default function BookingsPage() {
     setDrawerOpen(true);
   }
 
-  async function markInvoicePaid(invoiceId: number) {
-    if (!businessId) return;
-    await supabase.from('invoices').update({ status: 'paid' } as any).eq('id', invoiceId).eq('business_id', businessId);
-    await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
-  }
-
   async function patchBooking(id: number, patch: any) {
     if (!businessId) return;
     const { data: sess } = await supabase.auth.getSession();
@@ -215,6 +209,7 @@ export default function BookingsPage() {
       throw new Error(txt || 'Booking update failed');
     }
     await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
+    await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
   }
 
   async function handleDownloadIcs() {
@@ -503,8 +498,7 @@ export default function BookingsPage() {
           invoice={invoiceByBookingId.get(String(activeBooking.id)) ?? null}
           onViewInvoice={() => router.push('/invoices')}
           onMarkPaid={async () => {
-            const inv = invoiceByBookingId.get(String(activeBooking.id));
-            if (inv?.id) await markInvoicePaid(Number(inv.id));
+            await patchBooking(Number(activeBooking.id), { markPaid: true });
           }}
           onCancel={async () => {
             await patchBooking(Number(activeBooking.id), { status: 'cancelled' });
@@ -513,6 +507,9 @@ export default function BookingsPage() {
           onReschedule={async (nextIso) => {
             await patchBooking(Number(activeBooking.id), { startAt: nextIso });
             setDrawerOpen(false);
+          }}
+          onRecordPayment={async (amount) => {
+            await patchBooking(Number(activeBooking.id), { paymentAmount: amount });
           }}
         />
       )}
@@ -795,6 +792,7 @@ function BookingDrawer({
   onMarkPaid,
   onCancel,
   onReschedule,
+  onRecordPayment,
 }: {
   booking: any;
   customerName: string;
@@ -805,8 +803,10 @@ function BookingDrawer({
   onMarkPaid: () => Promise<void>;
   onCancel: () => Promise<void>;
   onReschedule: (nextIso: string) => Promise<void>;
+  onRecordPayment: (amount: number) => Promise<void>;
 }) {
   const [rescheduleLocal, setRescheduleLocal] = useState('');
+  const [paymentAmount, setPaymentAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -859,6 +859,12 @@ function BookingDrawer({
               </div>
               <div className="text-sm font-semibold text-slate-50">${Number(invoice.total || 0).toFixed(2)}</div>
             </div>
+            {invoice.amount_paid != null && (
+              <div className="mt-1 text-[11px] text-slate-400">
+                Paid: ${Number(invoice.amount_paid || 0).toFixed(2)} • Due:{' '}
+                ${Number((invoice.balance_due ?? (Number(invoice.total || 0) - Number(invoice.amount_paid || 0))) || 0).toFixed(2)}
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -888,6 +894,44 @@ function BookingDrawer({
                 </button>
               )}
             </div>
+
+            {String(invoice.status) !== 'paid' && (
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                  Record payment / deposit
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    placeholder="Amount"
+                    inputMode="decimal"
+                    className="h-10 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={busy || !paymentAmount.trim()}
+                    onClick={async () => {
+                      try {
+                        const n = Number(paymentAmount);
+                        if (!Number.isFinite(n) || n <= 0) return;
+                        setBusy(true);
+                        setErr(null);
+                        await onRecordPayment(n);
+                        setPaymentAmount('');
+                      } catch (e: any) {
+                        setErr(e?.message ?? 'Failed to record payment.');
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
+import { createSmartInvoiceForBooking } from '../../../../lib/smartInvoice';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -115,44 +116,28 @@ export async function POST(request: Request) {
     // Non-fatal; booking still exists.
   }
 
-  // Create invoice + item (auto-invoice)
-  const invNum = `INV-${Date.now()}`;
-  const issueDate = new Date().toISOString().slice(0, 10);
-  const dueDate = issueDate;
-  const price = Number((svc as any).price) || 0;
-  const payload = {
-    business_id: businessId,
-    invoice_number: invNum,
-    client_name: clientName,
-    issue_date: issueDate,
-    due_date: dueDate,
-    status: 'sent',
-    subtotal: price,
-    tax: 0,
-    total: price,
-    notes: notes,
-    source: 'booking',
-    booking_id: (booking as any).id,
-  };
-
-  const { data: invoice, error: iErr } = await supabase
-    .from('invoices')
-    .insert(payload as any)
-    .select('id,business_id,invoice_number,status,total')
-    .single();
-  if (!iErr && invoice?.id) {
-    await supabase.from('invoice_items').insert({
-      invoice_id: invoice.id,
-      description: String((svc as any).name ?? 'Service'),
-      quantity: 1,
-      unit_price: price,
-    } as any);
+  // Create invoice + item using the existing Smart Invoice system logic (shared helper).
+  let invoice: any | null = null;
+  try {
+    invoice = await createSmartInvoiceForBooking({
+      supabase,
+      businessId,
+      bookingId: Number((booking as any).id),
+      clientName,
+      serviceName: String((svc as any).name ?? 'Service'),
+      price: Number((svc as any).price) || 0,
+      notes: notes,
+      startAtIso: startAt,
+      endAtIso: endAt,
+    });
 
     await supabase
       .from('bookings')
       .update({ invoice_id: invoice.id } as any)
       .eq('id', (booking as any).id)
       .eq('business_id', businessId);
+  } catch {
+    invoice = null;
   }
 
   return NextResponse.json({

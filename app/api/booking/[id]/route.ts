@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
+import { appendInvoiceNote } from '../../../../lib/smartInvoice';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -38,6 +39,8 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   const businessId = String(body?.businessId ?? '');
   const status = body?.status ? String(body.status) : null;
   const startAt = body?.startAt ? String(body.startAt) : null;
+  const paymentAmount = body?.paymentAmount === null || body?.paymentAmount === undefined ? null : Number(body.paymentAmount);
+  const markPaid = Boolean(body?.markPaid);
 
   if (!businessId) return NextResponse.json({ error: 'businessId is required' }, { status: 400 });
   if (startAt && !isIso(startAt)) return NextResponse.json({ error: 'startAt must be ISO' }, { status: 400 });
@@ -115,7 +118,78 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     }
   }
 
-  // Optional: mark invoice overdue/paid handled via invoice actions on client; keep booking endpoint focused.
+  // Sync invoice (1 booking = 1 invoice)
+  const invoiceId = Number((booking as any)?.invoice_id ?? 0) || null;
+  if (invoiceId) {
+    // cancel -> void the invoice
+    if (status === 'cancelled') {
+      await supabase
+        .from('invoices')
+        .update({ status: 'void' } as any)
+        .eq('business_id', businessId)
+        .eq('id', invoiceId);
+      try {
+        await appendInvoiceNote({
+          supabase,
+          businessId,
+          invoiceId,
+          line: `Booking cancelled at ${new Date().toISOString()}`,
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    // reschedule -> update invoice notes/metadata (no new invoice)
+    if (startAt && nextEnd) {
+      try {
+        await appendInvoiceNote({
+          supabase,
+          businessId,
+          invoiceId,
+          line: `Booking rescheduled to ${startAt} → ${nextEnd}`,
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    // payment/deposit -> update invoice amount_paid + status
+    if (markPaid || (paymentAmount !== null && Number.isFinite(paymentAmount) && paymentAmount > 0)) {
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id,total,amount_paid,status')
+        .eq('business_id', businessId)
+        .eq('id', invoiceId)
+        .maybeSingle();
+
+      if (inv) {
+        const total = Number((inv as any).total) || 0;
+        const prevPaid = Number((inv as any).amount_paid) || 0;
+        const add = markPaid ? Math.max(0, total - prevPaid) : Number(paymentAmount) || 0;
+        const nextPaid = Math.max(0, prevPaid + add);
+        const nextStatus = nextPaid >= total && total > 0 ? 'paid' : String((inv as any).status ?? 'sent');
+
+        await supabase
+          .from('invoices')
+          .update({ amount_paid: nextPaid, status: nextStatus } as any)
+          .eq('business_id', businessId)
+          .eq('id', invoiceId);
+
+        try {
+          await appendInvoiceNote({
+            supabase,
+            businessId,
+            invoiceId,
+            line: markPaid ? 'Payment recorded: paid in full.' : `Payment recorded: $${add.toFixed(2)}`,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
   return NextResponse.json({ booking: updated });
 }
 
