@@ -154,35 +154,51 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       }
     }
 
-    // payment/deposit -> update invoice amount_paid + status
+    // payment/deposit -> update invoice status (schema-safe: amount_paid may not exist yet)
     if (markPaid || (paymentAmount !== null && Number.isFinite(paymentAmount) && paymentAmount > 0)) {
-      const { data: inv } = await supabase
-        .from('invoices')
-        .select('id,total,amount_paid,status')
-        .eq('business_id', businessId)
-        .eq('id', invoiceId)
-        .maybeSingle();
+      // Always append a note; then try updating amount_paid if column exists, otherwise fall back to status-only.
+      const add = markPaid ? null : Number(paymentAmount) || 0;
+      try {
+        await appendInvoiceNote({
+          supabase,
+          businessId,
+          invoiceId,
+          line: markPaid ? 'Payment recorded: marked paid.' : `Payment recorded: $${Number(add || 0).toFixed(2)}`,
+        });
+      } catch {
+        // ignore
+      }
 
-      if (inv) {
-        const total = Number((inv as any).total) || 0;
-        const prevPaid = Number((inv as any).amount_paid) || 0;
-        const add = markPaid ? Math.max(0, total - prevPaid) : Number(paymentAmount) || 0;
-        const nextPaid = Math.max(0, prevPaid + add);
-        const nextStatus = nextPaid >= total && total > 0 ? 'paid' : String((inv as any).status ?? 'sent');
-
-        await supabase
+      if (markPaid) {
+        // If schema supports it, mark paid.
+        // eslint-disable-next-line no-console
+        console.log('BOOKING_PAYMENT_MARK_PAID', { invoiceId });
+        const { error: updErr } = await supabase
           .from('invoices')
-          .update({ amount_paid: nextPaid, status: nextStatus } as any)
+          .update({ status: 'paid' } as any)
           .eq('business_id', businessId)
           .eq('id', invoiceId);
-
+        if (updErr) {
+          // Non-fatal; booking update should still succeed.
+        }
+      } else {
+        // Attempt to update amount_paid if the column exists; ignore schema errors.
         try {
-          await appendInvoiceNote({
-            supabase,
-            businessId,
-            invoiceId,
-            line: markPaid ? 'Payment recorded: paid in full.' : `Payment recorded: $${add.toFixed(2)}`,
-          });
+          const { data: inv, error: selErr } = await supabase
+            .from('invoices')
+            .select('id,total,amount_paid,status')
+            .eq('business_id', businessId)
+            .eq('id', invoiceId)
+            .maybeSingle();
+          if (!selErr && inv) {
+            const prevPaid = Number((inv as any).amount_paid) || 0;
+            const nextPaid = Math.max(0, prevPaid + Number(add || 0));
+            await supabase
+              .from('invoices')
+              .update({ amount_paid: nextPaid } as any)
+              .eq('business_id', businessId)
+              .eq('id', invoiceId);
+          }
         } catch {
           // ignore
         }

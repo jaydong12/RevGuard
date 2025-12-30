@@ -54,7 +54,8 @@ export async function createSmartInvoiceForBooking(params: {
   const { data: invoice, error: iErr } = await supabase
     .from('invoices')
     .insert(payload)
-    .select('id,business_id,invoice_number,status,total,amount_paid,balance_due,booking_id,source,notes')
+    // Schema-safe: some DBs may not have amount_paid/balance_due yet.
+    .select('*')
     .single();
 
   if (iErr || !invoice?.id) throw iErr ?? new Error('Failed to create invoice');
