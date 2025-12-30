@@ -88,14 +88,15 @@ export default function BookingsPage() {
   const { businessId, customers } = useAppData();
 
   type TabKey = 'calendar' | 'list' | 'services' | 'availability';
-  type ViewKey = 'week' | 'month' | 'day';
 
   const [tab, setTab] = useState<TabKey>('calendar');
-  const [view, setView] = useState<ViewKey>('week');
   const [focusDate, setFocusDate] = useState(() => new Date());
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
+
+  const [dayPanelOpen, setDayPanelOpen] = useState(false);
+  const [dayPanelKey, setDayPanelKey] = useState<string | null>(null); // YYYY-MM-DD
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createServiceId, setCreateServiceId] = useState<string | null>(null);
@@ -147,18 +148,11 @@ export default function BookingsPage() {
   }
 
   function rangeForView() {
-    if (view === 'day') {
-      const s = new Date(focusDate);
-      s.setHours(0, 0, 0, 0);
-      const e = new Date(focusDate);
-      e.setHours(23, 59, 59, 999);
-      return { from: s, to: e };
-    }
-    if (view === 'month') return { from: startOfMonth(focusDate), to: endOfMonth(focusDate) };
-    return { from: startOfWeek(focusDate), to: endOfWeek(focusDate) };
+    // Calendar is month-only.
+    return { from: startOfMonth(focusDate), to: endOfMonth(focusDate) };
   }
 
-  const { from, to } = useMemo(() => rangeForView(), [focusDate, view]);
+  const { from, to } = useMemo(() => rangeForView(), [focusDate]);
   const fromIso = useMemo(() => from.toISOString(), [from]);
   const toIso = useMemo(() => to.toISOString(), [to]);
 
@@ -242,6 +236,16 @@ export default function BookingsPage() {
     }
     return m;
   }, [invoicesQ.data]);
+
+  const bookingsByDay = useMemo(() => {
+    const m = new Map<string, any[]>();
+    for (const b of (bookingsQ.data ?? []) as any[]) {
+      const d = new Date(b.start_at);
+      const key = d.toISOString().slice(0, 10);
+      m.set(key, [...(m.get(key) ?? []), b]);
+    }
+    return m;
+  }, [bookingsQ.data]);
 
   const stats = useMemo(() => {
     const all = (bookingsQ.data ?? []) as any[];
@@ -507,8 +511,7 @@ export default function BookingsPage() {
                   type="button"
                   onClick={() => setFocusDate((d) => {
                     const x = new Date(d);
-                    if (view === 'month') x.setMonth(x.getMonth() - 1);
-                    else x.setDate(x.getDate() - (view === 'day' ? 1 : 7));
+                    x.setMonth(x.getMonth() - 1);
                     return x;
                   })}
                   className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
@@ -526,8 +529,7 @@ export default function BookingsPage() {
                   type="button"
                   onClick={() => setFocusDate((d) => {
                     const x = new Date(d);
-                    if (view === 'month') x.setMonth(x.getMonth() + 1);
-                    else x.setDate(x.getDate() + (view === 'day' ? 1 : 7));
+                    x.setMonth(x.getMonth() + 1);
                     return x;
                   })}
                   className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
@@ -539,10 +541,8 @@ export default function BookingsPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <SegmentButton is_active={view === 'day'} onClick={() => setView('day')}>Day</SegmentButton>
-                <SegmentButton is_active={view === 'week'} onClick={() => setView('week')}>Week</SegmentButton>
-                <SegmentButton is_active={view === 'month'} onClick={() => setView('month')}>Month</SegmentButton>
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                Month view
               </div>
             </div>
 
@@ -554,10 +554,13 @@ export default function BookingsPage() {
               />
             ) : (
               <CalendarView
-                view={view}
                 focusDate={focusDate}
                 bookings={bookings}
-                onSelectBooking={openBooking}
+                bookingsByDay={bookingsByDay}
+                onSelectDay={(dayKey) => {
+                  setDayPanelKey(dayKey);
+                  setDayPanelOpen(true);
+                }}
               />
             )}
           </div>
@@ -648,6 +651,22 @@ export default function BookingsPage() {
           }}
           onRecordPayment={async (amount) => {
             await patchBooking(Number(activeBooking.id), { paymentAmount: amount });
+          }}
+        />
+      )}
+
+      {dayPanelOpen && dayPanelKey && (
+        <DayBookingsPanel
+          dayKey={dayPanelKey}
+          bookings={bookingsByDay.get(dayPanelKey) ?? []}
+          onClose={() => {
+            setDayPanelOpen(false);
+            setDayPanelKey(null);
+          }}
+          onSelectBooking={(b) => {
+            setDayPanelOpen(false);
+            setDayPanelKey(null);
+            openBooking(b);
           }}
         />
       )}
@@ -857,28 +876,6 @@ function TabButton({
   );
 }
 
-function SegmentButton({
-  is_active,
-  onClick,
-  children,
-}: {
-  is_active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
-        is_active ? 'bg-white/10 text-slate-50' : 'border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function EmptyCard({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-10 text-center">
@@ -892,101 +889,143 @@ function EmptyCard({ icon, title, subtitle }: { icon: React.ReactNode; title: st
 }
 
 function CalendarView({
-  view,
   focusDate,
   bookings,
-  onSelectBooking,
+  bookingsByDay,
+  onSelectDay,
 }: {
-  view: 'week' | 'month' | 'day';
   focusDate: Date;
   bookings: any[];
-  onSelectBooking: (b: any) => void;
+  bookingsByDay: Map<string, any[]>;
+  onSelectDay: (dayKey: string) => void;
 }) {
-  const byDay = useMemo(() => {
-    const m = new Map<string, any[]>();
-    for (const b of bookings) {
-      const d = new Date(b.start_at);
-      const key = d.toISOString().slice(0, 10);
-      m.set(key, [...(m.get(key) ?? []), b]);
-    }
-    return m;
-  }, [bookings]);
+  // Month-only view (no adjacent month days).
+  const first = new Date(focusDate.getFullYear(), focusDate.getMonth(), 1);
+  const last = new Date(focusDate.getFullYear(), focusDate.getMonth() + 1, 0);
+  const firstDow = first.getDay(); // 0=Sun
+  const daysInMonth = last.getDate();
 
-  if (view === 'day') {
-    const k = new Date(focusDate).toISOString().slice(0, 10);
-    const rows = byDay.get(k) ?? [];
-    return (
-      <div className="space-y-2">
-        {rows.map((b) => (
-          <button
-            key={b.id}
-            type="button"
-            onClick={() => onSelectBooking(b)}
-            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left hover:bg-white/10"
-          >
-            <div className="text-sm font-semibold text-slate-100">
-              {new Date(b.start_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} • Booking #{b.id}
-            </div>
-            <div className="mt-1 text-xs text-slate-400">{String(b.status)}</div>
-          </button>
-        ))}
-      </div>
-    );
-  }
+  const totalCells = Math.ceil((firstDow + daysInMonth) / 7) * 7; // pad to whole weeks
+  const cells: Array<Date | null> = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) cells.push(new Date(focusDate.getFullYear(), focusDate.getMonth(), day));
+  while (cells.length < totalCells) cells.push(null);
 
-  // week/month: simple grid, showing booking chips
-  const days: Date[] = [];
-  if (view === 'week') {
-    const start = new Date(focusDate);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - start.getDay());
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      days.push(d);
-    }
-  } else {
-    const first = new Date(focusDate.getFullYear(), focusDate.getMonth(), 1);
-    const start = new Date(first);
-    start.setDate(first.getDate() - first.getDay());
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      days.push(d);
-    }
-  }
+  const headers = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  const cols = view === 'week' ? 7 : 7;
   return (
-    <div className={`grid gap-2`} style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-      {days.map((d) => {
+    <div className="grid grid-cols-7 gap-2">
+      {headers.map((h) => (
+        <div key={h} className="px-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+          {h}
+        </div>
+      ))}
+      {cells.map((d, idx) => {
+        if (!d) {
+          return <div key={`empty-${idx}`} className="rounded-xl border border-white/10 bg-white/[0.02] p-2" />;
+        }
         const key = d.toISOString().slice(0, 10);
-        const rows = byDay.get(key) ?? [];
-        const inMonth = d.getMonth() === focusDate.getMonth();
+        const rows = bookingsByDay.get(key) ?? [];
+        const todayKey = new Date().toISOString().slice(0, 10);
+        const isToday = key === todayKey;
+
         return (
-          <div key={key} className={`rounded-xl border border-white/10 bg-white/5 p-2 ${!inMonth && view === 'month' ? 'opacity-60' : ''}`}>
+          <button
+            key={key}
+            type="button"
+            onClick={() => onSelectDay(key)}
+            className="rounded-xl border border-white/10 bg-white/5 p-2 text-left hover:bg-white/10"
+          >
             <div className="flex items-center justify-between">
-              <div className="text-[11px] text-slate-300 tabular-nums">{d.getDate()}</div>
-              {rows.length > 0 && (
-                <div className="text-[11px] text-slate-400">{rows.length}</div>
-              )}
+              <div className={`text-[11px] ${isToday ? 'text-emerald-200' : 'text-slate-400'}`}>{d.getDate()}</div>
+              {rows.length > 0 && <div className="text-[11px] text-slate-400">{rows.length}</div>}
             </div>
             <div className="mt-2 space-y-1">
-              {rows.slice(0, 3).map((b) => (
-                <button
+              {rows.slice(0, 2).map((b) => (
+                <div
                   key={b.id}
-                  type="button"
-                  onClick={() => onSelectBooking(b)}
-                  className="w-full truncate rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-left text-[11px] text-emerald-100 hover:bg-emerald-500/15"
+                  className="truncate rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-100"
+                  title={String(b.customer_name ?? '')}
                 >
-                  {new Date(b.start_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} • #{b.id}
-                </button>
+                  {new Date(b.start_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} •{' '}
+                  {String(b.customer_name ?? 'Customer')}
+                </div>
               ))}
-              {rows.length > 3 && <div className="text-[11px] text-slate-400">+{rows.length - 3} more</div>}
+              {rows.length > 2 && <div className="text-[11px] text-slate-400">+{rows.length - 2} more</div>}
             </div>
-          </div>
+          </button>
         );
       })}
+    </div>
+  );
+}
+
+function DayBookingsPanel({
+  dayKey,
+  bookings,
+  onClose,
+  onSelectBooking,
+}: {
+  dayKey: string;
+  bookings: any[];
+  onClose: () => void;
+  onSelectBooking: (b: any) => void;
+}) {
+  const label = useMemo(() => {
+    const d = new Date(`${dayKey}T00:00:00`);
+    return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' });
+  }, [dayKey]);
+
+  const sorted = useMemo(() => {
+    return [...(bookings ?? [])].sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
+  }, [bookings]);
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full max-w-md bg-slate-950 border-l border-white/10 p-5 overflow-y-auto">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Day</div>
+            <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">{label}</div>
+            <div className="mt-1 text-sm text-slate-300">
+              {sorted.length === 0 ? 'No bookings.' : `${sorted.length} booking${sorted.length === 1 ? '' : 's'}`}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {sorted.map((b) => (
+            <button
+              key={b.id}
+              type="button"
+              onClick={() => onSelectBooking(b)}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left hover:bg-white/10"
+            >
+              <div className="text-sm font-semibold text-slate-100">
+                {new Date(b.start_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} •{' '}
+                {String(b.customer_name ?? 'Customer')}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                {String(b.status)}{b.notes ? ` • ${String(b.notes)}` : ''}
+              </div>
+            </button>
+          ))}
+
+          {sorted.length === 0 && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
+              No bookings on this day yet.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
