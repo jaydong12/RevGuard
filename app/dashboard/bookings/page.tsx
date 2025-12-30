@@ -1257,6 +1257,8 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const pageSize = 5;
 
   function hoursToMinutes(raw: string): number {
     const n = Number(raw);
@@ -1331,6 +1333,7 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
       setName('');
       setDurationHours('');
       setPrice('');
+      setPage(1);
       await queryClient.invalidateQueries({ queryKey: ['services', businessId] });
     } catch (e: any) {
       // eslint-disable-next-line no-console
@@ -1359,52 +1362,28 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     return `${raw} = ${minutesToHuman(mins)}`;
   }, [durationHours]);
 
+  const sortedServices = useMemo(() => {
+    return [...(services ?? [])].sort((a: any, b: any) => {
+      const ta = new Date(a?.created_at ?? 0).getTime();
+      const tb = new Date(b?.created_at ?? 0).getTime();
+      return tb - ta;
+    });
+  }, [services]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedServices.length / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+    if (page < 1) setPage(1);
+  }, [page, totalPages]);
+
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedServices.slice(start, start + pageSize);
+  }, [sortedServices, page]);
+
   return (
     <div className="space-y-6">
-      {/* List */}
-      {services.length === 0 ? (
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-10 text-center">
-          <div className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-            <SlidersHorizontal className="h-5 w-5 text-slate-300/80" />
-          </div>
-          <div className="mt-3 text-lg font-semibold text-slate-50 tracking-tight">
-            No services yet
-          </div>
-          <div className="mt-1 text-sm text-slate-300">
-            Add your first service to start creating bookings and auto‑invoices.
-          </div>
-          <div className="mt-4 flex justify-center">
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  (document.getElementById('rg-add-service-name') as HTMLInputElement | null)?.focus?.();
-                } catch {
-                  // ignore
-                }
-              }}
-              className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
-            >
-              Add your first service
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {services.map((s: any) => {
-            const mins = Number(s.duration_minutes || 60);
-            return (
-              <div key={s.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                <div className="text-sm font-semibold text-slate-100">{s.name}</div>
-                <div className="mt-1 text-xs text-slate-400">
-                  {minutesToHuman(mins)} • ${(Number(s.price_cents || 0) / 100).toFixed(2)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
       {/* Form */}
       <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
         <div className="flex items-start justify-between gap-4">
@@ -1499,6 +1478,68 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
             {saving ? 'Saving…' : 'Add service'}
           </button>
         </div>
+      </div>
+
+      {/* List (below form) */}
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Services</div>
+            <div className="mt-1 text-sm text-slate-300">
+              {sortedServices.length === 0 ? 'No services yet.' : `${sortedServices.length} total`}
+            </div>
+          </div>
+
+          {sortedServices.length > 0 && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <div className="text-xs text-slate-400 tabular-nums">
+                Page {page} / {totalPages}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+
+        {sortedServices.length === 0 ? (
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] px-6 py-10 text-center">
+            <div className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
+              <SlidersHorizontal className="h-5 w-5 text-slate-300/80" />
+            </div>
+            <div className="mt-3 text-lg font-semibold text-slate-50 tracking-tight">Add your first service</div>
+            <div className="mt-1 text-sm text-slate-300">
+              Create services so bookings can auto‑invoice the right amount.
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            {pageRows.map((s: any) => {
+              const mins = Number(s.duration_minutes || 60);
+              return (
+                <div key={s.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-100">{s.name}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {minutesToHuman(mins)} • ${(Number(s.price_cents || 0) / 100).toFixed(2)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
