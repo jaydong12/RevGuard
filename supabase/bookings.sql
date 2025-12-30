@@ -274,10 +274,13 @@ create table if not exists public.calendar_events (
   title text not null,
   start_at timestamptz not null,
   end_at timestamptz not null,
-  timezone text not null default 'UTC',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Backward-compat: older deployments may have a `timezone` column; remove it if present.
+alter table if exists public.calendar_events
+  drop column if exists timezone;
 
 do $$
 begin

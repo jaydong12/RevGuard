@@ -53,7 +53,7 @@ export async function GET(request: Request) {
 
   let q = supabase
     .from('calendar_events')
-    .select('id,title,start_at,end_at,timezone,booking_id')
+    .select('id,title,start_at,end_at,booking_id')
     .eq('business_id', businessId)
     .order('start_at', { ascending: true });
   if (from) q = q.gte('start_at', from);

@@ -136,7 +136,6 @@ export async function POST(request: Request) {
       title,
       start_at: startAt,
       end_at: endAt,
-      timezone: 'UTC',
     } as any)
     .select('*')
     .single();
