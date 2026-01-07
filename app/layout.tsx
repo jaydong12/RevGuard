@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import RootShell from "../components/RootShell";
-import { ClientCrashOverlay } from "../components/ClientCrashOverlay";
 
 export const dynamic = "force-dynamic";
 
@@ -39,8 +38,6 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <RootShell>{children}</RootShell>
-        {/* Ensure crash overlay mounts for ALL routes, including /dashboard */}
-        <ClientCrashOverlay />
       </body>
     </html>
   );

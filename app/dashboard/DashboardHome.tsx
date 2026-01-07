@@ -1,11 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
-// Build stamp for prod verification. If you don't see this in the browser console,
-// you're deploying the wrong commit/project/branch.
-// eslint-disable-next-line no-console
-console.log('DASH_BUILD', '2026-01-07-1');
-
 // Home dashboard page: the primary RevGuard view with cash insights, CSV import,
 // financial statements, daily log, and AI helpers. This file was originally a
 // single monolithic page; changes here focus on:
@@ -21,8 +16,7 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-// TEMP: disable CashOverview import entirely (prod crash isolation).
-// import { CashOverviewGate } from '../../components/CashOverviewGate';
+import { CashOverviewGate } from '../../components/CashOverviewGate';
 import { IncomeStatementCard } from '../../components/IncomeStatementCard';
 import { BalanceSheetCard } from '../../components/BalanceSheetCard';
 import { CashFlowCard } from '../../components/CashFlowCard';
@@ -287,9 +281,9 @@ function getMonthlySummaries(transactions: Transaction[]): MonthSummary[] {
     { income: number; expenses: number; net: number }
   >();
   for (const tx of transactions) {
-    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
-    if (!dateStr) continue;
-    const monthKey = (dateStr ?? '').slice(0, 7);
+    const dateStr = (tx as any)?.date;
+    if (typeof dateStr !== 'string' || !dateStr) continue; // prod can have null date; never slice null
+    const monthKey = dateStr.slice(0, 7);
     if (!map.has(monthKey)) {
       map.set(monthKey, { income: 0, expenses: 0, net: 0 });
     }
@@ -317,9 +311,9 @@ function getYearSummaries(transactions: Transaction[]): YearSummary[] {
     { income: number; expenses: number; net: number }
   >();
   for (const tx of transactions) {
-    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
-    if (!dateStr) continue;
-    const year = (dateStr ?? '').slice(0, 4);
+    const dateStr = (tx as any)?.date;
+    if (typeof dateStr !== 'string' || !dateStr) continue; // prod can have null date; never slice null
+    const year = dateStr.slice(0, 4);
     if (!map.has(year)) {
       map.set(year, { income: 0, expenses: 0, net: 0 });
     }
@@ -361,9 +355,9 @@ function getYearlyCashSeries(
   }
   const netByMonth = new Map<string, number>();
   for (const tx of transactions) {
-    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
-    if (!dateStr) continue;
-    const key = (dateStr ?? '').slice(0, 7);
+    const dateStr = (tx as any)?.date;
+    if (typeof dateStr !== 'string' || !dateStr) continue; // prod can have null date; never slice null
+    const key = dateStr.slice(0, 7);
     netByMonth.set(key, (netByMonth.get(key) ?? 0) + tx.amount);
   }
   let runningCash = 0;
@@ -394,18 +388,19 @@ function getMonthCashSeriesByKey(
 ): { label: string; value: number }[] {
   const txs = (transactions ?? [])
     .filter((tx) => {
-      const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
-      return Boolean(dateStr) && (dateStr ?? '').slice(0, 7) === monthKey;
+      const dateStr = (tx as any)?.date;
+      if (typeof dateStr !== 'string' || !dateStr) return false;
+      return dateStr.slice(0, 7) === monthKey;
     })
     .sort((a, b) => String((a as any)?.date ?? '').localeCompare(String((b as any)?.date ?? '')));
   if (txs.length === 0) return [];
   const netByDay = new Map<string, number>();
   for (const tx of txs) {
-    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
-    if (!dateStr) continue;
+    const dateStr = (tx as any)?.date;
+    if (typeof dateStr !== 'string' || !dateStr) continue; // prod can have null date; never slice null
     const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) continue;
-    const key = (dateStr ?? '').slice(0, 10); // YYYY-MM-DD
+    const key = dateStr.slice(0, 10); // YYYY-MM-DD
     netByDay.set(key, (netByDay.get(key) ?? 0) + tx.amount);
   }
   const sortedDays = Array.from(netByDay.keys()).sort();
@@ -2882,8 +2877,7 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
           </div>
         </section>
 
-        {/* TEMP: disable CashOverview to confirm dashboard no longer crashes. */}
-        {null}
+        <CashOverviewGate />
 
         {/* Financial statements */}
         <section className="mb-8 bg-slate-950/80 border border-slate-800 rounded-2xl p-4 text-xs">

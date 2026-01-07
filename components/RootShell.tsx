@@ -7,7 +7,6 @@ import KeepAliveTabs from './KeepAliveTabs';
 import ReactQueryProvider from './ReactQueryProvider';
 import { AppDataProvider } from './AppDataProvider';
 import { ToastProvider } from './ToastProvider';
-import { ClientCrashOverlay } from './ClientCrashOverlay';
 
 type Props = {
   children: React.ReactNode;
@@ -45,7 +44,6 @@ export default function RootShell({ children }: Props) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-50">
         <div className="max-w-6xl mx-auto px-4 py-10">{children}</div>
-        <ClientCrashOverlay />
       </div>
     );
   }
@@ -57,7 +55,6 @@ export default function RootShell({ children }: Props) {
         <ToastProvider>
           <div className="min-h-screen bg-slate-950 text-slate-50">
             <div className="max-w-3xl mx-auto px-4 py-10">{children}</div>
-            <ClientCrashOverlay />
           </div>
         </ToastProvider>
       </ReactQueryProvider>
@@ -77,7 +74,6 @@ export default function RootShell({ children }: Props) {
             <KeepAliveTabs>{children}</KeepAliveTabs>
           </AppDataProvider>
         </AppLayout>
-        <ClientCrashOverlay />
       </ToastProvider>
     </ReactQueryProvider>
   );
