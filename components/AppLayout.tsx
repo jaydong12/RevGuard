@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { supabase } from '../utils/supabaseClient';
+import { getSupabaseClient, getSupabaseEnvError } from '../utils/supabaseClient';
 
 function setAuthCookie(token: string | null) {
   try {
@@ -29,6 +29,7 @@ type NavItem = {
     | 'dashboard'
     | 'transactions'
     | 'bookings'
+    | 'workers'
     | 'invoices'
     | 'bills'
     | 'customers'
@@ -42,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: 'dashboard' },
   { label: 'Transactions', href: '/transactions', icon: 'transactions' },
   { label: 'Bookings', href: '/dashboard/bookings', icon: 'bookings' },
+  { label: 'Workers', href: '/workers', icon: 'workers' },
   { label: 'Invoices', href: '/invoices', icon: 'invoices' },
   { label: 'Bills', href: '/bills', icon: 'bills' },
   { label: 'Customers', href: '/customers', icon: 'customers' },
@@ -111,6 +113,30 @@ function NavIcon({ name }: { name: NavItem['icon'] }) {
           stroke="currentColor"
           strokeWidth="2"
           strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (name === 'workers') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M16 11a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M4.5 20c1.2-3.3 13.8-3.3 15 0"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M20.5 10.8a2.3 2.3 0 1 1-4.6 0"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          opacity="0.7"
         />
       </svg>
     );
@@ -221,7 +247,10 @@ function NavIcon({ name }: { name: NavItem['icon'] }) {
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const supabase = getSupabaseClient();
+  const supabaseEnvError = getSupabaseEnvError();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [memberRole, setMemberRole] = useState<string | null>(null);
   const [appResetKey, setAppResetKey] = useState(0);
   const [subscriptionActive, setSubscriptionActive] = useState<boolean>(true);
   const [subscriptionChecked, setSubscriptionChecked] = useState<boolean>(false);
@@ -243,7 +272,45 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // user_activity ping lives in <UserActivityPing /> (10-min heartbeat)
+
+  // Membership role (business_members) determines nav visibility for sub-accounts.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadMemberRole() {
+      try {
+        if (!sessionUserId) return;
+        if (!supabase) return;
+        const { data, error } = await supabase
+          .from('business_members')
+          .select('role')
+          .eq('user_id', sessionUserId)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          setMemberRole(null);
+          return;
+        }
+        const r = String((data as any)?.role ?? '').toLowerCase();
+        setMemberRole(r || null);
+      } catch {
+        if (!cancelled) setMemberRole(null);
+      }
+    }
+    void loadMemberRole();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionUserId]);
+
+  const navItems = memberRole === 'employee'
+    ? ([{ label: 'Clock', href: '/clock', icon: 'workers' }] as NavItem[])
+    : NAV_ITEMS;
+
   async function getSubscriptionActiveForOwner(userId: string): Promise<boolean> {
+    if (!supabase) return false;
     const first = await supabase
       .from('business')
       .select('id, subscription_status')
@@ -307,6 +374,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const sb = supabase;
 
     async function checkSubscription(session: any | null) {
       try {
@@ -337,15 +405,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
     }
 
+    if (!sb) {
+      setSessionUserId(null);
+      setAuthCookie(null);
+      setSubscriptionActive(false);
+      setSubscriptionChecked(true);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    const sbn = sb;
+
     (async () => {
-      const { data } = await supabase.auth.getSession();
+      const { data } = await sbn.auth.getSession();
       if (!mounted) return;
       setSessionUserId(data.session?.user?.id ?? null);
       setAuthCookie(data.session?.access_token ?? null);
       void checkSubscription(data.session ?? null);
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = sbn.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       const nextUserId = session?.user?.id ?? null;
 
@@ -362,7 +442,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     function onFocus() {
       // Re-check on focus so users returning from Stripe can unlock without a hard refresh.
-      void supabase.auth.getSession().then(({ data }) => checkSubscription(data.session ?? null));
+      void sbn.auth.getSession().then(({ data }) => checkSubscription(data.session ?? null));
     }
     window.addEventListener('focus', onFocus);
 
@@ -371,7 +451,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       sub.subscription.unsubscribe();
       window.removeEventListener('focus', onFocus);
     };
-  }, []);
+  }, [supabase, sessionUserId]);
 
   useEffect(() => {
     // NOTE: We no longer hard-redirect users to /pricing when subscription is inactive.
@@ -383,6 +463,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Auto-unlock: while paywalled, poll periodically so Stripe webhook changes take effect without refresh.
     if (!subscriptionChecked) return;
     if (subscriptionActive) return;
+    if (!supabase) return;
 
     let cancelled = false;
     const interval = window.setInterval(() => {
@@ -413,6 +494,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen bg-slate-950 text-slate-50" />;
   }
 
+  if (supabaseEnvError) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-50">
+        <div className="max-w-3xl mx-auto px-4 py-10">
+          <div className="rounded-2xl border border-rose-500/40 bg-rose-950/20 p-5">
+            <div className="text-sm font-semibold text-rose-100">Configuration error</div>
+            <div className="mt-2 text-sm text-rose-200/90 leading-relaxed">
+              {supabaseEnvError}
+            </div>
+            <div className="mt-4 text-xs text-rose-200/80">
+              This usually happens when Vercel env vars are missing or named incorrectly.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex bg-slate-950 text-slate-50">
       {/* Sidebar */}
@@ -421,8 +520,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           sidebarCollapsed ? 'w-16 px-2' : 'w-60 px-4'
         }`}
       >
-        <div className="mb-6">
-          <div className="flex items-center justify-between gap-2">
+        <div className="mb-4">
+          <div className="flex h-12 items-center justify-between gap-3">
             <Link
               href="/dashboard"
               className="flex items-center gap-2 min-w-0 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
@@ -430,7 +529,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               title="Go to dashboard"
             >
               <Image
-                src="/icon.png"
+                src="/logo.png"
                 alt="RevGuard"
                 width={32}
                 height={32}
@@ -449,53 +548,52 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               ) : null}
             </Link>
 
-            <button
-              type="button"
-              onClick={toggleSidebarCollapsed}
-              className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950/40 p-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                className="h-4 w-4"
-                aria-hidden="true"
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleSidebarCollapsed}
+                className="inline-flex items-center justify-center rounded-xl border border-slate-800 bg-slate-950/40 p-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
+                aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
               >
-                <path
-                  d={sidebarCollapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'}
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
+                  <path
+                    d={sidebarCollapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1 text-sm overflow-y-auto pr-1">
-          {NAV_ITEMS.map((item) => {
-            const active = isActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                title={sidebarCollapsed ? item.label : undefined}
-                className={`flex items-center rounded-xl py-2 transition-colors ${
-                  active
-                    ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40 shadow-sm shadow-emerald-500/40'
-                    : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
-                } ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
-              >
-                <NavIcon name={item.icon} />
-                <span className={sidebarCollapsed ? 'hidden' : 'truncate'}>
-                  {item.label}
-                </span>
-              </Link>
-            );
-          })}
-        </nav>
+        <div className="flex-1 overflow-hidden">
+          <nav className="h-full space-y-1 text-sm overflow-y-auto pr-1">
+            {navItems.map((item) => {
+              const active = isActive(pathname, item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  title={sidebarCollapsed ? item.label : undefined}
+                  className={`flex items-center rounded-xl py-2 transition-colors ${
+                    active
+                      ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40 shadow-sm shadow-emerald-500/40'
+                      : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
+                  } ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
+                >
+                  <NavIcon name={item.icon} />
+                  <span className={sidebarCollapsed ? 'hidden' : 'truncate'}>
+                    {item.label}
+                  </span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
       </aside>
 
       {/* Main content */}
@@ -507,7 +605,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             aria-label="Go to dashboard"
           >
             <Image
-              src="/icon.png"
+              src="/logo.png"
               alt="RevGuard"
               width={28}
               height={28}
@@ -576,7 +674,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <nav className="mt-4 space-y-1 text-sm max-h-[70vh] overflow-y-auto pr-1">
-              {NAV_ITEMS.map((item) => {
+              {navItems.map((item) => {
                 const active = isActive(pathname, item.href);
                 return (
                   <Link

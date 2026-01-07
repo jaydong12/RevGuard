@@ -4,17 +4,18 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../../../utils/supabaseClient';
 import { useAppData } from '../../../components/AppDataProvider';
+import { useToast } from '../../../components/ToastProvider';
 import {
   CalendarDays,
   CalendarRange,
   Clock,
   DollarSign,
-  Download,
   LayoutGrid,
   List,
   Plus,
-  Settings2,
+  Pencil,
   SlidersHorizontal,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -31,6 +32,34 @@ function formatLocalPretty(iso: string): string {
   const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
   return `${date} · ${time}`;
+}
+
+function safeTimeLabel(iso: any): string {
+  const d = new Date(String(iso ?? ''));
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function safeWhenLabel(iso: any): string {
+  const d = new Date(String(iso ?? ''));
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function formatNotesForDisplay(notes: any): string {
+  const s = String(notes ?? '').trim();
+  if (!s) return '';
+  return s.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (m) => formatLocalPretty(m));
+}
+
+function formatNotesInline(notes: any): string {
+  const s = formatNotesForDisplay(notes);
+  if (!s) return '';
+  return s.replace(/\s*\n+\s*/g, ' • ').slice(0, 140);
+}
+
+function isMissingColumnError(err: any) {
+  return String(err?.code ?? '') === '42703' || /column .* does not exist/i.test(String(err?.message ?? ''));
 }
 
 function formatMaskedStart(digits: string, ampm: AmPm): string {
@@ -82,18 +111,39 @@ function parseMaskedDigitsToIso(digits: string, ampm: AmPm): string | null {
   return d.toISOString();
 }
 
+function formatMaskedStartCompact(digits: string, ampm: AmPm): string {
+  const ds = String(digits ?? '').replace(/\D/g, '').slice(0, 12);
+  const m1 = ds[0] ?? '_';
+  const m2 = ds[1] ?? '_';
+  const d1 = ds[2] ?? '_';
+  const d2 = ds[3] ?? '_';
+  const y1 = ds[4] ?? '_';
+  const y2 = ds[5] ?? '_';
+  const y3 = ds[6] ?? '_';
+  const y4 = ds[7] ?? '_';
+  const h1 = ds[8] ?? '_';
+  const h2 = ds[9] ?? '_';
+  const n1 = ds[10] ?? '_';
+  const n2 = ds[11] ?? '_';
+  return `${m1}${m2}/${d1}${d2}/${y1}${y2}${y3}${y4} ${h1}${h2}:${n1}${n2} ${ampm}`;
+}
+
 export default function BookingsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
   const { businessId, customers } = useAppData();
 
-  type TabKey = 'calendar' | 'list' | 'services' | 'availability';
+  type TabKey = 'calendar' | 'list' | 'services';
 
   const [tab, setTab] = useState<TabKey>('calendar');
   const [focusDate, setFocusDate] = useState(() => new Date());
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [activeBooking, setActiveBooking] = useState<any | null>(null);
+  const [listPage, setListPage] = useState(1);
+  const listPageSize = 10;
+  const [paidBusyId, setPaidBusyId] = useState<string | null>(null);
 
   const [dayPanelOpen, setDayPanelOpen] = useState(false);
   const [dayPanelKey, setDayPanelKey] = useState<string | null>(null); // YYYY-MM-DD
@@ -166,21 +216,7 @@ export default function BookingsPage() {
         .eq('business_id', businessId!)
         .eq('is_active', true)
         .order('created_at', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as any[];
-    },
-  });
-
-  const availabilityQ = useQuery({
-    queryKey: ['availability_rules', businessId],
-    enabled: Boolean(businessId),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('availability_rules')
-        .select('*')
-        .eq('business_id', businessId!)
-        .order('day_of_week', { ascending: true });
-      if (error) throw error;
+      if (error) throw new Error(error.message ?? 'Failed to load services.');
       return (data ?? []) as any[];
     },
   });
@@ -196,8 +232,65 @@ export default function BookingsPage() {
         .gte('start_at', fromIso)
         .lte('start_at', toIso)
         .order('start_at', { ascending: true });
-      if (error) throw error;
+      if (error) throw new Error(error.message ?? 'Failed to load bookings.');
       return (data ?? []) as any[];
+    },
+  });
+
+  // Upcoming count is global (not limited to the currently viewed month).
+  const upcomingCountQ = useQuery({
+    queryKey: ['bookings_upcoming_count', businessId],
+    enabled: Boolean(businessId),
+    refetchInterval: 60_000, // time-based drift (bookings crossing "now") + keep it feeling live
+    queryFn: async () => {
+      const nowIso = new Date().toISOString();
+      const { count, error } = await supabase
+        .from('bookings')
+        .select('id', { count: 'exact', head: true })
+        .eq('business_id', businessId!)
+        .in('status', ['pending', 'confirmed'] as any)
+        .gte('start_at', nowIso);
+      if (error) throw new Error(error.message ?? 'Failed to load upcoming bookings count.');
+      return Number(count ?? 0) || 0;
+    },
+  });
+
+  // Revenue Scheduled is global (sum of all future bookings, across all months).
+  // Use bookings.price_cents snapshot only (authoritative). Ignore invoices/services.
+  const revenueScheduledQ = useQuery({
+    queryKey: ['bookings_revenue_scheduled', businessId],
+    enabled: Boolean(businessId),
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const nowIso = new Date().toISOString();
+
+      // Pull upcoming bookings with price snapshots and sum in cents.
+      // If the column doesn't exist yet, return 0 (migration needed).
+      const { data: rows, error: bErr } = await supabase
+        .from('bookings')
+        .select('id,start_at,service_id,invoice_id,price_cents')
+        .eq('business_id', businessId!)
+        .in('status', ['pending', 'confirmed'] as any)
+        .gte('start_at', nowIso)
+        .order('start_at', { ascending: true })
+        .limit(5000);
+
+      if (bErr) {
+        if (isMissingColumnError(bErr)) {
+          return 0;
+        }
+        throw new Error((bErr as any)?.message ?? 'Failed to load revenue scheduled.');
+      }
+
+      const all = (rows ?? []) as any[];
+
+      let sumCents = 0;
+      for (const b of all) {
+        const cents = Math.max(0, Number(b?.price_cents ?? 0) || 0);
+        sumCents += cents;
+      }
+
+      return (Number.isFinite(sumCents) ? sumCents : 0) / 100;
     },
   });
 
@@ -212,7 +305,7 @@ export default function BookingsPage() {
         .select('*')
         .eq('business_id', businessId!)
         .in('booking_id', bookingIds as any);
-      if (error) throw error;
+      if (error) throw new Error(error.message ?? 'Failed to load booking invoices.');
       return (data ?? []) as any[];
     },
   });
@@ -237,6 +330,41 @@ export default function BookingsPage() {
     return m;
   }, [invoicesQ.data]);
 
+  // Realtime: keep bookings + booking-linked invoices fresh for stats + UI.
+  useEffect(() => {
+    if (!businessId) return;
+
+    const ch = supabase
+      .channel(`rg-bookings-${businessId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bookings', filter: `business_id=eq.${businessId}` },
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
+          void queryClient.invalidateQueries({ queryKey: ['bookings_upcoming_count', businessId] });
+          void queryClient.invalidateQueries({ queryKey: ['bookings_revenue_scheduled', businessId] });
+          void queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'invoices', filter: `business_id=eq.${businessId}` },
+        () => {
+          void queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
+          void queryClient.invalidateQueries({ queryKey: ['bookings_revenue_scheduled', businessId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        void supabase.removeChannel(ch);
+      } catch {
+        // ignore
+      }
+    };
+  }, [businessId, queryClient]);
+
   const bookingsByDay = useMemo(() => {
     const m = new Map<string, any[]>();
     for (const b of (bookingsQ.data ?? []) as any[]) {
@@ -250,10 +378,11 @@ export default function BookingsPage() {
   const stats = useMemo(() => {
     const all = (bookingsQ.data ?? []) as any[];
     const now = Date.now();
-    const upcoming = all.filter((b) => {
+    const upcomingLocalFallback = all.filter((b) => {
       const s = String(b.status);
       return (s === 'pending' || s === 'confirmed') && new Date(b.start_at).getTime() >= now;
     }).length;
+    const upcoming = typeof upcomingCountQ.data === 'number' ? upcomingCountQ.data : upcomingLocalFallback;
     const weekFrom = startOfWeek(new Date()).getTime();
     const weekTo = endOfWeek(new Date()).getTime();
     const thisWeek = all.filter((b) => {
@@ -262,30 +391,59 @@ export default function BookingsPage() {
       return (s === 'pending' || s === 'confirmed') && t >= weekFrom && t <= weekTo;
     }).length;
 
-    let unpaid = 0;
-    let revenueScheduled = 0;
-    for (const b of all) {
-      const inv = invoiceByBookingId.get(String(b.id));
-      if (inv) {
-        if (String(inv.status) !== 'paid') unpaid += 1;
-        if (String(inv.status) !== 'paid') revenueScheduled += Number(inv.total) || 0;
+    // Revenue Scheduled: global sum (all future bookings), fetched from Supabase.
+    // Fallback to local (month-only) computation if query isn't ready yet.
+    let revenueScheduled =
+      typeof revenueScheduledQ.data === 'number'
+        ? Number(revenueScheduledQ.data)
+        : 0;
+
+    if (!(typeof revenueScheduledQ.data === 'number')) {
+      for (const b of all) {
+        const bs = String(b.status);
+        if (!(bs === 'pending' || bs === 'confirmed')) continue;
+        const t = new Date(b.start_at).getTime();
+        if (!Number.isFinite(t) || t < now) continue;
+
+        const inv = invoiceByBookingId.get(String(b.id));
+        if (inv) {
+          revenueScheduled += Number(inv.total) || 0;
+          continue;
+        }
+
+        const svc = b.service_id ? serviceById.get(String(b.service_id)) : null;
+        if (svc) revenueScheduled += (Number(svc.price_cents) || 0) / 100;
       }
     }
-    return { upcoming, thisWeek, unpaid, revenueScheduled };
-  }, [bookingsQ.data, invoiceByBookingId]);
+
+    return { upcoming, thisWeek, revenueScheduled };
+  }, [bookingsQ.data, invoiceByBookingId, serviceById, upcomingCountQ.data, revenueScheduledQ.data]);
 
   function openBooking(b: any) {
     setActiveBooking(b);
     setDrawerOpen(true);
   }
 
-  async function patchBooking(id: number, patch: any) {
-    if (!businessId) return;
+  async function patchBooking(id: string | number, patch: any) {
+    if (!businessId) {
+      pushToast({ tone: 'error', message: 'Missing business. Please reload.' });
+      return;
+    }
+    const idStr = String(id ?? '').trim();
+    if (!idStr) {
+      pushToast({ tone: 'error', message: 'Invalid booking id.' });
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log('BOOKING_PATCH_ID', { id: idStr, patch });
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token ?? null;
-    if (!token) throw new Error('Not signed in');
+    if (!token) {
+      pushToast({ tone: 'error', message: 'Please sign in again.' });
+      return;
+    }
 
-    const res = await fetch(`/api/booking/${id}`, {
+    const res = await fetch(`/api/booking/${encodeURIComponent(idStr)}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -295,28 +453,131 @@ export default function BookingsPage() {
     });
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      throw new Error(txt || 'Booking update failed');
+      pushToast({ tone: 'error', message: txt || 'Booking update failed.' });
+      return;
     }
     await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
     await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
+    await queryClient.invalidateQueries({ queryKey: ['transactions', businessId] });
+    pushToast({ tone: 'ok', message: 'Booking updated.' });
   }
 
-  async function handleDownloadIcs() {
-    if (!businessId) return;
+  function computeBookingPaid(b: any): boolean {
+    if (!b) return false;
+    const st = String((b as any)?.status ?? '').toLowerCase();
+    return st === 'paid' || st === 'completed';
+  }
+
+  function optimisticUpdateBookingInCache(updated: any) {
+    if (!businessId || !updated?.id) return;
+    queryClient.setQueriesData({ queryKey: ['bookings', businessId] }, (old: any) => {
+      const rows = (old ?? []) as any[];
+      if (!Array.isArray(rows)) return old;
+      return rows.map((r) => (String(r?.id) === String(updated.id) ? { ...r, ...updated } : r));
+    });
+  }
+
+  async function toggleBookingPaid(booking: any, nextPaid: boolean) {
+    if (!businessId) {
+      pushToast({ tone: 'error', message: 'Missing business. Please reload.' });
+      return;
+    }
+    const bookingId = String(booking?.id ?? '').trim();
+    if (!bookingId) {
+      pushToast({ tone: 'error', message: 'Missing booking id.' });
+      return;
+    }
+
+    // Some DBs allow status='paid'. Others only allow 'completed'. Be schema-safe.
+    const nextStatusPrimary = nextPaid ? 'paid' : 'confirmed';
+    const nextStatusFallback = nextPaid ? 'completed' : 'pending';
+
+    // Optimistic: update active booking + cache immediately.
+    const optimistic = { ...booking, status: nextStatusPrimary };
+    setActiveBooking((prev: any) => (prev && String(prev.id) === bookingId ? optimistic : prev));
+    optimisticUpdateBookingInCache(optimistic);
+
+    const patches = [{ status: nextStatusPrimary }, { status: nextStatusFallback }];
+    let saved: any | null = null;
+    let lastErr: any | null = null;
+    for (const patch of patches) {
+      const { data, error } = await supabase
+        .from('bookings')
+        .update(patch as any)
+        .eq('business_id', businessId)
+        .eq('id', bookingId as any)
+        .select('*')
+        .single();
+
+      // eslint-disable-next-line no-console
+      console.log('BOOKING_TOGGLE_PAID_UPDATE_RESULT', { bookingId, patch, data, error });
+
+      if (!error && data) {
+        saved = data;
+        lastErr = null;
+        break;
+      }
+      lastErr = error ?? new Error('Booking update failed');
+    }
+
+    if (lastErr) {
+      // Revert optimistic update if we failed.
+      setActiveBooking((prev: any) => (prev && String(prev.id) === bookingId ? booking : prev));
+      optimisticUpdateBookingInCache(booking);
+      pushToast({
+        tone: 'error',
+        message: String((lastErr as any)?.message ?? 'Booking payment update failed.'),
+      });
+      return;
+    }
+
+    if (saved) {
+      setActiveBooking((prev: any) => (prev && String(prev.id) === bookingId ? saved : prev));
+      optimisticUpdateBookingInCache(saved);
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
+    pushToast({ tone: 'ok', message: nextPaid ? 'Marked booking paid.' : 'Marked booking unpaid.' });
+  }
+
+  async function deleteBooking(id: string | number) {
+    if (!businessId) {
+      pushToast({ tone: 'error', message: 'Missing business. Please reload.' });
+      return;
+    }
+    const idStr = String(id ?? '').trim();
+    if (!idStr) {
+      pushToast({ tone: 'error', message: 'Invalid booking id.' });
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log('BOOKING_DELETE_ID', { id: idStr });
+
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token ?? null;
-    if (!token) return;
+    if (!token) {
+      pushToast({ tone: 'error', message: 'Please sign in again.' });
+      return;
+    }
 
-    const url = `/api/booking/ics?businessId=${encodeURIComponent(businessId)}&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'revguard-bookings.ics';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    const res = await fetch(`/api/booking/${encodeURIComponent(idStr)}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ businessId }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      pushToast({ tone: 'error', message: txt || 'Booking delete failed.' });
+      return;
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ['bookings', businessId] });
+    await queryClient.invalidateQueries({ queryKey: ['booking_invoices', businessId] });
+    await queryClient.invalidateQueries({ queryKey: ['transactions', businessId] });
+    pushToast({ tone: 'ok', message: 'Booking cancelled.' });
   }
 
   async function handleCreateBooking() {
@@ -430,11 +691,20 @@ export default function BookingsPage() {
   }
 
   const bookings = (bookingsQ.data ?? []) as any[];
+  const listTotalPages = Math.max(1, Math.ceil(bookings.length / listPageSize));
+  useEffect(() => {
+    if (listPage > listTotalPages) setListPage(listTotalPages);
+    if (listPage < 1) setListPage(1);
+  }, [listPage, listTotalPages]);
+  const listRows = useMemo(() => {
+    const start = (listPage - 1) * listPageSize;
+    return bookings.slice(start, start + listPageSize);
+  }, [bookings, listPage]);
   const loading = servicesQ.isLoading || bookingsQ.isLoading;
   const error = (servicesQ.error as any)?.message ?? (bookingsQ.error as any)?.message ?? null;
 
   return (
-    <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
+    <main className="max-w-6xl mx-auto px-6 py-6 space-y-5">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight text-slate-50">
           Bookings
@@ -445,11 +715,14 @@ export default function BookingsPage() {
       </header>
 
       {/* Top stats */}
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard icon={<Clock className="h-4 w-4 text-emerald-200" />} label="Upcoming" value={String(stats.upcoming)} />
         <StatCard icon={<CalendarRange className="h-4 w-4 text-sky-200" />} label="This Week" value={String(stats.thisWeek)} />
-        <StatCard icon={<DollarSign className="h-4 w-4 text-amber-200" />} label="Unpaid" value={String(stats.unpaid)} />
-        <StatCard icon={<DollarSign className="h-4 w-4 text-violet-200" />} label="Revenue Scheduled" value={`$${Math.round(stats.revenueScheduled).toLocaleString('en-US')}`} />
+        <StatCard
+          icon={<DollarSign className="h-4 w-4 text-violet-200" />}
+          label="Revenue Scheduled"
+          value={Number(stats.revenueScheduled || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
+        />
       </section>
 
       {/* Tabs + actions */}
@@ -465,21 +738,9 @@ export default function BookingsPage() {
             <TabButton is_active={tab === 'services'} onClick={() => setTab('services')} icon={<SlidersHorizontal className="h-4 w-4" />}>
               Services
             </TabButton>
-            <TabButton is_active={tab === 'availability'} onClick={() => setTab('availability')} icon={<Settings2 className="h-4 w-4" />}>
-              Availability
-            </TabButton>
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleDownloadIcs}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
-              title="Download calendar"
-            >
-              <Download className="h-4 w-4" />
-              Download .ics
-            </button>
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
@@ -493,7 +754,7 @@ export default function BookingsPage() {
       </section>
 
       {/* Main content */}
-      <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+      <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
         {loading ? (
           <div className="text-sm text-slate-400">Loading bookings…</div>
         ) : error ? (
@@ -504,8 +765,8 @@ export default function BookingsPage() {
             </div>
           </div>
         ) : tab === 'calendar' ? (
-          <div className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -572,7 +833,35 @@ export default function BookingsPage() {
               subtitle="Bookings will show here once you create them."
             />
           ) : (
-            <div className="overflow-x-auto">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-400">
+                  Showing {(listPage - 1) * listPageSize + 1}–{Math.min(listPage * listPageSize, bookings.length)} of {bookings.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setListPage((p) => Math.max(1, p - 1))}
+                    disabled={listPage <= 1}
+                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <div className="text-xs text-slate-400 tabular-nums">
+                    Page {listPage} / {listTotalPages}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setListPage((p) => Math.min(listTotalPages, p + 1))}
+                    disabled={listPage >= listTotalPages}
+                    className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
               <table className="min-w-full text-left">
                 <thead className="bg-slate-950/40 text-slate-300 border-b border-white/10">
                   <tr>
@@ -580,15 +869,17 @@ export default function BookingsPage() {
                     <th className="px-3 py-2 text-[11px] uppercase tracking-[0.18em]">Customer</th>
                     <th className="px-3 py-2 text-[11px] uppercase tracking-[0.18em]">Service</th>
                     <th className="px-3 py-2 text-[11px] uppercase tracking-[0.18em]">Invoice</th>
+                    <th className="px-3 py-2 text-[11px] uppercase tracking-[0.18em]">Paid</th>
                     <th className="px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bookings.map((b) => {
-                    const when = new Date(b.start_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                  {listRows.map((b) => {
+                    const when = safeWhenLabel(b?.start_at);
                     const cust = String(b.customer_name ?? '').trim() || '—';
                     const svc = b.service_id ? serviceById.get(String(b.service_id))?.name : '—';
                     const inv = invoiceByBookingId.get(String(b.id));
+                    const paid = computeBookingPaid(b);
                     return (
                       <tr key={b.id} className="border-t border-white/10 hover:bg-white/[0.04]">
                         <td className="px-3 py-2 text-sm text-slate-200">{when}</td>
@@ -602,6 +893,34 @@ export default function BookingsPage() {
                           ) : (
                             <span className="text-slate-500">—</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            disabled={paidBusyId === String(b.id)}
+                            onClick={async () => {
+                              if (!b?.id) return;
+                              const nextPaid = !paid;
+                              // eslint-disable-next-line no-console
+                              console.log('BOOKING_LIST_TOGGLE_PAID', { bookingId: String(b.id), nextPaid });
+                              try {
+                                setPaidBusyId(String(b.id));
+                                await toggleBookingPaid(b, nextPaid);
+                              } catch (e: any) {
+                                pushToast({ tone: 'error', message: String(e?.message ?? 'Could not update booking.') });
+                              } finally {
+                                setPaidBusyId(null);
+                              }
+                            }}
+                            className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-semibold transition ${
+                              paid
+                                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15'
+                                  : 'border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/15'
+                            } ${paidBusyId === String(b.id) ? 'opacity-60' : ''}`}
+                            title={paid ? 'Click to mark unpaid' : 'Click to mark paid'}
+                          >
+                            {paidBusyId === String(b.id) ? 'Saving…' : paid ? 'Paid' : 'Unpaid'}
+                          </button>
                         </td>
                         <td className="px-3 py-2 text-right">
                           <button
@@ -618,12 +937,11 @@ export default function BookingsPage() {
                 </tbody>
               </table>
             </div>
+            </div>
           )
         ) : tab === 'services' ? (
           <ServicesPanel businessId={businessId} services={servicesQ.data ?? []} />
-        ) : (
-          <AvailabilityPanel businessId={businessId} rules={availabilityQ.data ?? []} />
-        )}
+        ) : null}
       </section>
 
       {/* Right drawer */}
@@ -638,19 +956,38 @@ export default function BookingsPage() {
           serviceName={activeBooking.service_id ? serviceById.get(String(activeBooking.service_id))?.name ?? 'Service' : 'Service'}
           invoice={invoiceByBookingId.get(String(activeBooking.id)) ?? null}
           onViewInvoice={() => router.push('/invoices')}
-          onMarkPaid={async () => {
-            await patchBooking(Number(activeBooking.id), { markPaid: true });
+          isPaid={computeBookingPaid(activeBooking)}
+          paidBusy={paidBusyId === String(activeBooking.id)}
+          onTogglePaid={async (nextPaid) => {
+            if (!activeBooking?.id) {
+              pushToast({ tone: 'error', message: 'Invalid booking id.' });
+              return;
+            }
+            // eslint-disable-next-line no-console
+            console.log('BOOKING_DRAWER_TOGGLE_PAID', { bookingId: String(activeBooking.id), nextPaid });
+            try {
+              setPaidBusyId(String(activeBooking.id));
+              await toggleBookingPaid(activeBooking, nextPaid);
+            } finally {
+              setPaidBusyId(null);
+            }
           }}
           onCancel={async () => {
-            await patchBooking(Number(activeBooking.id), { status: 'cancelled' });
+            if (!activeBooking?.id) {
+              pushToast({ tone: 'error', message: 'Invalid booking id.' });
+              return;
+            }
+            await deleteBooking(String(activeBooking.id));
             setDrawerOpen(false);
+            setActiveBooking(null);
           }}
           onReschedule={async (nextIso) => {
-            await patchBooking(Number(activeBooking.id), { startAt: nextIso });
+            if (!activeBooking?.id) {
+              pushToast({ tone: 'error', message: 'Invalid booking id.' });
+              return;
+            }
+            await patchBooking(String(activeBooking.id), { startAt: nextIso });
             setDrawerOpen(false);
-          }}
-          onRecordPayment={async (amount) => {
-            await patchBooking(Number(activeBooking.id), { paymentAmount: amount });
           }}
         />
       )}
@@ -938,10 +1275,10 @@ function CalendarView({
           >
             <div className="flex items-center justify-between">
               <div className={`text-[11px] ${isToday ? 'text-emerald-200' : 'text-slate-400'}`}>{d.getDate()}</div>
-              {rows.length > 0 && <div className="text-[11px] text-slate-400">{rows.length}</div>}
+              <div />
             </div>
             <div className="mt-2 space-y-1">
-              {rows.slice(0, 2).map((b) => (
+              {rows.slice(0, 3).map((b) => (
                 <div
                   key={b.id}
                   className="truncate rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-100"
@@ -951,7 +1288,6 @@ function CalendarView({
                   {String(b.customer_name ?? 'Customer')}
                 </div>
               ))}
-              {rows.length > 2 && <div className="text-[11px] text-slate-400">+{rows.length - 2} more</div>}
             </div>
           </button>
         );
@@ -1010,11 +1346,11 @@ function DayBookingsPanel({
               className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left hover:bg-white/10"
             >
               <div className="text-sm font-semibold text-slate-100">
-                {new Date(b.start_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })} •{' '}
+                {safeTimeLabel(b?.start_at)} •{' '}
                 {String(b.customer_name ?? 'Customer')}
               </div>
               <div className="mt-1 text-[11px] text-slate-400">
-                {String(b.status)}{b.notes ? ` • ${String(b.notes)}` : ''}
+                {String(b.status)}{b.notes ? ` • ${formatNotesInline(b.notes)}` : ''}
               </div>
             </button>
           ))}
@@ -1037,10 +1373,11 @@ function BookingDrawer({
   invoice,
   onClose,
   onViewInvoice,
-  onMarkPaid,
   onCancel,
   onReschedule,
-  onRecordPayment,
+  isPaid,
+  paidBusy,
+  onTogglePaid,
 }: {
   booking: any;
   customerName: string;
@@ -1048,18 +1385,20 @@ function BookingDrawer({
   invoice: any | null;
   onClose: () => void;
   onViewInvoice: () => void;
-  onMarkPaid: () => Promise<void>;
   onCancel: () => Promise<void>;
   onReschedule: (nextIso: string) => Promise<void>;
-  onRecordPayment: (amount: number) => Promise<void>;
+  isPaid: boolean;
+  paidBusy: boolean;
+  onTogglePaid: (nextPaid: boolean) => Promise<void>;
 }) {
-  const [rescheduleLocal, setRescheduleLocal] = useState('');
-  const [paymentAmount, setPaymentAmount] = useState('');
+  const [rescheduleDigits, setRescheduleDigits] = useState<string>('');
+  const [rescheduleAmPm, setRescheduleAmPm] = useState<AmPm>('AM');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const startLabel = new Date(booking.start_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const endLabel = new Date(booking.end_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const startLabel = safeWhenLabel(booking?.start_at);
+  const endLabel = safeTimeLabel(booking?.end_at);
+  const rescheduleIso = useMemo(() => parseMaskedDigitsToIso(rescheduleDigits, rescheduleAmPm), [rescheduleDigits, rescheduleAmPm]);
 
   return (
     <div className="fixed inset-0 z-50">
@@ -1091,9 +1430,37 @@ function BookingDrawer({
           <div className="mt-1 text-[11px] text-slate-400">
             Status: {String(booking.status)}
           </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[11px] text-slate-300">
+              Payment:{' '}
+              <span className={isPaid ? 'text-emerald-200' : 'text-amber-200'}>
+                {isPaid ? 'Paid' : 'Unpaid'}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={busy || paidBusy}
+              onClick={async () => {
+                try {
+                  setBusy(true);
+                  setErr(null);
+                  await onTogglePaid(!isPaid);
+                } catch (e: any) {
+                  setErr(e?.message ?? 'Failed to update booking payment status.');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className={`rounded-xl px-3 py-2 text-xs font-semibold transition disabled:opacity-50 ${
+                isPaid ? 'border border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/15' : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+              }`}
+            >
+              {paidBusy ? 'Saving…' : isPaid ? 'Mark unpaid' : 'Mark paid'}
+            </button>
+          </div>
           {booking.notes && (
-            <div className="mt-3 text-sm text-slate-200 leading-relaxed">
-              {booking.notes}
+            <div className="mt-3 text-sm text-slate-200 leading-relaxed whitespace-pre-wrap break-words">
+              {formatNotesForDisplay(booking.notes)}
             </div>
           )}
         </div>
@@ -1121,65 +1488,7 @@ function BookingDrawer({
               >
                 View
               </button>
-              {String(invoice.status) !== 'paid' && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={async () => {
-                    try {
-                      setBusy(true);
-                      setErr(null);
-                      await onMarkPaid();
-                    } catch (e: any) {
-                      setErr(e?.message ?? 'Failed to mark paid.');
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                  className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
-                >
-                  Mark paid
-                </button>
-              )}
             </div>
-
-            {String(invoice.status) !== 'paid' && (
-              <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3">
-                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                  Record payment / deposit
-                </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <input
-                    value={paymentAmount}
-                    onChange={(e) => setPaymentAmount(e.target.value)}
-                    placeholder="Amount"
-                    inputMode="decimal"
-                    className="h-10 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
-                  />
-                  <button
-                    type="button"
-                    disabled={busy || !paymentAmount.trim()}
-                    onClick={async () => {
-                      try {
-                        const n = Number(paymentAmount);
-                        if (!Number.isFinite(n) || n <= 0) return;
-                        setBusy(true);
-                        setErr(null);
-                        await onRecordPayment(n);
-                        setPaymentAmount('');
-                      } catch (e: any) {
-                        setErr(e?.message ?? 'Failed to record payment.');
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50"
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -1216,20 +1525,71 @@ function BookingDrawer({
             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Reschedule</div>
             <div className="mt-2 flex items-center gap-2">
               <input
-                type="datetime-local"
-                value={rescheduleLocal}
-                onChange={(e) => setRescheduleLocal(e.target.value)}
-                className="h-10 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="MM/DD/YYYY h:mm AM"
+                value={rescheduleDigits ? formatMaskedStartCompact(rescheduleDigits, rescheduleAmPm) : ''}
+                onKeyDown={(e) => {
+                  const k = e.key;
+                  if (k === 'Backspace') {
+                    e.preventDefault();
+                    setRescheduleDigits((prev) => String(prev ?? '').slice(0, -1));
+                    return;
+                  }
+                  if (k === 'Tab' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Home' || k === 'End') return;
+                  if (/^\d$/.test(k)) return;
+                  e.preventDefault();
+                }}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const txt = e.clipboardData.getData('text') ?? '';
+                  const digits = String(txt).replace(/\D/g, '').slice(0, 12);
+                  if (!digits) return;
+                  setRescheduleDigits(digits);
+                }}
+                onChange={(e) => {
+                  const digits = String(e.target.value ?? '').replace(/\D/g, '').slice(0, 12);
+                  setRescheduleDigits(digits);
+                }}
+                className={`h-10 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 transition-opacity ${
+                  rescheduleDigits ? 'opacity-100' : 'opacity-70'
+                } focus:opacity-100`}
               />
+              <div className="flex shrink-0 rounded-xl border border-white/10 bg-white/5 p-1">
+                <button
+                  type="button"
+                  onClick={() => setRescheduleAmPm('AM')}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                    rescheduleAmPm === 'AM' ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  AM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRescheduleAmPm('PM')}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                    rescheduleAmPm === 'PM' ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  PM
+                </button>
+              </div>
               <button
                 type="button"
-                disabled={busy || !rescheduleLocal}
+                disabled={busy || !rescheduleIso}
                 onClick={async () => {
                   try {
                     setBusy(true);
                     setErr(null);
-                    const iso = new Date(rescheduleLocal).toISOString();
-                    await onReschedule(iso);
+                    if (!rescheduleIso) {
+                      setErr('Invalid date/time.');
+                      return;
+                    }
+                    await onReschedule(rescheduleIso);
+                    setRescheduleDigits('');
+                    setRescheduleAmPm('AM');
                   } catch (e: any) {
                     setErr(e?.message ?? 'Reschedule failed.');
                   } finally {
@@ -1240,6 +1600,9 @@ function BookingDrawer({
               >
                 Save
               </button>
+            </div>
+            <div className="mt-1 text-[11px] text-slate-400">
+              {rescheduleIso ? `Will save as timestamptz · ${formatLocalPretty(rescheduleIso)}` : 'Enter a valid date/time to continue.'}
             </div>
           </div>
         </div>
@@ -1260,6 +1623,17 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
   const [page, setPage] = useState(1);
   const pageSize = 5;
 
+  const [editOpen, setEditOpen] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDurationHours, setEditDurationHours] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState<any | null>(null);
+  const [deleteSaving, setDeleteSaving] = useState(false);
+
   function hoursToMinutes(raw: string): number {
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0) return 60;
@@ -1275,6 +1649,21 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     if (h > 0) parts.push(`${h} hour${h === 1 ? '' : 's'}`);
     if (rem > 0) parts.push(`${rem} minute${rem === 1 ? '' : 's'}`);
     return parts.length ? parts.join(' ') : '0 minutes';
+  }
+
+  function minutesToHoursString(mins: any): string {
+    const m = Number(mins ?? 0);
+    if (!Number.isFinite(m) || m <= 0) return '';
+    const h = m / 60;
+    // keep user-friendly precision for common values (0.5, 1, 1.5, 2, ...)
+    const rounded = Math.round(h * 100) / 100;
+    return String(rounded);
+  }
+
+  function centsToDollarsString(cents: any): string {
+    const c = Number(cents ?? 0);
+    if (!Number.isFinite(c) || c <= 0) return '';
+    return (c / 100).toFixed(2);
   }
 
   async function addService() {
@@ -1355,6 +1744,175 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     }
   }
 
+  function openEdit(service: any) {
+    setErr(null);
+    setLastSupabaseError(null);
+    setEditing(service);
+    setEditName(String(service?.name ?? ''));
+    setEditDurationHours(minutesToHoursString(service?.duration_minutes));
+    setEditPrice(centsToDollarsString(service?.price_cents));
+    setEditOpen(true);
+  }
+
+  async function saveEdit() {
+    if (!businessId) {
+      setErr('No business selected. Please select a business first.');
+      return;
+    }
+    if (!editing?.id) {
+      setErr('No service selected to edit.');
+      return;
+    }
+    setErr(null);
+    setLastSupabaseError(null);
+    if (!String(editName ?? '').trim()) {
+      setErr('Service name is required.');
+      return;
+    }
+
+    const mins = hoursToMinutes(editDurationHours);
+    const priceDollars = Number(String(editPrice ?? '').replace(/[^0-9.]/g, '')) || 0;
+    const priceCents = Math.max(0, Math.round(priceDollars * 100));
+    const payload = {
+      name: String(editName ?? '').trim(),
+      duration_minutes: mins,
+      price_cents: priceCents,
+    } as any;
+
+    // eslint-disable-next-line no-console
+    console.log('SERVICES_UPDATE_PAYLOAD', { id: editing.id, businessId, payload });
+
+    try {
+      setEditSaving(true);
+      const { data, error } = await supabase
+        .from('services')
+        .update(payload)
+        .eq('id', editing.id)
+        .eq('business_id', businessId)
+        .select('*')
+        .single();
+
+      // eslint-disable-next-line no-console
+      console.log('SERVICES_UPDATE_RESULT', { data, error });
+
+      if (error || !data) {
+        // eslint-disable-next-line no-console
+        console.error('SUPABASE SERVICES UPDATE ERROR', error);
+        setLastSupabaseError(error ?? { message: 'No data returned from update.' });
+        const code = (error as any)?.code ?? null;
+        const msg = (error as any)?.message ?? 'No data returned from update.';
+        const details = (error as any)?.details ?? null;
+        const hint = (error as any)?.hint ?? null;
+        setErr(
+          `Could not update service.\n` +
+            `code: ${code ?? 'n/a'}\n` +
+            `message: ${msg}\n` +
+            `details: ${details ?? 'n/a'}\n` +
+            `hint: ${hint ?? 'n/a'}`
+        );
+        return;
+      }
+
+      setEditOpen(false);
+      setEditing(null);
+      await queryClient.invalidateQueries({ queryKey: ['services', businessId] });
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('SERVICES UPDATE UNEXPECTED ERROR', e);
+      setLastSupabaseError(e ?? null);
+      const code = e?.code ?? null;
+      const msg = e?.message ?? 'Could not update service.';
+      const details = e?.details ?? null;
+      const hint = e?.hint ?? null;
+      setErr(
+        `Could not update service.\n` +
+          `code: ${code ?? 'n/a'}\n` +
+          `message: ${msg}\n` +
+          `details: ${details ?? 'n/a'}\n` +
+          `hint: ${hint ?? 'n/a'}`
+      );
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  function openDelete(service: any) {
+    setErr(null);
+    setLastSupabaseError(null);
+    setDeleting(service);
+    setDeleteOpen(true);
+  }
+
+  async function confirmDelete() {
+    if (!businessId) {
+      setErr('No business selected. Please select a business first.');
+      return;
+    }
+    if (!deleting?.id) {
+      setErr('No service selected to delete.');
+      return;
+    }
+    setErr(null);
+    setLastSupabaseError(null);
+
+    // eslint-disable-next-line no-console
+    console.log('SERVICES_DELETE_REQUEST', { id: deleting.id, businessId });
+
+    try {
+      setDeleteSaving(true);
+      // Soft-delete so existing bookings/invoices remain consistent; list filters out inactive services.
+      const { data, error } = await supabase
+        .from('services')
+        .update({ is_active: false } as any)
+        .eq('id', deleting.id)
+        .eq('business_id', businessId)
+        .select('*')
+        .single();
+
+      // eslint-disable-next-line no-console
+      console.log('SERVICES_DELETE_RESULT', { data, error });
+
+      if (error || !data) {
+        // eslint-disable-next-line no-console
+        console.error('SUPABASE SERVICES DELETE ERROR', error);
+        setLastSupabaseError(error ?? { message: 'No data returned from delete.' });
+        const code = (error as any)?.code ?? null;
+        const msg = (error as any)?.message ?? 'No data returned from delete.';
+        const details = (error as any)?.details ?? null;
+        const hint = (error as any)?.hint ?? null;
+        setErr(
+          `Could not delete service.\n` +
+            `code: ${code ?? 'n/a'}\n` +
+            `message: ${msg}\n` +
+            `details: ${details ?? 'n/a'}\n` +
+            `hint: ${hint ?? 'n/a'}`
+        );
+        return;
+      }
+
+      setDeleteOpen(false);
+      setDeleting(null);
+      await queryClient.invalidateQueries({ queryKey: ['services', businessId] });
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error('SERVICES DELETE UNEXPECTED ERROR', e);
+      setLastSupabaseError(e ?? null);
+      const code = e?.code ?? null;
+      const msg = e?.message ?? 'Could not delete service.';
+      const details = e?.details ?? null;
+      const hint = e?.hint ?? null;
+      setErr(
+        `Could not delete service.\n` +
+          `code: ${code ?? 'n/a'}\n` +
+          `message: ${msg}\n` +
+          `details: ${details ?? 'n/a'}\n` +
+          `hint: ${hint ?? 'n/a'}`
+      );
+    } finally {
+      setDeleteSaving(false);
+    }
+  }
+
   const durationHelper = useMemo(() => {
     const raw = String(durationHours ?? '').trim();
     if (!raw) return '1.5 = 1 hour 30 minutes';
@@ -1384,6 +1942,172 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
 
   return (
     <div className="space-y-6">
+      {/* Edit modal */}
+      {editOpen && (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            onClick={() => {
+              if (editSaving) return;
+              setEditOpen(false);
+              setEditing(null);
+            }}
+            className="absolute inset-0 bg-slate-950/70"
+            aria-label="Close edit service modal"
+          />
+          <div className="absolute left-1/2 top-1/2 w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Edit service</div>
+                <div className="mt-1 truncate text-base font-semibold text-slate-50">{editing?.name ?? 'Service'}</div>
+              </div>
+              <button
+                type="button"
+                disabled={editSaving}
+                onClick={() => {
+                  setEditOpen(false);
+                  setEditing(null);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <div className="sm:col-span-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Name</div>
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="e.g. Weekly lawn care"
+                  className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Duration (Hours)</div>
+                <input
+                  value={editDurationHours}
+                  onChange={(e) => setEditDurationHours(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="e.g. 1.5 hours"
+                  className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {(() => {
+                    const raw = String(editDurationHours ?? '').trim();
+                    if (!raw) return '1.5 = 1 hour 30 minutes';
+                    const mins = hoursToMinutes(raw);
+                    return `${raw} = ${minutesToHuman(mins)}`;
+                  })()}
+                </div>
+              </div>
+
+              <div className="sm:col-span-1">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Price</div>
+                <input
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(e.target.value)}
+                  inputMode="decimal"
+                  placeholder="$150"
+                  className="mt-2 h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={editSaving}
+                onClick={() => {
+                  setEditOpen(false);
+                  setEditing(null);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={editSaving || !businessId}
+                onClick={() => void saveEdit()}
+                className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {editSaving ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation */}
+      {deleteOpen && (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            onClick={() => {
+              if (deleteSaving) return;
+              setDeleteOpen(false);
+              setDeleting(null);
+            }}
+            className="absolute inset-0 bg-slate-950/70"
+            aria-label="Close delete confirmation"
+          />
+          <div className="absolute left-1/2 top-1/2 w-[92vw] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/10 bg-slate-950 p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Delete service</div>
+                <div className="mt-1 text-base font-semibold text-slate-50">Are you sure?</div>
+              </div>
+              <button
+                type="button"
+                disabled={deleteSaving}
+                onClick={() => {
+                  setDeleteOpen(false);
+                  setDeleting(null);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-3 text-sm text-slate-300">
+              This will hide <span className="font-semibold text-slate-100">{deleting?.name ?? 'this service'}</span> from your
+              services list.
+            </div>
+            <div className="mt-1 text-xs text-slate-400">
+              (We keep it as inactive so existing bookings/invoices remain consistent.)
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={deleteSaving}
+                onClick={() => {
+                  setDeleteOpen(false);
+                  setDeleting(null);
+                }}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleteSaving || !businessId}
+                onClick={() => void confirmDelete()}
+                className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2 text-xs font-semibold text-rose-100 hover:bg-rose-500/15 disabled:opacity-50"
+              >
+                {deleteSaving ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Form */}
       <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
         <div className="flex items-start justify-between gap-4">
@@ -1530,7 +2254,30 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
             {pageRows.map((s: any) => {
               const mins = Number(s.duration_minutes || 60);
               return (
-                <div key={s.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <div
+                  key={s.id}
+                  className="group relative rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition-colors hover:bg-white/[0.07]"
+                >
+                  <div className="absolute right-3 top-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(s)}
+                      className="rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10"
+                      aria-label={`Edit service ${s.name}`}
+                      title="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openDelete(s)}
+                      className="rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 hover:bg-white/10"
+                      aria-label={`Delete service ${s.name}`}
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
                   <div className="text-sm font-semibold text-slate-100">{s.name}</div>
                   <div className="mt-1 text-xs text-slate-400">
                     {minutesToHuman(mins)} • ${(Number(s.price_cents || 0) / 100).toFixed(2)}
@@ -1544,94 +2291,3 @@ function ServicesPanel({ businessId, services }: { businessId: string | null; se
     </div>
   );
 }
-
-function AvailabilityPanel({ businessId, rules }: { businessId: string | null; rules: any[] }) {
-  const [dow, setDow] = useState('1');
-  const [start, setStart] = useState('09:00');
-  const [end, setEnd] = useState('17:00');
-  const [slot, setSlot] = useState('30');
-  const [err, setErr] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const dowLabel = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-  async function addRule() {
-    if (!businessId) return;
-    setErr(null);
-    try {
-      setSaving(true);
-      const { error } = await supabase.from('availability_rules').insert({
-        business_id: businessId,
-        day_of_week: Number(dow),
-        start_time: start,
-        end_time: end,
-        slot_minutes: Number(slot) || 30,
-        timezone: 'UTC',
-      } as any);
-      if (error) throw error;
-    } catch (e: any) {
-      setErr(e?.message ?? 'Could not save availability.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      {rules.length === 0 ? (
-        <EmptyCard
-          icon={<Settings2 className="h-5 w-5 text-slate-300/80" />}
-          title="No availability rules yet"
-          subtitle="Add weekly hours so RevGuard can suggest open time slots."
-        />
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {rules.map((r: any) => (
-            <div key={r.id} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <div className="text-sm font-semibold text-slate-100">
-                {dowLabel[Number(r.day_of_week) || 0]} • {String(r.start_time).slice(0, 5)}–{String(r.end_time).slice(0, 5)}
-              </div>
-              <div className="mt-1 text-xs text-slate-400">
-                Slot {Number(r.slot_minutes || 30)} min • {String(r.timezone || 'UTC')}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Add rule</div>
-        {err && <div className="mt-2 text-sm text-rose-200">{err}</div>}
-        <div className="mt-3 grid gap-3 sm:grid-cols-4">
-          <select
-            style={{ colorScheme: 'dark' }}
-            value={dow}
-            onChange={(e) => setDow(e.target.value)}
-            className="h-10 rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100"
-          >
-            {dowLabel.map((l, i) => (
-              <option key={l} value={String(i)} className="bg-slate-950 text-slate-100">
-                {l}
-              </option>
-            ))}
-          </select>
-          <input value={start} onChange={(e) => setStart(e.target.value)} className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100" />
-          <input value={end} onChange={(e) => setEnd(e.target.value)} className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100" />
-          <input value={slot} onChange={(e) => setSlot(e.target.value)} className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100" />
-        </div>
-        <div className="mt-3 flex justify-end">
-          <button
-            type="button"
-            disabled={saving || !businessId}
-            onClick={() => void addRule()}
-            className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Add'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-

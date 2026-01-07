@@ -6,6 +6,7 @@ import { supabase } from '../../../utils/supabaseClient';
 import AutoPrint from './AutoPrint';
 import ManualPrintButton from './ManualPrintButton';
 import { computeStatements } from '../../../lib/financialStatements';
+import { TAX_FEATURES_ENABLED } from '../../../lib/featureFlags';
 
 type Tx = {
   id: number;
@@ -141,7 +142,7 @@ export default function PrintClient() {
     cashflow: 'Cash Flow',
     sales_by_customer: 'Sales by Customer',
     expenses_by_vendor: 'Expenses by Vendor',
-    tax_summary: 'Tax Summary',
+    tax_summary: TAX_FEATURES_ENABLED ? 'Tax Summary' : 'Tax Summary (disabled)',
   };
 
   const statements = useMemo(() => computeStatements(safeTxs as any), [safeTxs]);
@@ -381,7 +382,16 @@ export default function PrintClient() {
             : report === 'expenses_by_vendor'
               ? expensesByVendorTable()
               : report === 'tax_summary'
-                ? taxSummaryTable()
+                ? TAX_FEATURES_ENABLED
+                  ? taxSummaryTable()
+                  : (
+                      <div style={{ padding: 12, border: '1px solid #ddd', borderRadius: 8 }}>
+                        <div style={{ fontWeight: 700 }}>Tax reports are temporarily disabled.</div>
+                        <div style={{ marginTop: 6, fontSize: 12 }}>
+                          Please use other reports (P&amp;L, Balance Sheet, Cash Flow) until tax features are re-enabled.
+                        </div>
+                      </div>
+                    )
                 : pnlTable();
 
   if (loading) {

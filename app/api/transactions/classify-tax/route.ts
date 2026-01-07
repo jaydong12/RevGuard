@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { NextResponse } from 'next/server';
 import { requireActiveSubscription } from '../../../../lib/requireActiveSubscription';
 import { classifyTaxTag, type TaxTagResult } from '../../../../lib/taxTagger';
+import { TAX_FEATURES_ENABLED } from '../../../../lib/featureFlags';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -65,6 +66,28 @@ async function classifyWithAi(txs: InputTx[]): Promise<TaxTagResult[]> {
 }
 
 export async function POST(request: Request) {
+  if (!TAX_FEATURES_ENABLED) {
+    // Return a harmless default so callers don't error.
+    let body: any = null;
+    try {
+      body = await request.json();
+    } catch {
+      body = null;
+    }
+    const txs: InputTx[] = Array.isArray(body?.transactions) ? body.transactions : [];
+    return NextResponse.json({
+      disabled: true,
+      message: 'Tax features are temporarily disabled.',
+      results: txs.map(() => ({
+        tax_category: 'uncategorized',
+        tax_treatment: 'review',
+        confidence_score: 0,
+        reasoning: 'Tax features are temporarily disabled.',
+        tax_reason: 'Tax features are temporarily disabled.',
+      })),
+    });
+  }
+
   const gate = await requireActiveSubscription(request);
   if (!(gate as any)?.ok) return gate as any;
 

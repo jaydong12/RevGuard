@@ -44,6 +44,11 @@ function serializeSupabaseError(err: any) {
   };
 }
 
+function isMissingColumnError(err: any) {
+  // Postgres undefined_column
+  return String(err?.code ?? '') === '42703' || /column .* does not exist/i.test(String(err?.message ?? ''));
+}
+
 function addMinutesIso(startIso: string, mins: number) {
   const d = new Date(startIso);
   return new Date(d.getTime() + mins * 60 * 1000).toISOString();
@@ -70,9 +75,18 @@ export async function POST(request: Request) {
   if (!serviceId || !isUuid(serviceId)) return NextResponse.json({ error: 'serviceId must be a valid UUID' }, { status: 400 });
   if (!isIso(startAt)) return NextResponse.json({ error: 'startAt must be ISO timestamptz' }, { status: 400 });
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnon) {
+    return NextResponse.json(
+      { error: 'Server is missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).' },
+      { status: 500 }
+    );
+  }
+
   const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnon,
     { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false, autoRefreshToken: false } }
   );
 
@@ -87,6 +101,7 @@ export async function POST(request: Request) {
 
   const duration = Math.max(5, Number((svc as any).duration_minutes) || 60);
   const endAt = addMinutesIso(startAt, duration);
+  const svcPriceCents = Math.max(0, Number((svc as any).price_cents) || 0);
 
   // Check conflicts (simple overlap check)
   const { data: conflicts, error: cErr } = await supabase
@@ -111,6 +126,7 @@ export async function POST(request: Request) {
     service_id: serviceId,
     start_at: startAt,
     end_at: endAt,
+    price_cents: svcPriceCents,
     status,
     notes: notes ?? '',
     customer_name: customer_name ?? '',
@@ -120,12 +136,29 @@ export async function POST(request: Request) {
   // eslint-disable-next-line no-console
   console.log('BOOKING_CREATE_SERVER_PAYLOAD', bookingPayload);
 
-  const { data: booking, error: bErr } = await supabase
-    .from('bookings')
-    .insert(bookingPayload)
-    .select('*')
-    .single();
-  if (bErr || !booking) return NextResponse.json({ error: serializeSupabaseError(bErr) }, { status: 400 });
+  // Schema-safe insert: some DBs may not have bookings.price_cents yet.
+  let booking: any | null = null;
+  {
+    const { data: b1, error: bErr } = await supabase
+      .from('bookings')
+      .insert(bookingPayload)
+      .select('*')
+      .single();
+    if (bErr && isMissingColumnError(bErr)) {
+      const { price_cents: _omit, ...fallbackPayload } = bookingPayload;
+      const { data: b2, error: bErr2 } = await supabase
+        .from('bookings')
+        .insert(fallbackPayload as any)
+        .select('*')
+        .single();
+      if (bErr2 || !b2) return NextResponse.json({ error: serializeSupabaseError(bErr2) }, { status: 400 });
+      booking = b2 as any;
+    } else if (bErr || !b1) {
+      return NextResponse.json({ error: serializeSupabaseError(bErr) }, { status: 400 });
+    } else {
+      booking = b1 as any;
+    }
+  }
 
   const title = `${String((svc as any).name ?? 'Service')} • ${clientName}`;
   const { data: ev, error: evErr } = await supabase
@@ -147,13 +180,19 @@ export async function POST(request: Request) {
   }
 
   try {
+    const bookingPriceCents = Math.max(
+      0,
+      Number((booking as any)?.price_cents ?? NaN) || svcPriceCents || 0
+    );
+    const bookingPriceDollars = Number((bookingPriceCents / 100).toFixed(2));
     const invoice = await createSmartInvoiceForBooking({
       supabase,
       businessId,
       bookingId: Number((booking as any).id),
       clientName,
       serviceName: String((svc as any).name ?? 'Service'),
-      price: (Number((svc as any).price_cents) || 0) / 100,
+      // Important: use booking snapshot price (preferred) so invoice totals are always real for transaction sync.
+      price: bookingPriceDollars,
       notes: notes,
       startAtIso: startAt,
       endAtIso: endAt,

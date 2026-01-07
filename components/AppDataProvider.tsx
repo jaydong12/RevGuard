@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../utils/supabaseClient';
+import { getSupabaseClient, getSupabaseEnvError } from '../utils/supabaseClient';
 
 type BusinessRow = {
   id: string;
@@ -39,6 +39,7 @@ type AppData = {
   userEmail: string | null;
   businessId: string | null;
   business: BusinessRow | null;
+  memberRole: string | null;
   loading: boolean;
   error: string | null;
   transactions: any[];
@@ -53,6 +54,8 @@ type AppData = {
 const AppDataContext = React.createContext<AppData | null>(null);
 
 async function getSessionUser(): Promise<{ id: string | null; email: string | null }> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return { id: null, email: null };
   const { data } = await supabase.auth.getSession();
   return {
     id: data.session?.user?.id ?? null,
@@ -61,6 +64,8 @@ async function getSessionUser(): Promise<{ id: string | null; email: string | nu
 }
 
 async function fetchBusinessForOwner(userId: string): Promise<BusinessRow | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error(getSupabaseEnvError() ?? 'Supabase is not configured.');
   const res = await supabase
     .from('business')
     // Use '*' so older DBs missing newer columns (e.g. address1) don't throw.
@@ -73,7 +78,21 @@ async function fetchBusinessForOwner(userId: string): Promise<BusinessRow | null
   return (res.data as any) ?? null;
 }
 
+async function fetchBusinessById(businessId: string): Promise<BusinessRow | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error(getSupabaseEnvError() ?? 'Supabase is not configured.');
+  const res = await supabase
+    .from('business')
+    .select('*')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (res.error) throw res.error;
+  return (res.data as any) ?? null;
+}
+
 async function ensureBusinessForOwner(userId: string): Promise<BusinessRow | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error(getSupabaseEnvError() ?? 'Supabase is not configured.');
   const existing = await fetchBusinessForOwner(userId);
   if (existing?.id) return existing;
 
@@ -88,6 +107,8 @@ async function ensureBusinessForOwner(userId: string): Promise<BusinessRow | nul
 }
 
 async function ensureProfileAndFetch(userId: string): Promise<ProfileRow | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error(getSupabaseEnvError() ?? 'Supabase is not configured.');
   // IMPORTANT: Do not insert/upsert here. Some environments enforce RLS rules that
   // block profile inserts. The Settings page will update-only if a row exists.
   const res = await supabase
@@ -119,6 +140,8 @@ async function fetchAllRowsPaged<T = any>(params: {
   select?: string;
   orderBy?: { column: string; ascending: boolean };
 }): Promise<T[]> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error(getSupabaseEnvError() ?? 'Supabase is not configured.');
   const pageSize = 1000;
   let from = 0;
   const all: any[] = [];
@@ -144,18 +167,49 @@ async function fetchAllRowsPaged<T = any>(params: {
 }
 
 export function AppDataProvider({ children }: { children: React.ReactNode }) {
+  const supabase = getSupabaseClient();
+  const envError = getSupabaseEnvError();
+
   const sessionQ = useQuery({
     queryKey: ['auth_session_user_id'],
     queryFn: getSessionUser,
+    enabled: Boolean(supabase),
   });
 
   const userId = sessionQ.data?.id ?? null;
   const userEmail = sessionQ.data?.email ?? null;
 
+  const memberQ = useQuery({
+    queryKey: ['business_member_for_user', userId],
+    enabled: Boolean(supabase && userId),
+    queryFn: async () => {
+      if (!supabase) throw new Error(envError ?? 'Supabase is not configured.');
+      const { data, error } = await supabase
+        .from('business_members')
+        .select('business_id, role')
+        .eq('user_id', userId!)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const row = (data as any) ?? null;
+      if (!row?.business_id) return null;
+      return { business_id: String(row.business_id), role: String(row.role ?? '').toLowerCase() };
+    },
+  });
+
+  const memberRole = memberQ.data?.role ?? null;
+  const memberBusinessId = memberQ.data?.business_id ?? null;
+  const isEmployee = memberRole === 'employee';
+
   const businessQ = useQuery({
-    queryKey: ['business_by_owner', userId],
-    enabled: Boolean(userId),
-    queryFn: () => ensureBusinessForOwner(userId!),
+    queryKey: ['business_for_user', userId, memberBusinessId],
+    enabled: Boolean(supabase && userId),
+    queryFn: async () => {
+      // Sub-accounts should NOT auto-create a business row.
+      if (memberBusinessId) return await fetchBusinessById(memberBusinessId);
+      return await ensureBusinessForOwner(userId!);
+    },
   });
 
   const business = businessQ.data ?? null;
@@ -163,25 +217,55 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const profileQ = useQuery({
     queryKey: ['profile', userId],
-    enabled: Boolean(userId),
+    enabled: Boolean(supabase && userId),
     queryFn: () => ensureProfileAndFetch(userId!),
   });
 
   const txQ = useQuery({
     queryKey: ['transactions', businessId],
-    enabled: Boolean(userId && businessId),
-    queryFn: () =>
-      fetchAllRowsPaged({
-        table: 'transactions',
-        businessId: businessId!,
-        select: '*',
-        orderBy: { column: 'date', ascending: false },
-      }),
+    enabled: Boolean(supabase && userId && businessId && !isEmployee),
+    queryFn: async () => {
+      try {
+        const rows = await fetchAllRowsPaged({
+          table: 'transactions',
+          businessId: businessId!,
+          select: '*',
+          orderBy: { column: 'date', ascending: false },
+        });
+        // Money standardization:
+        // Prefer integer cents in `amount_cents`, and derive `amount` dollars once for legacy consumers.
+        const normalized = (rows ?? []).map((r: any) => {
+          const cents = Number(r?.amount_cents);
+          if (Number.isFinite(cents) && cents !== 0) return { ...r, amount: cents / 100 };
+          // Legacy/imported rows may have amount_cents default 0 while amount is set.
+          const amt = typeof r?.amount === 'string' ? Number(String(r.amount).replace(/[^0-9.\-]/g, '')) : Number(r?.amount);
+          if (Number.isFinite(amt) && amt !== 0) return { ...r, amount: amt };
+          return r;
+        });
+        if (process.env.NODE_ENV !== 'production') {
+          // eslint-disable-next-line no-console
+          console.log('TXQ_FETCH_OK', { business_id: businessId, count: (normalized ?? []).length });
+        }
+        return normalized;
+      } catch (e: any) {
+        if (process.env.NODE_ENV !== 'production') {
+          // eslint-disable-next-line no-console
+          console.error('TXQ_FETCH_ERROR', {
+            business_id: businessId,
+            code: e?.code ?? null,
+            message: e?.message ?? String(e),
+            details: e?.details ?? null,
+            hint: e?.hint ?? null,
+          });
+        }
+        throw e;
+      }
+    },
   });
 
   const customersQ = useQuery({
     queryKey: ['customers', businessId],
-    enabled: Boolean(userId && businessId),
+    enabled: Boolean(supabase && userId && businessId && !isEmployee),
     queryFn: () =>
       fetchAllRowsPaged({
         table: 'customers',
@@ -193,7 +277,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const billsQ = useQuery({
     queryKey: ['bills', businessId],
-    enabled: Boolean(userId && businessId),
+    enabled: Boolean(supabase && userId && businessId && !isEmployee),
     queryFn: () =>
       fetchAllRowsPaged({
         table: 'bills',
@@ -205,7 +289,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
 
   const invoicesQ = useQuery({
     queryKey: ['invoices', businessId],
-    enabled: Boolean(userId && businessId),
+    enabled: Boolean(supabase && userId && businessId && !isEmployee),
     queryFn: () =>
       fetchAllRowsPaged({
         table: 'invoices',
@@ -226,6 +310,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     invoicesQ.isLoading;
 
   const errObj =
+    envError ||
     sessionQ.error ||
     businessQ.error ||
     txQ.error ||
@@ -240,6 +325,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       userEmail,
       businessId,
       business,
+      memberRole,
       loading,
       error,
       transactions: (txQ.data as any[]) ?? [],
@@ -257,6 +343,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       userEmail,
       businessId,
       business,
+      memberRole,
       loading,
       error,
       txQ.data,

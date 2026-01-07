@@ -20,6 +20,7 @@ import {
   Tooltip,
 } from 'recharts';
 import { PremiumBarChart } from '../../components/PremiumBarChart';
+import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
 
 function ChartFrame({
   children,
@@ -1448,7 +1449,7 @@ function buildMonthlySeries(txs: Transaction[]) {
   return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
 }
 
-const REPORT_LIBRARY: Array<{
+const REPORT_LIBRARY_BASE: Array<{
   id: string;
   kind: ReportKind;
   title: string;
@@ -1497,15 +1498,21 @@ const REPORT_LIBRARY: Array<{
     category: 'Expenses',
     icon: 'doc',
   },
-  {
-    id: 'tax_summary',
-    kind: 'tax_summary',
-    title: 'Tax Summary',
-    description: 'High-level tax-ready totals and category guidance.',
-    category: 'Taxes',
-    icon: 'spark',
-  },
 ];
+
+const REPORT_LIBRARY = TAX_FEATURES_ENABLED
+  ? ([
+      ...REPORT_LIBRARY_BASE,
+      {
+        id: 'tax_summary',
+        kind: 'tax_summary',
+        title: 'Tax Summary',
+        description: 'High-level tax-ready totals and category guidance.',
+        category: 'Taxes',
+        icon: 'spark',
+      },
+    ] as typeof REPORT_LIBRARY_BASE)
+  : REPORT_LIBRARY_BASE;
 
 export default function ReportsPage() {
   const perfEnabled = useMemo(() => {
@@ -1618,6 +1625,19 @@ export default function ReportsPage() {
     }
     return res;
   }, [effectiveTxs, perfEnabled]);
+
+  // P&L KPI totals should not depend on category/type heuristics.
+  // Requirement: Total Expenses = sum(abs(amount)) where amount < 0.
+  const pnlTotalsBasic = useMemo(() => {
+    let income = 0;
+    let expenses = 0;
+    for (const tx of effectiveTxs as any[]) {
+      const amt = Number((tx as any)?.amount) || 0;
+      if (amt > 0) income += amt;
+      else if (amt < 0) expenses += Math.abs(amt);
+    }
+    return { income, expenses, net: income - expenses };
+  }, [effectiveTxs]);
   const pnlRows = useMemo(() => buildPnlRows(effectiveTxs), [effectiveTxs]);
   const balanceBreakdown = useMemo(
     () => buildBalanceBreakdown(effectiveTxs),
@@ -1675,7 +1695,7 @@ export default function ReportsPage() {
 
   const taxRulesQ = useQuery({
     queryKey: ['business_tax_category_rules', selectedBusinessId],
-    enabled: Boolean(selectedBusinessId),
+    enabled: TAX_FEATURES_ENABLED && Boolean(selectedBusinessId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from('business_tax_category_rules')
@@ -1688,7 +1708,7 @@ export default function ReportsPage() {
 
   const taxSettingsQ = useQuery({
     queryKey: ['tax_settings', selectedBusinessId],
-    enabled: Boolean(selectedBusinessId),
+    enabled: TAX_FEATURES_ENABLED && Boolean(selectedBusinessId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from('tax_settings')
@@ -1764,7 +1784,35 @@ export default function ReportsPage() {
     setTaxProfileDraft(taxProfile);
   }, [taxProfile]);
 
+  const effectiveTaxProfile = useMemo(() => {
+    const legal = String(taxSetupDraft?.legal_structure ?? '').trim();
+    const stateCode = String(taxSetupDraft?.state_code ?? '').trim().toUpperCase();
+    const hasPayroll = Boolean(taxSetupDraft?.has_payroll ?? false);
+
+    // Legal structure drives the entity type used by the estimate.
+    const entity_type = (legal || taxProfileDraft?.entity_type || 'sole_prop') as any;
+
+    // TX: no state income tax.
+    const state_rate = stateCode === 'TX' ? 0 : Number(taxProfileDraft?.state_rate ?? 0) || 0;
+
+    // Payroll toggle: when payroll is on, switch OFF self-employment tax estimate.
+    const include_self_employment = hasPayroll
+      ? false
+      : Boolean(taxProfileDraft?.include_self_employment ?? true);
+
+    return {
+      entity_type,
+      filing_status: (taxProfileDraft?.filing_status ?? 'single') as any,
+      state_rate,
+      include_self_employment,
+    };
+  }, [taxProfileDraft, taxSetupDraft]);
+
   async function saveTaxProfile() {
+    if (!TAX_FEATURES_ENABLED) {
+      setToast({ message: 'Tax features are temporarily disabled.', tone: 'error' });
+      return;
+    }
     if (!selectedBusinessId) return;
     setTaxProfileSaving(true);
     try {
@@ -1809,25 +1857,47 @@ export default function ReportsPage() {
   }
 
   async function saveTaxSetup() {
+    if (!TAX_FEATURES_ENABLED) {
+      setToast({ message: 'Tax features are temporarily disabled.', tone: 'error' });
+      return;
+    }
     if (!selectedBusinessId) return;
     setTaxSetupSaving(true);
     try {
+      const legal = String(taxSetupDraft.legal_structure ?? '').trim();
+      if (!legal) {
+        setToast({ message: 'Legal structure is required.', tone: 'error' });
+        return;
+      }
       const payload: any = {
-        legal_structure: String(taxSetupDraft.legal_structure ?? '').trim() || null,
+        legal_structure: legal,
         state_code: String(taxSetupDraft.state_code ?? '').trim().toUpperCase() || null,
         has_payroll: Boolean(taxSetupDraft.has_payroll),
       };
 
-      const { error } = await supabase.from('business').update(payload).eq('id', selectedBusinessId);
+      // Keep legacy business tax columns consistent so all estimate paths match.
+      const stateCode = String(payload.state_code ?? '').trim().toUpperCase();
+      const hasPayroll = Boolean(payload.has_payroll);
+      if (stateCode === 'TX') payload.tax_state_rate = 0;
+      payload.tax_entity_type = legal;
+      payload.tax_include_self_employment = hasPayroll ? false : Boolean(taxProfileDraft.include_self_employment ?? true);
+
+      const { error } = await supabase
+        .from('business')
+        .update(payload)
+        .eq('id', selectedBusinessId);
       if (error) throw error;
 
       // Ensure tax_settings row exists (even if user hasn't opened Advanced yet).
       const settingsPayload: any = {
         business_id: selectedBusinessId,
-        entity_type: taxProfileDraft.entity_type ?? 'sole_prop',
+        entity_type: legal,
         filing_status: taxProfileDraft.filing_status ?? 'single',
-        state_rate: Number(taxProfileDraft.state_rate) || 0,
-        include_self_employment: Boolean(taxProfileDraft.include_self_employment ?? true),
+        state_rate:
+          stateCode === 'TX' ? 0 : Number(taxProfileDraft.state_rate) || 0,
+        include_self_employment: hasPayroll
+          ? false
+          : Boolean(taxProfileDraft.include_self_employment ?? true),
       };
       const { error: sErr } = await supabase
         .from('tax_settings')
@@ -1848,6 +1918,10 @@ export default function ReportsPage() {
   }
 
   async function upsertTaxRule(category: string, treatment: TaxCategoryTreatment) {
+    if (!TAX_FEATURES_ENABLED) {
+      setToast({ message: 'Tax features are temporarily disabled.', tone: 'error' });
+      return;
+    }
     if (!selectedBusinessId) return;
     const cat = String(category ?? '').trim();
     if (!cat) return;
@@ -1876,14 +1950,49 @@ export default function ReportsPage() {
     }
   }
 
-  const taxSummary = useMemo(
-    () =>
-      buildTaxSummaryRows(effectiveTxs, {
-        taxProfile,
-        categoryRulesByKey: taxRulesByKey,
-      }),
-    [effectiveTxs, taxProfile, taxRulesByKey]
-  );
+  const taxSummary = useMemo(() => {
+    if (!TAX_FEATURES_ENABLED) {
+      return {
+        rows: [],
+        taxRows: [],
+        totalIncome: 0,
+        totalExpenses: 0,
+        net: 0,
+        taxReadyExpenses: 0,
+        taxableIncome: 0,
+        nonTaxableIncome: 0,
+        deductibleExpenses: 0,
+        nonDeductibleExpenses: 0,
+        estimatedTaxableProfit: 0,
+        estimatedTaxableProfitRemaining: 0,
+        estFederal: 0,
+        estState: 0,
+        estSelfEmployment: 0,
+        estTotal: 0,
+        estFederalRemaining: 0,
+        estStateRemaining: 0,
+        estTotalRemaining: 0,
+        taxableIncomeTaxed: 0,
+        taxableIncomeNotTaxed: 0,
+        deductibleExpensesTaxed: 0,
+        deductibleExpensesNotTaxed: 0,
+        rates: { state: 0 },
+        profile: {
+          entityType: 'sole_prop',
+          filingStatus: 'single',
+          standardDeduction: 0,
+          taxableIncomeForFederal: 0,
+          stateRate: 0,
+          includeSE: false,
+          seHalfDeduction: 0,
+        },
+      } as any;
+    }
+    return buildTaxSummaryRows(effectiveTxs, {
+      taxProfile: effectiveTaxProfile,
+      categoryRulesByKey: taxRulesByKey,
+    });
+  }, [effectiveTxs, effectiveTaxProfile, taxRulesByKey]);
 
   // --- Tax Summary UI (presentation-only; calculations stay in buildTaxSummaryRows) ---
   const [taxSetupOpen, setTaxSetupOpen] = useState(false);
@@ -1920,9 +2029,41 @@ export default function ReportsPage() {
     return clamp01(tax / profit);
   }, [taxSummary.estimatedTaxableProfit, taxSummary.estTotal]);
 
+  const taxReportOverrides = useMemo(() => {
+    const legal = String(taxSetupDraft?.legal_structure ?? '').trim();
+    const stateCode = String(taxSetupDraft?.state_code ?? '').trim().toUpperCase();
+    const hasPayroll = Boolean(taxSetupDraft?.has_payroll ?? false);
+
+    return {
+      // Legal structure drives entity type; required for accurate estimates.
+      legal_structure: legal || null,
+      state_code: stateCode || null,
+      has_payroll: hasPayroll,
+
+      // Keep the engine in sync with UI logic.
+      tax_entity_type: (legal || taxProfileDraft?.entity_type || null) as any,
+      tax_filing_status: (taxProfileDraft?.filing_status || null) as any,
+      tax_state_rate: stateCode === 'TX' ? 0 : Number(taxProfileDraft?.state_rate ?? 0) || 0,
+      tax_include_self_employment: hasPayroll ? false : Boolean(taxProfileDraft?.include_self_employment ?? true),
+    };
+  }, [taxProfileDraft, taxSetupDraft]);
+
   const taxReportQ = useQuery({
-    queryKey: ['tax_report', selectedBusinessId, startDate, endDate],
+    queryKey: [
+      'tax_report',
+      selectedBusinessId,
+      startDate,
+      endDate,
+      taxReportOverrides.legal_structure,
+      taxReportOverrides.state_code,
+      taxReportOverrides.has_payroll,
+      taxReportOverrides.tax_entity_type,
+      taxReportOverrides.tax_filing_status,
+      taxReportOverrides.tax_state_rate,
+      taxReportOverrides.tax_include_self_employment,
+    ],
     enabled:
+      TAX_FEATURES_ENABLED &&
       Boolean(selectedBusinessId) &&
       Boolean(startDate && endDate && isIsoDate(startDate) && isIsoDate(endDate)),
     queryFn: async () => {
@@ -1940,6 +2081,8 @@ export default function ReportsPage() {
           businessId: selectedBusinessId,
           startDate,
           endDate,
+          // Draft overrides: lets the estimate update instantly while editing setup.
+          overrides: taxReportOverrides,
         }),
       });
 
@@ -1951,6 +2094,21 @@ export default function ReportsPage() {
       return (await res.json()) as any;
     },
   });
+
+  // Beginner-friendly one-liner (presentation only; math is from existing computed values).
+  const beginnerTaxOneLiner = useMemo(() => {
+    if (!TAX_FEATURES_ENABLED) return { profit: 0, tax: 0, pct: null };
+    const profit =
+      Number(taxReportQ.data?.simpleCards?.profitYtd ?? NaN) ||
+      Number(taxSummary.estimatedTaxableProfit ?? 0) ||
+      0;
+    const tax =
+      Number(taxReportQ.data?.simpleCards?.estimatedTaxesOwedYtd ?? NaN) ||
+      Number(taxSummary.estTotal ?? 0) ||
+      0;
+    const pct = profit > 0 && tax > 0 ? Math.round((tax / profit) * 100) : null;
+    return { profit, tax, pct };
+  }, [taxReportQ.data, taxSummary.estimatedTaxableProfit, taxSummary.estTotal]);
 
   const activeReport = useMemo(() => {
     return REPORT_LIBRARY.find((r) => r.id === activeReportId) ?? REPORT_LIBRARY[0];
@@ -2405,7 +2563,7 @@ export default function ReportsPage() {
                   <div
                     className={classNames(
                       'grid gap-3 mb-4',
-                      activeReport.kind === 'tax_summary'
+                      TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary'
                         ? 'sm:grid-cols-2 lg:grid-cols-4'
                         : 'md:grid-cols-3'
                     )}
@@ -2417,7 +2575,7 @@ export default function ReportsPage() {
                             Total income
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-emerald-300">
-                            {formatCurrency(statements.incomeStatement.totalIncome)}
+                            {formatCurrency(pnlTotalsBasic.income)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             From {txs.length.toLocaleString('en-US')} transactions
@@ -2428,7 +2586,7 @@ export default function ReportsPage() {
                             Total expenses
                           </div>
                           <div className="mt-1 text-3xl font-semibold text-rose-300">
-                            {formatCurrency(-statements.incomeStatement.totalExpenses)}
+                            {formatCurrency(pnlTotalsBasic.expenses)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             Keep an eye on the biggest categories below
@@ -2441,12 +2599,12 @@ export default function ReportsPage() {
                           <div
                             className={classNames(
                               'mt-1 text-3xl font-semibold',
-                              statements.incomeStatement.netIncome >= 0
+                              pnlTotalsBasic.net >= 0
                                 ? 'text-emerald-300'
                                 : 'text-rose-300'
                             )}
                           >
-                            {formatCurrency(statements.incomeStatement.netIncome)}
+                            {formatCurrency(pnlTotalsBasic.net)}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             Income − expenses
@@ -2614,65 +2772,28 @@ export default function ReportsPage() {
                       </>
                     )}
 
-                    {activeReport.kind === 'tax_summary' && (
+                    {TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' && (
                       <>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
-                          <div className="flex items-center justify-between gap-2">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 lg:col-span-2">
                           <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                              Tax set-aside (YTD)
-                            </div>
-                            <InlineInfoTip text="A simple target: set aside your estimated taxes as you earn profit, so payments don’t surprise you." />
+                            Simple tax summary (estimate)
                           </div>
-                          <div className="mt-1 text-3xl font-semibold text-blue-200">
-                            {taxReportQ.isLoading
-                              ? '—'
-                              : taxReportQ.data?.simpleCards
-                                ? formatCurrency(taxReportQ.data.simpleCards.taxSetAside?.amount ?? 0)
-                                : '—'}
+                          <div className="mt-2 text-sm text-slate-200">
+                            You made <span className="font-semibold">{formatCurrency(beginnerTaxOneLiner.profit)}</span> in profit. About{' '}
+                            <span className="font-semibold">{formatCurrency(beginnerTaxOneLiner.tax)}</span>
+                            {beginnerTaxOneLiner.pct !== null ? ` (~${beginnerTaxOneLiner.pct}%)` : ''} goes to taxes.
                           </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            {taxReportQ.data?.simpleCards?.taxSetAside?.pct === null ||
-                            taxReportQ.data?.simpleCards?.taxSetAside?.pct === undefined
-                              ? '—'
-                              : `About ${(Number(taxReportQ.data.simpleCards.taxSetAside.pct) * 100).toFixed(0)}% of taxable profit.`}
-                          </div>
-                          </div>
-
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-                          <div className="flex items-center justify-between gap-2">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                              Estimated taxes owed (YTD)
-                            </div>
-                            <InlineInfoTip text="Estimated total for this date range (federal + state + self-employment when applicable)." />
-                          </div>
-                          <div className="mt-1 text-3xl font-semibold text-slate-100">
-                            {taxReportQ.isLoading
-                              ? '—'
-                              : taxReportQ.data?.simpleCards
-                                ? formatCurrency(
-                                    taxReportQ.data.simpleCards.estimatedTaxesOwedYtd ?? 0
-                                  )
-                                : '—'}
-                          </div>
-                          <div className="mt-1 text-[11px] text-slate-500">
-                            {taxReportQ.isLoading
-                              ? 'Loading…'
-                              : taxReportQ.data?.breakdown?.taxes
-                                ? `Federal + state${
-                                    Number(taxReportQ.data.breakdown.taxes.selfEmployment || 0) > 0
-                                      ? ' + SE'
-                                      : ''
-                                  }.`
-                                : '—'}
+                          <div className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                            This is a planning estimate using your transactions in this date range. It does not file your taxes.
                           </div>
                         </div>
 
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="flex items-center justify-between gap-2">
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                              Profit (YTD)
-                          </div>
-                            <InlineInfoTip text="Income minus expenses for this date range (not a tax filing value—just your operating result)." />
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Step 1 · What you made
+                            </div>
+                            <InlineInfoTip text="Profit is income minus expenses in this date range." />
                           </div>
                           <div
                             className={classNames(
@@ -2689,29 +2810,69 @@ export default function ReportsPage() {
                                 : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
-                            Income − expenses
+                            Profit (income − expenses)
                           </div>
                         </div>
 
                         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                              Next estimated payment
+                              Step 2 · Who you owe (estimate)
                             </div>
-                            <InlineInfoTip text="A simple quarterly plan: estimated annual taxes divided into four payments." />
+                            <InlineInfoTip text="Self-employment tax = Social Security + Medicare that business owners pay when you’re not on payroll." />
                           </div>
-                          <div className="mt-1 text-3xl font-semibold text-slate-100">
+                          <div className="mt-3 space-y-2 text-[11px] text-slate-300">
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">Federal</span>
+                              <span className="font-semibold text-slate-100">
+                                {taxReportQ.isLoading ? '—' : formatCurrency(taxReportQ.data?.breakdown?.taxes?.federal ?? 0)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-slate-400">State</span>
+                              <span className="font-semibold text-slate-100">
+                                {taxReportQ.isLoading ? '—' : formatCurrency(taxReportQ.data?.breakdown?.taxes?.state ?? 0)}
+                              </span>
+                            </div>
+                            {Boolean(taxSetupDraft?.has_payroll) ? (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-400">Payroll taxes (employer)</span>
+                                <span className="font-semibold text-slate-100">
+                                  {taxReportQ.isLoading ? '—' : formatCurrency(taxReportQ.data?.breakdown?.taxes?.payrollEmployer ?? 0)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-slate-400">Self-employment (Social Security + Medicare)</span>
+                                <span className="font-semibold text-slate-100">
+                                  {taxReportQ.isLoading ? '—' : formatCurrency(taxReportQ.data?.breakdown?.taxes?.selfEmployment ?? 0)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4 shadow-[0_0_22px_rgba(96,165,250,0.06)]">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                              Step 3 · Total tax (estimate)
+                            </div>
+                            <InlineInfoTip text="Total of federal + state + self-employment (when applicable)." />
+                          </div>
+                          <div className="mt-1 text-3xl font-semibold text-blue-200">
                             {taxReportQ.isLoading
                               ? '—'
-                              : taxReportQ.data?.nextPayment
-                                ? formatCurrency(taxReportQ.data.nextPayment.amount ?? 0)
-                                : '—'}
+                              : taxReportQ.data?.breakdown?.taxes
+                                ? formatCurrency(taxReportQ.data.breakdown.taxes.total ?? 0)
+                                : taxReportQ.data?.simpleCards
+                                  ? formatCurrency(taxReportQ.data.simpleCards.estimatedTaxesOwedYtd ?? 0)
+                                  : '—'}
                           </div>
                           <div className="mt-1 text-[11px] text-slate-500">
                             {taxReportQ.isLoading
                               ? 'Loading…'
-                              : taxReportQ.data?.nextPayment?.dueDate
-                                ? `Due ${taxReportQ.data.nextPayment.dueDate}`
+                              : setAsidePct !== null
+                                ? `That’s about ${(setAsidePct * 100).toFixed(0)}% of taxable profit.`
                                 : '—'}
                           </div>
                         </div>
@@ -2719,7 +2880,7 @@ export default function ReportsPage() {
                     )}
                   </div>
 
-                  {activeReport.kind === 'tax_summary' && (
+                  {TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' && (
                     <div className="mb-4 grid gap-3 lg:grid-cols-[1fr,220px] items-start">
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                         <div className="flex items-start justify-between gap-3">
@@ -2809,7 +2970,7 @@ export default function ReportsPage() {
                     </div>
                   )}
 
-                  {activeReport.kind === 'tax_summary' && (
+                  {TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' && (
                     <div className="mb-4 grid gap-3">
                       {/* Setup (3 questions) */}
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
@@ -2855,6 +3016,9 @@ export default function ReportsPage() {
                                   <option value="s_corp" className="bg-slate-950 text-slate-100">S-Corp</option>
                                   <option value="c_corp" className="bg-slate-950 text-slate-100">C-Corp</option>
                                 </select>
+                                <div className="mt-1 text-[10px] text-slate-500">
+                                  Required. This determines whether self-employment tax applies.
+                                </div>
                               </label>
 
                               <label className="text-[11px] text-slate-400">
@@ -2870,6 +3034,9 @@ export default function ReportsPage() {
                                   placeholder="TX"
                                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/40 px-2 py-1 text-[11px] text-slate-100"
                                 />
+                                <div className="mt-1 text-[10px] text-slate-500">
+                                  We’ll apply your state’s estimate automatically (TX → $0 state income tax).
+                                </div>
                               </label>
 
                               <label className="text-[11px] text-slate-400">
@@ -2887,8 +3054,17 @@ export default function ReportsPage() {
                                   />
                                   <span>We run payroll</span>
                                 </div>
+                                <div className="mt-1 text-[10px] text-slate-500">
+                                  On = payroll taxes; Off = self-employment tax estimate (if applicable).
+                                </div>
                               </label>
                             </div>
+
+                            {String(taxSetupDraft.legal_structure ?? '').trim() === '' && (
+                              <div className="mt-3 text-[11px] text-rose-300">
+                                Please select a legal structure to get an accurate estimate.
+                              </div>
+                            )}
 
                             <div className="mt-3 flex items-center justify-between gap-3">
                               <div className="text-[11px] text-slate-500">
@@ -2897,7 +3073,11 @@ export default function ReportsPage() {
                               <button
                                 type="button"
                                 onClick={() => void saveTaxSetup()}
-                                disabled={!selectedBusinessId || taxSetupSaving}
+                                disabled={
+                                  !selectedBusinessId ||
+                                  taxSetupSaving ||
+                                  String(taxSetupDraft.legal_structure ?? '').trim() === ''
+                                }
                                 className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
                               >
                                 {taxSetupSaving ? 'Saving…' : 'Save'}
@@ -3034,7 +3214,7 @@ export default function ReportsPage() {
                               </div>
 
                               <div className="mt-3 space-y-2">
-                                {taxSummary.taxRows.slice(0, 8).map((r) => {
+                                {taxSummary.taxRows.slice(0, 8).map((r: any) => {
                                   const key = String(r.category ?? '').trim().toLowerCase();
                                   const current =
                                     (taxRulesByKey[key]?.treatment as any) ?? 'review';
@@ -3078,7 +3258,7 @@ export default function ReportsPage() {
                   )}
 
                   {/* Tax breakdown drawer */}
-                  {activeReport.kind === 'tax_summary' && taxBreakdownOpen && (
+                  {TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' && taxBreakdownOpen && (
                     <div className="fixed inset-0 z-50">
                       <button
                         type="button"
@@ -3257,7 +3437,7 @@ export default function ReportsPage() {
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
-                                  <span className="text-slate-400">Self-employment (estimate)</span>
+                                  <span className="text-slate-400">Self-employment (Social Security + Medicare)</span>
                                   <span className="font-semibold text-slate-100">
                                     {formatCurrency(taxReportQ.data?.breakdown?.taxes?.selfEmployment ?? 0)}
                                   </span>
@@ -3269,7 +3449,7 @@ export default function ReportsPage() {
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-4">
-                                  <span className="text-slate-400">Sales tax liability</span>
+                                  <span className="text-slate-400">Sales tax (if you collected it)</span>
                                   <span className="font-semibold text-slate-100">
                                     {formatCurrency(taxReportQ.data?.breakdown?.taxes?.salesTaxLiability ?? 0)}
                                   </span>
@@ -3294,7 +3474,7 @@ export default function ReportsPage() {
                     chartSubtitle={
                       activeReport.kind === 'sales_by_customer' ||
                       activeReport.kind === 'expenses_by_vendor' ||
-                      activeReport.kind === 'tax_summary'
+                      (TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary')
                         ? 'Top entities / categories'
                         : 'Monthly aggregation'
                     }
@@ -3342,7 +3522,7 @@ export default function ReportsPage() {
                             />
                           )}
                         </ChartFrame>
-                      ) : activeReport.kind === 'tax_summary' ? (
+                      ) : TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' ? (
                         <ChartFrame>
                           {taxSummary.rows.length === 0 ? (
                             <div className="h-full w-full flex items-center justify-center text-[11px] text-slate-400">
@@ -3352,11 +3532,15 @@ export default function ReportsPage() {
                             <PremiumBarChart
                                 data={[
                                   { label: 'Gross income', value: taxSummary.totalIncome },
-                                { label: 'Est. taxes', value: taxSummary.estTotal },
+                                {
+                                  label: 'Est. taxes',
+                                  value: Number(taxReportQ.data?.breakdown?.taxes?.total ?? taxSummary.estTotal),
+                                },
                                   {
                                     label: 'Net after tax',
                                     value:
-                                    (taxSummary.net || 0) - (taxSummary.estTotal || 0),
+                                    (taxSummary.net || 0) -
+                                    Number(taxReportQ.data?.breakdown?.taxes?.total ?? taxSummary.estTotal ?? 0),
                                 },
                               ]}
                               variant="blue"
@@ -3537,20 +3721,20 @@ export default function ReportsPage() {
                     detailsOpen={detailsOpen}
                     onToggleDetails={() => setDetailsOpen((v) => !v)}
                     printDetails={
-                      activeReport.kind === 'tax_summary' ? (
+                      TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' ? (
                         <table className="w-full text-xs">
                           <tbody>
                             {[
                               { label: 'Gross income', value: taxSummary.totalIncome },
                               {
                                 label: 'Estimated taxes (remaining)',
-                                value: taxSummary.estTotalRemaining,
+                                value: Number(taxReportQ.data?.breakdown?.taxes?.total ?? taxSummary.estTotalRemaining),
                               },
                               {
                                 label: 'Net after tax (est.)',
                                 value:
                                   (taxSummary.net || 0) -
-                                  (taxSummary.estTotalRemaining || 0),
+                                  Number(taxReportQ.data?.breakdown?.taxes?.total ?? taxSummary.estTotalRemaining ?? 0),
                               },
                             ].map((r) => (
                               <tr key={r.label}>
@@ -3981,7 +4165,7 @@ export default function ReportsPage() {
                           </table>
                         )}
 
-                        {activeReport.kind === 'tax_summary' && (
+                        {TAX_FEATURES_ENABLED && activeReport.kind === 'tax_summary' && (
                           <table className="min-w-full text-xs">
                             <thead className="bg-slate-950/40 text-[11px] text-slate-400">
                               <tr>

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireActiveSubscription } from '../../../lib/requireActiveSubscription';
 import { computeTaxReport, type PayrollRunRow, type TransactionRow } from '../../../lib/taxEngine';
+import { TAX_FEATURES_ENABLED } from '../../../lib/featureFlags';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -73,6 +74,75 @@ function clamp01(n: number) {
 function clamp100(n: number) {
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function isTwoLetterStateCode(v: unknown): v is string {
+  return typeof v === 'string' && /^[A-Za-z]{2}$/.test(v.trim());
+}
+
+function parseOverrideBusinessFields(overrides: any) {
+  if (!overrides || typeof overrides !== 'object') return null;
+
+  const legal_structure =
+    typeof overrides.legal_structure === 'string'
+      ? overrides.legal_structure.trim() || null
+      : null;
+
+  const state_code = isTwoLetterStateCode(overrides.state_code)
+    ? overrides.state_code.trim().toUpperCase()
+    : null;
+
+  const has_payroll =
+    overrides.has_payroll === true || overrides.has_payroll === false
+      ? Boolean(overrides.has_payroll)
+      : null;
+
+  const tax_entity_type =
+    typeof overrides.tax_entity_type === 'string'
+      ? overrides.tax_entity_type.trim() || null
+      : null;
+
+  const tax_filing_status =
+    typeof overrides.tax_filing_status === 'string'
+      ? overrides.tax_filing_status.trim() || null
+      : null;
+
+  const tax_state_rate =
+    overrides.tax_state_rate === null || overrides.tax_state_rate === undefined
+      ? null
+      : Number(overrides.tax_state_rate);
+
+  const tax_include_self_employment =
+    overrides.tax_include_self_employment === true || overrides.tax_include_self_employment === false
+      ? Boolean(overrides.tax_include_self_employment)
+      : null;
+
+  // Apply the requested rules:
+  // - TX has no state income tax
+  const tax_state_rate_final =
+    state_code === 'TX'
+      ? 0
+      : Number.isFinite(tax_state_rate)
+        ? tax_state_rate
+        : null;
+
+  // - Payroll toggle switches SE tax off
+  const tax_include_self_employment_final =
+    has_payroll === true
+      ? false
+      : tax_include_self_employment === null
+        ? null
+        : Boolean(tax_include_self_employment);
+
+  return {
+    legal_structure,
+    state_code,
+    has_payroll,
+    tax_entity_type,
+    tax_filing_status,
+    tax_state_rate: tax_state_rate_final,
+    tax_include_self_employment: tax_include_self_employment_final,
+  };
 }
 
 function computeAccuracyForUi(txs: any[]) {
@@ -150,6 +220,47 @@ function pickNextPayment(report: any) {
 }
 
 async function handle(req: Request, body: any) {
+  if (!TAX_FEATURES_ENABLED) {
+    // Return a non-failing, shape-compatible response so callers never block the app.
+    return NextResponse.json({
+      disabled: true,
+      message: 'Tax features are temporarily disabled.',
+      needsReviewCount: 0,
+      simpleCards: {
+        taxSetAside: { amount: 0, pct: null },
+        estimatedTaxesOwedYtd: 0,
+        profitYtd: 0,
+        nextEstimatedPayment: { amount: 0, dueDate: '' },
+      },
+      breakdown: {
+        meta: { transactionCount: 0 },
+        income: { grossIncome: 0, nonTaxableIncome: 0, taxableIncome: 0 },
+        writeOffs: { deductibleExpenses: 0, nonDeductibleExpenses: 0, standardDeduction: 0, seHalfDeduction: 0 },
+        profit: { netProfit: 0, taxableProfit: 0 },
+        taxes: {
+          federal: 0,
+          state: 0,
+          selfEmployment: 0,
+          payrollEmployer: 0,
+          salesTaxLiability: 0,
+          total: 0,
+        },
+        excluded: {
+          salesTaxCollected: 0,
+          salesTaxPaid: 0,
+          transfers: 0,
+          loanPrincipal: 0,
+          capex: 0,
+          ownerDraw: 0,
+          ownerEstimatedTax: 0,
+        },
+      },
+      accuracy: { score: 0, sentence: 'Tax features are disabled.', checklist: [] },
+      nextPayment: { amount: 0, dueDate: '' },
+      reconciliation: { ok: true, notes: ['Tax features are temporarily disabled.'] },
+    });
+  }
+
   const gate = await requireActiveSubscription(req);
   if (!(gate as any)?.ok) return gate as any;
 
@@ -158,9 +269,18 @@ async function handle(req: Request, body: any) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnon) {
+    return NextResponse.json(
+      { error: 'Server is missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).' },
+      { status: 500 }
+    );
+  }
+
   const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnon,
     {
       global: { headers: { Authorization: `Bearer ${token}` } },
       auth: { persistSession: false, autoRefreshToken: false },
@@ -420,6 +540,28 @@ async function handle(req: Request, body: any) {
     has_payroll: (biz as any)?.has_payroll ?? false,
     sells_taxable_goods_services: (biz as any)?.sells_taxable_goods_services ?? false,
   };
+
+  // Optional draft overrides from UI (does not persist).
+  const override = parseOverrideBusinessFields(body?.overrides);
+  if (override) {
+    if (override.legal_structure !== null) (businessForEngine as any).legal_structure = override.legal_structure;
+    if (override.state_code !== null) (businessForEngine as any).state_code = override.state_code;
+    if (override.has_payroll !== null) (businessForEngine as any).has_payroll = override.has_payroll;
+
+    if (override.tax_entity_type !== null) (businessForEngine as any).tax_entity_type = override.tax_entity_type;
+    if (override.tax_filing_status !== null) (businessForEngine as any).tax_filing_status = override.tax_filing_status;
+    if (override.tax_state_rate !== null) (businessForEngine as any).tax_state_rate = override.tax_state_rate;
+    if (override.tax_include_self_employment !== null) {
+      (businessForEngine as any).tax_include_self_employment = override.tax_include_self_employment;
+    }
+
+    // Enforce the requested behavior even when overrides are partial.
+    const st = String((businessForEngine as any).state_code ?? '').trim().toUpperCase();
+    if (st === 'TX') (businessForEngine as any).tax_state_rate = 0;
+    if (Boolean((businessForEngine as any).has_payroll)) {
+      (businessForEngine as any).tax_include_self_employment = false;
+    }
+  }
 
   const report = computeTaxReport({
     business: businessForEngine as any,

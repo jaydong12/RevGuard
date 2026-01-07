@@ -17,6 +17,7 @@ const KEEP_ALIVE_PATHS = new Set<string>([
   '/invoices',
   '/bills',
   '/customers',
+  '/workers',
   '/ai-advisor',
   '/reports',
   '/settings',

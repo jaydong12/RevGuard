@@ -4,6 +4,7 @@ import React from 'react';
 import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
+import { useToast } from '../../components/ToastProvider';
 
 type BillStatusFilter = 'ALL' | 'UPCOMING' | 'TODAY' | 'OVERDUE' | 'PAID';
 
@@ -28,6 +29,7 @@ type Bill = {
 };
 
 function BillingSection() {
+  const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const { businessId: selectedBusinessId, userId, bills: billsRaw, loading, error: loadError } =
     useAppData();
@@ -59,6 +61,8 @@ function BillingSection() {
   }, [billsRaw]);
   const [filter, setFilter] = React.useState<BillStatusFilter>('ALL');
   const [search, setSearch] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const pageSize = 20;
   const [editingBillId, setEditingBillId] = React.useState<string | null>(null);
   const [form, setForm] = React.useState({
     vendor: '',
@@ -110,6 +114,13 @@ function BillingSection() {
 
     return true;
   });
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [filter, search]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredBills.length / pageSize));
+  const pageBills = filteredBills.slice((page - 1) * pageSize, page * pageSize);
 
   const totalOutstanding = bills
     .filter((b) => b.status === 'OPEN')
@@ -167,7 +178,7 @@ function BillingSection() {
 
     const userIdToUse = userId ?? null;
     if (!userIdToUse) {
-      alert('Please log in to save bills.');
+      pushToast({ tone: 'error', message: 'Please log in to save bills.' });
       return;
     }
 
@@ -194,7 +205,10 @@ function BillingSection() {
       !payload.due_date ||
       !payload.issue_date
     ) {
-      alert('Vendor, amount, issue date, and due date are required.');
+      pushToast({
+        tone: 'error',
+        message: 'Vendor, amount, issue date, and due date are required.',
+      });
       return;
     }
 
@@ -214,11 +228,12 @@ function BillingSection() {
     if (error) {
       // eslint-disable-next-line no-console
       console.error('Error saving bill', error);
-      alert('Could not save bill: ' + error.message);
+      pushToast({ tone: 'error', message: `Could not save bill: ${error.message}` });
       return;
     }
 
     await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
+    pushToast({ tone: 'ok', message: editingBillId ? 'Bill updated.' : 'Bill created.' });
 
     setEditingBillId(null);
     setForm({
@@ -261,7 +276,7 @@ function BillingSection() {
 
     const userIdToUse = userId ?? null;
     if (!userIdToUse) {
-      alert('Please log in to update bills.');
+      pushToast({ tone: 'error', message: 'Please log in to update bills.' });
       return;
     }
 
@@ -278,11 +293,15 @@ function BillingSection() {
     if (error) {
       // eslint-disable-next-line no-console
       console.error('Error toggling paid status', error);
-      alert('Could not update paid status: ' + error.message);
+      pushToast({ tone: 'error', message: `Could not update paid status: ${error.message}` });
       return;
     }
 
     await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
+    pushToast({
+      tone: 'ok',
+      message: updatingToPaid ? 'Marked bill as paid.' : 'Marked bill as open.',
+    });
   }
 
   async function toggleRecurring(bill: Bill) {
@@ -292,7 +311,7 @@ function BillingSection() {
 
       const userIdToUse = userId ?? null;
       if (!userIdToUse) {
-        alert('Please log in to update bills.');
+        pushToast({ tone: 'error', message: 'Please log in to update bills.' });
         return;
       }
 
@@ -310,11 +329,12 @@ function BillingSection() {
       if (error) {
         // eslint-disable-next-line no-console
         console.error('Error turning off recurring', error);
-        alert('Could not update recurring: ' + error.message);
+        pushToast({ tone: 'error', message: `Could not update recurring: ${error.message}` });
         return;
       }
 
       await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
+      pushToast({ tone: 'ok', message: 'Recurring turned off.' });
       return;
     }
 
@@ -329,7 +349,7 @@ function BillingSection() {
 
     const userIdToUse = userId ?? null;
     if (!userIdToUse) {
-      alert('Please log in to update bills.');
+      pushToast({ tone: 'error', message: 'Please log in to update bills.' });
       return;
     }
 
@@ -349,11 +369,12 @@ function BillingSection() {
     if (error) {
       // eslint-disable-next-line no-console
       console.error('Error turning on recurring', error);
-      alert('Could not update recurring: ' + error.message);
+      pushToast({ tone: 'error', message: `Could not update recurring: ${error.message}` });
       return;
     }
 
     await queryClient.invalidateQueries({ queryKey: ['bills', selectedBusinessId] });
+    pushToast({ tone: 'ok', message: 'Recurring turned on.' });
   }
 
   function formatCurrency(n: number) {
@@ -448,6 +469,35 @@ function BillingSection() {
       </div>
 
       {/* Bills table */}
+      {filteredBills.length > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-400">
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filteredBills.length)} of{' '}
+            {filteredBills.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-slate-700 bg-slate-950/50 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+            >
+              Prev
+            </button>
+            <div className="text-xs text-slate-400">
+              Page {page} / {pageCount}
+            </div>
+            <button
+              type="button"
+              className="rounded-lg border border-slate-700 bg-slate-950/50 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
       <div className="border border-slate-800 rounded-2xl overflow-hidden bg-slate-950/80">
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-xs text-slate-400">

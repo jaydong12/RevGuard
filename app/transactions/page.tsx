@@ -11,6 +11,8 @@ import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
 import { formatCurrency } from '../../lib/formatCurrency';
+import { useToast } from '../../components/ToastProvider';
+import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
 import {
   Calendar,
   FilterX,
@@ -64,7 +66,7 @@ type Transaction = {
   date: string; // ISO date (YYYY-MM-DD)
   description: string;
   category: string;
-  amount: number; // positive = income, negative = expense
+  amount: number | string | null; // must be numeric on new writes; legacy rows may be null/string
   customer_id?: string | null;
   business_id?: string | null;
   tax_category?: string | null;
@@ -95,6 +97,7 @@ export default function TransactionsPage() {
   // ---------- basic state ----------
 
   const queryClient = useQueryClient();
+  const { pushToast } = useToast();
   const {
     userId,
     businessId: selectedBusinessId,
@@ -144,7 +147,6 @@ export default function TransactionsPage() {
     flow: 'expense',
   });
   const [formError, setFormError] = useState<string | null>(null);
-  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
 
   const [taxModalOpen, setTaxModalOpen] = useState(false);
   const [taxTx, setTaxTx] = useState<Transaction | null>(null);
@@ -166,7 +168,7 @@ export default function TransactionsPage() {
     { value: 'owner_draw', label: 'Owner payment (draw)', help: 'Owner draw isn’t a business expense.' },
     { value: 'owner_estimated_tax', label: 'Owner tax payment (estimated)', help: 'Quarterly estimated tax payment.' },
     { value: 'transfer', label: 'Transfer', help: 'Move money between accounts (not income/expense).' },
-    { value: 'uncategorized', label: 'Not sure yet', help: 'Leave this for Needs review.' },
+    { value: 'uncategorized', label: 'Not sure yet', help: 'Use this if you’re unsure.' },
   ];
 
   const TAX_TREATMENT_OPTIONS: Array<{ value: string; label: string; help: string }> = [
@@ -174,17 +176,31 @@ export default function TransactionsPage() {
     { value: 'partial_50', label: '50% deductible', help: 'Common for meals in many cases.' },
     { value: 'non_deductible', label: 'Not deductible', help: 'Does not reduce taxable profit.' },
     { value: 'capitalized', label: 'Capital purchase', help: 'Tracked as an asset (not a normal expense).' },
-    { value: 'review', label: 'Needs review', help: 'We’ll treat this conservatively until you confirm.' },
+    { value: 'review', label: 'Review', help: 'Treat conservatively until you confirm.' },
   ];
 
-  function isNeedsReview(tx: Transaction) {
-    const tc = String((tx as any)?.tax_category ?? '').toLowerCase();
-    const tt = String((tx as any)?.tax_treatment ?? '').toLowerCase();
-    const cs = Number((tx as any)?.confidence_score ?? 1);
-    return tc === 'uncategorized' || tt === 'review' || (!Number.isNaN(cs) && cs < 0.75);
+  function parseMoneyToNumber(raw: any): number | null {
+    if (raw === null || raw === undefined) return null;
+    const s = String(raw).trim();
+    if (!s) return null;
+    const isParenNegative = /^\(.*\)$/.test(s);
+    const cleaned = s.replace(/[^\d.\-]/g, '');
+    if (!cleaned) return null;
+    const val = Number.parseFloat(cleaned);
+    if (!Number.isFinite(val)) return null;
+    return isParenNegative ? -Math.abs(val) : val;
+  }
+
+  function getTxAmount(tx: Transaction): number | null {
+    // Per requirement: display reads transactions.amount only.
+    return parseMoneyToNumber((tx as any)?.amount);
   }
 
   function openTaxModal(tx: Transaction) {
+    if (!TAX_FEATURES_ENABLED) {
+      pushToast({ tone: 'info', message: 'Tax features are temporarily disabled.' });
+      return;
+    }
     setTaxTx(tx);
     setTaxCategory(String((tx as any)?.tax_category ?? 'uncategorized') || 'uncategorized');
     setTaxTreatment(String((tx as any)?.tax_treatment ?? 'review') || 'review');
@@ -201,6 +217,11 @@ export default function TransactionsPage() {
   }
 
   async function handleAutoTagAgain() {
+    if (!TAX_FEATURES_ENABLED) {
+      setTaxReason('');
+      setTaxError('Tax features are temporarily disabled.');
+      return;
+    }
     if (!taxTx) return;
     try {
       setTaxError(null);
@@ -243,6 +264,10 @@ export default function TransactionsPage() {
   }
 
   async function handleSaveTaxTags() {
+    if (!TAX_FEATURES_ENABLED) {
+      setTaxError('Tax features are temporarily disabled.');
+      return;
+    }
     if (!taxTx || !selectedBusinessId) return;
     try {
       setTaxSaving(true);
@@ -282,7 +307,7 @@ export default function TransactionsPage() {
   }
 
   // Optional deep-link hydration (used by Dashboard "Fix this first" links).
-  // Supported params: q, from, to, category, flow, min, max, needsReview=1
+  // Supported params: q, from, to, category, flow, min, max
   useEffect(() => {
     try {
       const q = String(sp.get('q') ?? '');
@@ -292,7 +317,6 @@ export default function TransactionsPage() {
       const flow = String(sp.get('flow') ?? '');
       const min = String(sp.get('min') ?? '');
       const max = String(sp.get('max') ?? '');
-      const needsReview = String(sp.get('needsReview') ?? '');
 
       if (q) setSearch(q);
       if (from) {
@@ -308,10 +332,9 @@ export default function TransactionsPage() {
       if (max) setAmountMax(max);
       if (flow === 'income') setFlowFilter('income');
       if (flow === 'expenses') setFlowFilter('expenses');
-      if (needsReview === '1' || needsReview.toLowerCase() === 'true') setNeedsReviewOnly(true);
 
       // If any filters are present, reset paging for the filtered view.
-      if (q || from || to || cat || flow || min || max || needsReview) {
+      if (q || from || to || cat || flow || min || max) {
         setCurrentPage(1);
       }
     } catch {
@@ -348,15 +371,16 @@ export default function TransactionsPage() {
   }
 
   function openEditForm(tx: Transaction) {
+    const amt = getTxAmount(tx) ?? 0;
     setFormMode('edit');
     setEditingTx(tx);
     setFormValues({
       date: tx.date ?? '',
       description: tx.description ?? '',
       category: tx.category ?? '',
-      amount: String(Math.abs(tx.amount ?? 0)),
+      amount: String(Math.abs(amt)),
       customer_id: tx.customer_id ?? '',
-      flow: (tx.amount ?? 0) < 0 ? 'expense' : 'income',
+      flow: amt < 0 ? 'expense' : 'income',
     });
     setFormError(null);
     setFormOpen(true);
@@ -389,8 +413,9 @@ export default function TransactionsPage() {
       setFormError('Description is required.');
       return;
     }
-    if (!formValues.amount.trim() || Number.isNaN(Number(formValues.amount))) {
-      setFormError('Amount is required and must be a number.');
+    const parsedAmount = parseMoneyToNumber(formValues.amount);
+    if (parsedAmount === null) {
+      setFormError('Amount is required and must be a number (e.g. 12.34).');
       return;
     }
     if (!selectedBusinessId) {
@@ -398,10 +423,9 @@ export default function TransactionsPage() {
       return;
     }
 
-    const rawAmount = Number(formValues.amount);
-    const absAmount = Number.isFinite(rawAmount) ? Math.abs(rawAmount) : NaN;
-    const amountNumber =
-      formValues.flow === 'expense' ? -absAmount : absAmount;
+    const absAmount = Math.abs(parsedAmount);
+    const amountNumber = formValues.flow === 'expense' ? -absAmount : absAmount;
+    const amountCents = Math.round(amountNumber * 100);
     const customerIdToSave = formValues.customer_id.trim() || null;
 
     try {
@@ -418,19 +442,42 @@ export default function TransactionsPage() {
       }
 
       if (formMode === 'create') {
-        // Insert a new transaction.
-        const { data: inserted, error } = await supabase
-          .from('transactions')
-          .insert({
-            date: formValues.date,
-            description: formValues.description,
-            category: formValues.category,
-            amount: amountNumber,
-            customer_id: customerIdToSave,
-            business_id: selectedBusinessId,
-          })
-          .select('id, date, description, category, amount')
-          .single();
+        // Insert a new transaction (schema-safe if amount_cents column doesn't exist yet).
+        const basePayload: any = {
+          date: formValues.date,
+          description: formValues.description,
+          category: formValues.category,
+          amount: amountNumber,
+          amount_cents: amountCents,
+          customer_id: customerIdToSave,
+          business_id: selectedBusinessId,
+        };
+
+        let inserted: any = null;
+        let error: any = null;
+        {
+          const { data: d1, error: e1 } = await supabase
+            .from('transactions')
+            .insert(basePayload)
+            .select('id, date, description, category, amount')
+            .single();
+          if (!e1) {
+            inserted = d1;
+            error = null;
+          } else if (String((e1 as any)?.code ?? '') === '42703') {
+            const { amount_cents: _omit, ...rest } = basePayload;
+            const { data: d2, error: e2 } = await supabase
+              .from('transactions')
+              .insert(rest)
+              .select('id, date, description, category, amount')
+              .single();
+            inserted = d2;
+            error = e2 ?? null;
+          } else {
+            inserted = d1;
+            error = e1 ?? null;
+          }
+        }
 
         if (error) {
           // eslint-disable-next-line no-console
@@ -439,56 +486,83 @@ export default function TransactionsPage() {
           return;
         }
 
-        // Post-insert tagging (rules first, AI if needed)
-        try {
-          const classifyRes = await fetch('/api/transactions/classify-tax', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              transactions: [
-                {
-                  description: inserted.description,
-                  merchant: null,
-                  category: inserted.category,
-                  amount: inserted.amount,
-                },
-              ],
-            }),
-          });
-          const json: any = classifyRes.ok ? await classifyRes.json() : null;
-          const tag = json?.results?.[0] ?? null;
-          const tax_category = String(tag?.tax_category ?? 'uncategorized');
-          const tax_treatment = String(tag?.tax_treatment ?? 'review');
-          const confidence_score = Number(tag?.confidence_score ?? 0.5);
-          const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
+        // Post-insert tagging (rules first, AI if needed) — disabled when tax features are off.
+        if (TAX_FEATURES_ENABLED) {
+          try {
+            const classifyRes = await fetch('/api/transactions/classify-tax', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                transactions: [
+                  {
+                    description: inserted.description,
+                    merchant: null,
+                    category: inserted.category,
+                    amount: inserted.amount,
+                  },
+                ],
+              }),
+            });
+            const json: any = classifyRes.ok ? await classifyRes.json() : null;
+            const tag = json?.results?.[0] ?? null;
+            const tax_category = String(tag?.tax_category ?? 'uncategorized');
+            const tax_treatment = String(tag?.tax_treatment ?? 'review');
+            const confidence_score = Number(tag?.confidence_score ?? 0.5);
+            const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
 
-          await supabase
-            .from('transactions')
-            .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
-            .eq('id', inserted.id)
-            .eq('business_id', selectedBusinessId);
-        } catch {
-          // ignore tagging errors; row still exists and will appear in Needs review
+            await supabase
+              .from('transactions')
+              .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
+              .eq('id', inserted.id)
+              .eq('business_id', selectedBusinessId);
+          } catch {
+            // ignore tagging errors; transaction still saves successfully
+          }
         }
 
         await queryClient.invalidateQueries({ queryKey: ['transactions', selectedBusinessId] });
       } else if (formMode === 'edit' && editingTx) {
-        const { data: updated, error } = await supabase
-          .from('transactions')
-          .update({
-            date: formValues.date,
-            description: formValues.description,
-            category: formValues.category,
-            amount: amountNumber,
-            customer_id: customerIdToSave,
-          })
-          .eq('id', editingTx.id)
-          .eq('business_id', selectedBusinessId)
-          .select('id, date, description, category, amount')
-          .single();
+        const basePatch: any = {
+          date: formValues.date,
+          description: formValues.description,
+          category: formValues.category,
+          amount: amountNumber,
+          amount_cents: amountCents,
+          customer_id: customerIdToSave,
+        };
+
+        let updated: any = null;
+        let error: any = null;
+        {
+          const { data: d1, error: e1 } = await supabase
+            .from('transactions')
+            .update(basePatch)
+            .eq('id', editingTx.id)
+            .eq('business_id', selectedBusinessId)
+            .select('id, date, description, category, amount')
+            .single();
+          if (!e1) {
+            updated = d1;
+            error = null;
+          } else if (String((e1 as any)?.code ?? '') === '42703') {
+            const { amount_cents: _omit, ...rest } = basePatch;
+            const { data: d2, error: e2 } = await supabase
+              .from('transactions')
+              .update(rest)
+              .eq('id', editingTx.id)
+              .eq('business_id', selectedBusinessId)
+              .select('id, date, description, category, amount')
+              .single();
+            updated = d2;
+            error = e2 ?? null;
+          } else {
+            updated = d1;
+            error = e1 ?? null;
+          }
+        }
 
         if (error) {
           // eslint-disable-next-line no-console
@@ -497,39 +571,41 @@ export default function TransactionsPage() {
           return;
         }
 
-        // Post-update tagging (keep tax tags synced)
-        try {
-          const classifyRes = await fetch('/api/transactions/classify-tax', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              transactions: [
-                {
-                  description: updated.description,
-                  merchant: null,
-                  category: updated.category,
-                  amount: updated.amount,
-                },
-              ],
-            }),
-          });
-          const json: any = classifyRes.ok ? await classifyRes.json() : null;
-          const tag = json?.results?.[0] ?? null;
-          const tax_category = String(tag?.tax_category ?? 'uncategorized');
-          const tax_treatment = String(tag?.tax_treatment ?? 'review');
-          const confidence_score = Number(tag?.confidence_score ?? 0.5);
-          const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
+        // Post-update tagging (keep tax tags synced) — disabled when tax features are off.
+        if (TAX_FEATURES_ENABLED) {
+          try {
+            const classifyRes = await fetch('/api/transactions/classify-tax', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                transactions: [
+                  {
+                    description: updated.description,
+                    merchant: null,
+                    category: updated.category,
+                    amount: updated.amount,
+                  },
+                ],
+              }),
+            });
+            const json: any = classifyRes.ok ? await classifyRes.json() : null;
+            const tag = json?.results?.[0] ?? null;
+            const tax_category = String(tag?.tax_category ?? 'uncategorized');
+            const tax_treatment = String(tag?.tax_treatment ?? 'review');
+            const confidence_score = Number(tag?.confidence_score ?? 0.5);
+            const tax_reason = String(tag?.tax_reason ?? tag?.reasoning ?? '');
 
-          await supabase
-            .from('transactions')
-            .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
-            .eq('id', updated.id)
-            .eq('business_id', selectedBusinessId);
-        } catch {
-          // ignore tagging errors
+            await supabase
+              .from('transactions')
+              .update({ tax_category, tax_treatment, confidence_score, tax_reason } as any)
+              .eq('id', updated.id)
+              .eq('business_id', selectedBusinessId);
+          } catch {
+            // ignore tagging errors
+          }
         }
 
         await queryClient.invalidateQueries({ queryKey: ['transactions', selectedBusinessId] });
@@ -550,13 +626,13 @@ export default function TransactionsPage() {
 
     try {
       if (!selectedBusinessId) {
-        alert('Loading your business…');
+        pushToast({ tone: 'info', message: 'Loading your business…' });
         return;
       }
 
       const userIdToUse = userId ?? null;
       if (!userIdToUse) {
-        alert('Please log in to delete transactions.');
+        pushToast({ tone: 'error', message: 'Please log in to delete transactions.' });
         return;
       }
 
@@ -568,15 +644,16 @@ export default function TransactionsPage() {
         ;
 
       if (error) {
-        alert('Could not delete transaction. Please try again.');
+        pushToast({ tone: 'error', message: 'Could not delete transaction. Please try again.' });
         return;
       }
 
       await queryClient.invalidateQueries({
         queryKey: ['transactions', selectedBusinessId],
       });
+      pushToast({ tone: 'ok', message: 'Transaction deleted.' });
     } catch {
-      alert('Could not delete transaction. Please try again.');
+      pushToast({ tone: 'error', message: 'Could not delete transaction. Please try again.' });
     }
   }
 
@@ -632,8 +709,7 @@ export default function TransactionsPage() {
     Boolean(flowFilter !== 'all') ||
     Boolean(categoryFilter.trim()) ||
     Boolean(amountMin.trim()) ||
-    Boolean(amountMax.trim()) ||
-    Boolean(needsReviewOnly);
+    Boolean(amountMax.trim());
 
   function clearFilters() {
     setSearch('');
@@ -645,7 +721,6 @@ export default function TransactionsPage() {
     setCategoryFilter('');
     setAmountMin('');
     setAmountMax('');
-    setNeedsReviewOnly(false);
     setCurrentPage(1);
   }
 
@@ -654,10 +729,11 @@ export default function TransactionsPage() {
     const hay = `${tx.description ?? ''} ${tx.category ?? ''}`.toLowerCase();
     const matchesSearch = !search.trim() || hay.includes(search.trim().toLowerCase());
 
+    const amt = getTxAmount(tx);
     const matchesFlow =
       flowFilter === 'all' ||
-      (flowFilter === 'income' && tx.amount > 0) ||
-      (flowFilter === 'expenses' && tx.amount < 0);
+      (flowFilter === 'income' && amt !== null && amt > 0) ||
+      (flowFilter === 'expenses' && amt !== null && amt < 0);
 
     const matchesCategory =
       !categoryFilter.trim() ||
@@ -666,18 +742,13 @@ export default function TransactionsPage() {
     const matchesDateFrom = !dateFromIso || (tx.date ?? '') >= dateFromIso;
     const matchesDateTo = !dateToIso || (tx.date ?? '') <= dateToIso;
 
-    const absAmt = Math.abs(Number(tx.amount) || 0);
+    const absAmt = amt === null ? NaN : Math.abs(amt);
     const min = Number(amountMin);
     const max = Number(amountMax);
-    const matchesMin = !amountMin.trim() || (!Number.isNaN(min) && absAmt >= min);
-    const matchesMax = !amountMax.trim() || (!Number.isNaN(max) && absAmt <= max);
-
-    const needsReview =
-      String((tx as any)?.tax_category ?? '').toLowerCase() === 'uncategorized' ||
-      String((tx as any)?.tax_treatment ?? '').toLowerCase() === 'review' ||
-      (Number((tx as any)?.confidence_score ?? 1) < 0.75);
-
-    const matchesNeedsReview = !needsReviewOnly || needsReview;
+    const matchesMin =
+      !amountMin.trim() || (amt !== null && !Number.isNaN(min) && absAmt >= min);
+    const matchesMax =
+      !amountMax.trim() || (amt !== null && !Number.isNaN(max) && absAmt <= max);
 
     return (
       matchesSearch &&
@@ -686,8 +757,7 @@ export default function TransactionsPage() {
       matchesDateFrom &&
       matchesDateTo &&
       matchesMin &&
-      matchesMax &&
-      matchesNeedsReview
+      matchesMax
     );
   });
 
@@ -700,7 +770,14 @@ export default function TransactionsPage() {
       const bTime = new Date(b.date).getTime();
       cmp = aTime - bTime;
     } else if (sortKey === 'amount') {
-      cmp = a.amount - b.amount;
+      const aAmt = getTxAmount(a);
+      const bAmt = getTxAmount(b);
+      const aMissing = aAmt === null;
+      const bMissing = bAmt === null;
+      if (aMissing && bMissing) cmp = 0;
+      else if (aMissing) cmp = 1; // push missing amounts to bottom
+      else if (bMissing) cmp = -1;
+      else cmp = aAmt - bAmt;
     } else if (sortKey === 'description') {
       const aVal = a.description.toLowerCase();
       const bVal = b.description.toLowerCase();
@@ -794,19 +871,6 @@ export default function TransactionsPage() {
             </div>
 
             <div className="flex flex-wrap gap-3 items-center">
-              {/* Needs review */}
-              <label className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10">
-                <input
-                  type="checkbox"
-                  checked={needsReviewOnly}
-                  onChange={(e) => {
-                    setNeedsReviewOnly(e.target.checked);
-                    setCurrentPage(1);
-                  }}
-                />
-                <span>Needs review</span>
-              </label>
-
               {/* Search */}
               <div className="relative flex-1 min-w-[240px]">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
@@ -996,11 +1060,12 @@ export default function TransactionsPage() {
                   </thead>
                   <tbody>
                     {paginatedTransactions.map((tx, idx) => {
-                    const isNegative = tx.amount < 0;
-                    const amountClass = isNegative ? 'text-rose-300' : 'text-emerald-300';
+                    const amt = getTxAmount(tx);
+                    const missingAmt = amt === null;
+                    const isNegative = !missingAmt && amt < 0;
+                    const amountClass = missingAmt ? 'text-slate-500' : isNegative ? 'text-rose-300' : 'text-emerald-300';
                     const rowBg = idx % 2 === 0 ? 'bg-white/[0.02]' : 'bg-white/[0.04]';
                     const cat = String(tx.category ?? '').trim() || 'Uncategorized';
-                    const needsReview = isNeedsReview(tx);
                     const dateObj = new Date(tx.date);
                     const dateLabel = Number.isNaN(dateObj.getTime())
                       ? tx.date
@@ -1026,13 +1091,6 @@ export default function TransactionsPage() {
                               <div className="mt-1 text-[11px] text-slate-400">
                                 {isNegative ? 'Expense' : 'Income'}
                               </div>
-                              {needsReview && (
-                                <div className="mt-2">
-                                  <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-100">
-                                    Needs review
-                                  </span>
-                                </div>
-                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 align-top">
@@ -1042,22 +1100,26 @@ export default function TransactionsPage() {
                           </td>
                           <td className="px-4 py-3 align-top text-right whitespace-nowrap">
                             <div className={`text-sm font-semibold ${amountClass}`}>
-                              {isNegative ? '-' : '+'}
-                              {formatCurrency(Math.abs(tx.amount))}
+                              {missingAmt ? '—' : (
+                                <>
+                                  {isNegative ? '-' : '+'}
+                                  {formatCurrency(Math.abs(amt))}
+                                </>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 align-top text-right">
-                            <button
-                              type="button"
-                              onClick={() => openTaxModal(tx)}
-                              className={`inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 ${
-                                needsReview ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                              } hover:bg-white/10 transition`}
-                              aria-label="Fix tax tag"
-                              title="Fix tax tag"
-                            >
-                              <Tag className="h-4 w-4" />
-                            </button>
+                            {TAX_FEATURES_ENABLED ? (
+                              <button
+                                type="button"
+                                onClick={() => openTaxModal(tx)}
+                                className="inline-flex items-center justify-center rounded-lg border border-white/10 bg-white/5 p-2 text-slate-200 opacity-0 group-hover:opacity-100 hover:bg-white/10 transition"
+                                aria-label="Fix tax tag"
+                                title="Fix tax tag"
+                              >
+                                <Tag className="h-4 w-4" />
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               onClick={() => openEditForm(tx)}
@@ -1348,7 +1410,7 @@ export default function TransactionsPage() {
         )}
 
         {/* Tax tagging modal (plain-English) */}
-        {taxModalOpen && taxTx && (
+        {TAX_FEATURES_ENABLED && taxModalOpen && taxTx && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
             <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-slate-950/90 p-6 shadow-2xl backdrop-blur">
               <div className="flex items-start justify-between gap-4">
@@ -1377,7 +1439,7 @@ export default function TransactionsPage() {
                   {taxTx.description || '—'}
                 </div>
                 <div className="mt-1 text-[11px] text-slate-400">
-                  {taxTx.date} • {formatCurrency(taxTx.amount)}
+                  {taxTx.date} • {formatCurrency(getTxAmount(taxTx) ?? 0)}
                 </div>
               </div>
 

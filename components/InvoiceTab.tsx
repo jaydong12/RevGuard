@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   FileText,
   Pencil,
@@ -15,6 +16,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../lib/getOrCreateBusinessId';
+import { generateInvoiceNumber } from '../lib/invoiceNumber';
+import { deleteInvoiceLinkedTransactions, upsertRevenueTransactionForInvoice } from '../lib/invoiceTransactionSync';
 
 type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 
@@ -30,6 +33,7 @@ type InvoiceRow = {
   tax: number | null;
   total: number;
   notes: string | null;
+  paid_at?: string | null;
   created_at: string;
 };
 
@@ -41,6 +45,21 @@ type InvoiceItemRow = {
   unit_price: number | null;
   line_total: number | null;
 };
+
+function formatIsoToLocalPretty(iso: string): string {
+  const d = new Date(String(iso ?? ''));
+  if (Number.isNaN(d.getTime())) return String(iso ?? '');
+  const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
+
+function formatNotesForDisplay(notes: any): string {
+  const s = String(notes ?? '').trim();
+  if (!s) return '';
+  // Replace common ISO 8601 timestamps with local pretty formatting.
+  return s.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (m) => formatIsoToLocalPretty(m));
+}
 
 type BusinessInfo = {
   id: string;
@@ -130,6 +149,10 @@ function money(n: any) {
   return Number.isFinite(num) ? num : 0;
 }
 
+function isMissingColumnError(e: any) {
+  return String((e as any)?.code ?? '') === '42703' || /column .* does not exist/i.test(String((e as any)?.message ?? ''));
+}
+
 function formatAddr(b: BusinessInfo | null) {
   const lines: string[] = [];
   const legacy =
@@ -151,6 +174,7 @@ function formatAddr(b: BusinessInfo | null) {
 }
 
 export default function InvoiceTab(_props: Props) {
+  const queryClient = useQueryClient();
   const [booting, setBooting] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
@@ -184,6 +208,7 @@ export default function InvoiceTab(_props: Props) {
 
   // Edit mode
   const [editingId, setEditingId] = useState<any | null>(null);
+  const formRef = useRef<HTMLDivElement | null>(null);
 
   // Form state
   const [invoiceNumber, setInvoiceNumber] = useState('');
@@ -311,6 +336,8 @@ export default function InvoiceTab(_props: Props) {
   }
 
   function beginEdit(inv: InvoiceRow) {
+    // eslint-disable-next-line no-console
+    console.log('INVOICE_EDIT_BEGIN', { id: inv?.id, invoice_number: inv?.invoice_number });
     setEditingId(inv.id);
     setInvoiceNumber(inv.invoice_number ?? '');
     setClientName(inv.client_name ?? '');
@@ -320,6 +347,15 @@ export default function InvoiceTab(_props: Props) {
     setSubtotal(String(inv.subtotal ?? 0));
     setTax(String(inv.tax ?? 0));
     setNotes(inv.notes ?? '');
+
+    // Make the edit action obvious (especially if the user is scrolled down the list).
+    requestAnimationFrame(() => {
+      try {
+        formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch {
+        // ignore
+      }
+    });
   }
 
   async function beginPrint(inv: InvoiceRow) {
@@ -483,7 +519,17 @@ export default function InvoiceTab(_props: Props) {
 
     setBusinessId(businessIdToUse);
 
-    const invNum = (invoiceNumber || '').trim() || `INV-${Date.now()}`;
+    // User request: when an invoice is "sent", immediately treat it as paid and create revenue transaction.
+    const normalizedStatus: InvoiceStatus = status === 'sent' ? 'paid' : status;
+
+    let invNum = (invoiceNumber || '').trim();
+    if (!invNum) {
+      try {
+        invNum = await generateInvoiceNumber({ supabase, businessId: businessIdToUse });
+      } catch {
+        invNum = `INV-${Date.now()}`;
+      }
+    }
     const s = Number(subtotal);
     const t = Number(tax);
     const safeSubtotal = Number.isFinite(s) ? s : 0;
@@ -495,7 +541,7 @@ export default function InvoiceTab(_props: Props) {
       client_name: clientName.trim(),
       issue_date: issueDate ? issueDate : null,
       due_date: dueDate ? dueDate : null,
-      status,
+      status: normalizedStatus,
       subtotal: safeSubtotal,
       tax: safeTax,
       total: safeSubtotal + safeTax,
@@ -507,6 +553,7 @@ export default function InvoiceTab(_props: Props) {
 
     setSaving(true);
     try {
+      let savedInvoice: any | null = null;
       if (editingId) {
         const { data: updated, error: updErr } = await supabase
           .from('invoices')
@@ -532,6 +579,7 @@ export default function InvoiceTab(_props: Props) {
           );
           return;
         }
+        savedInvoice = updated as any;
       } else {
         const { data: inserted, error: insErr } = await supabase
           .from('invoices')
@@ -555,6 +603,29 @@ export default function InvoiceTab(_props: Props) {
           );
           return;
         }
+        savedInvoice = inserted as any;
+      }
+
+      // Keep invoice status + revenue transaction in sync.
+      // - paid => ensure one linked transaction exists/updated
+      // - non-paid => delete any linked transaction
+      try {
+        const invoiceId = Number(savedInvoice?.id ?? 0) || 0;
+        if (normalizedStatus === 'paid') {
+          await upsertRevenueTransactionForInvoice({
+            supabase,
+            businessId: businessIdToUse,
+            invoice: savedInvoice,
+          });
+        } else if (invoiceId) {
+          await deleteInvoiceLinkedTransactions({ supabase, businessId: businessIdToUse, invoiceId });
+        }
+        // Refresh Transactions tab (AppDataProvider cache) so invoice-linked income shows up immediately.
+        await queryClient.invalidateQueries({ queryKey: ['transactions', businessIdToUse] });
+      } catch (e: any) {
+        // Non-fatal: invoice save succeeded; sync may fail if DB hasn't been migrated yet.
+        tryConsoleLog('INVOICE_TX_SYNC_ERROR', e);
+        storeDebug('INVOICE_TX_SYNC_ERROR', e);
       }
 
       // Reload current list (reset to first page so new invoice is visible at top)
@@ -796,7 +867,7 @@ export default function InvoiceTab(_props: Props) {
       </div>
 
       {/* Form */}
-      <div className="rounded-2xl border border-slate-800 bg-[#0B1220] p-5">
+      <div ref={formRef} className="rounded-2xl border border-slate-800 bg-[#0B1220] p-5">
         <div className="mb-4 flex items-center justify-between">
           <div className="text-sm font-semibold text-slate-100">
             {editingId ? 'Edit invoice' : 'Create invoice'}
@@ -1106,6 +1177,8 @@ export default function InvoiceTab(_props: Props) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              // eslint-disable-next-line no-console
+                              console.log('INVOICE_EDIT_CLICK', { id: inv?.id, invoice_number: inv?.invoice_number });
                               beginEdit(inv);
                             }}
                             className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
@@ -1143,7 +1216,7 @@ export default function InvoiceTab(_props: Props) {
                         </div>
                         <div className="mt-2 text-[11px] font-semibold text-slate-300">Notes</div>
                         <div className="mt-1 text-xs text-slate-300 whitespace-pre-wrap break-words">
-                          {inv.notes || '—'}
+                          {formatNotesForDisplay(inv.notes) || '—'}
                         </div>
                       </div>
 
@@ -1170,6 +1243,8 @@ export default function InvoiceTab(_props: Props) {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              // eslint-disable-next-line no-console
+                              console.log('INVOICE_EDIT_CLICK', { id: inv?.id, invoice_number: inv?.invoice_number });
                               beginEdit(inv);
                             }}
                             className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"

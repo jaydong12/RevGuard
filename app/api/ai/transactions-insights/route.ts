@@ -65,9 +65,22 @@ export async function POST(request: Request) {
       ? authHeader.slice(7)
       : null;
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnon) {
+      return NextResponse.json<AIInsightResult>(
+        {
+          summary: 'Server is missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).',
+          observations: [],
+          actions: [],
+        },
+        { status: 500 }
+      );
+    }
+
     const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      supabaseUrl,
+      supabaseAnon,
       {
         global: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
         auth: { persistSession: false, autoRefreshToken: false },

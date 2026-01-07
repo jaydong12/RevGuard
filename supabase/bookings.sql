@@ -191,6 +191,8 @@ create table if not exists public.bookings (
   customer_phone text,
   start_at timestamptz not null,
   end_at timestamptz not null,
+  -- Snapshot service price at time of booking (avoids joins/RLS surprises for reporting)
+  price_cents integer not null default 0,
   status text not null default 'pending' check (status in ('pending','confirmed','cancelled','completed')),
   notes text,
   invoice_id bigint references public.invoices(id) on delete set null,
@@ -205,6 +207,16 @@ alter table if exists public.bookings
   add column if not exists customer_email text;
 alter table if exists public.bookings
   add column if not exists customer_phone text;
+alter table if exists public.bookings
+  add column if not exists price_cents integer not null default 0;
+
+-- Backfill price snapshot from services when possible (type-agnostic join via ::text).
+update public.bookings b
+set price_cents = coalesce(s.price_cents, 0)
+from public.services s
+where b.business_id = s.business_id
+  and b.service_id::text = s.id::text
+  and (b.price_cents is null or b.price_cents = 0);
 
 do $$
 begin
@@ -225,6 +237,10 @@ end $$;
 
 create index if not exists bookings_business_start_idx
   on public.bookings (business_id, start_at);
+
+-- Helpful index for global revenue rollups.
+create index if not exists bookings_business_status_start_idx
+  on public.bookings (business_id, status, start_at);
 
 alter table public.bookings enable row level security;
 drop policy if exists "bookings_select_own" on public.bookings;

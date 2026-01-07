@@ -103,6 +103,24 @@ function LoginInner() {
         return;
       }
 
+      // Employee routing: employees should go straight to /clock and must not be forced through business creation/profile.
+      try {
+        const { data: member, error: memberErr } = await supabase
+          .from('business_members')
+          .select('business_id, role')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+        const mRole = String((member as any)?.role ?? '').toLowerCase();
+        if (!memberErr && (member as any)?.business_id && mRole === 'employee') {
+          router.replace('/clock');
+          return;
+        }
+      } catch {
+        // ignore and fall through
+      }
+
       // Ensure business exists and route to Business Profile if incomplete.
       try {
         const needsBizProfile = await businessProfileIncompleteForUser(userId);
@@ -174,6 +192,11 @@ function LoginInner() {
                   href="/signup"
                 >
                   Create an account
+                </Link>
+              </div>
+              <div>
+                <Link className="text-slate-300 hover:text-slate-100" href="/clock">
+                  Employee Clock
                 </Link>
               </div>
             </div>

@@ -29,7 +29,7 @@ export function AuthCard({
         <div className="mb-4 flex items-center justify-center">
           <Link href="/" className="inline-flex items-center gap-2">
             <Image
-              src="/revguard-r.svg"
+              src="/logo.png"
               alt="RevGuard"
               width={40}
               height={40}

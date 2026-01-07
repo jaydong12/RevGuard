@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
-import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone } from 'lucide-react';
+import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone, CreditCard, Shield, User } from 'lucide-react';
 
 function safeConsoleError(err: any) {
   try {
@@ -86,8 +86,20 @@ type ProfileRow = {
 type ToastType = 'success' | 'error' | 'info';
 type ToastState = { type: ToastType; message: string } | null;
 
+type SettingsTab = 'business' | 'profile' | 'security' | 'billing';
+
+function normalizeTab(raw: string | null): SettingsTab {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === 'business' || v === 'profile' || v === 'security' || v === 'billing') {
+    return v;
+  }
+  return 'business';
+}
+
 export default function SettingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const activeTab = useMemo<SettingsTab>(() => normalizeTab(searchParams.get('tab')), [searchParams]);
   const [sessionEmail, setSessionEmail] = useState<string>('');
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
@@ -568,7 +580,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <main className="space-y-4">
+    <main className="space-y-3">
       {toast && (
         <div className="fixed bottom-4 right-4 z-[100] max-w-[92vw] sm:max-w-sm">
           <div
@@ -604,44 +616,88 @@ export default function SettingsPage() {
         </div>
       </header>
 
-      {/* Business Profile */}
-      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/25">
-              <Building2 className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-slate-100">Business Profile</h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Used on invoices and client-facing documents. Required: name + (email or phone).
-              </p>
-            </div>
+      {/* Sticky tabs */}
+      <div className="sticky top-0 z-40 -mx-2 px-2 pt-1 pb-2">
+        <div className="mx-auto w-full max-w-5xl">
+          <div className="grid grid-cols-4 gap-1 rounded-2xl border border-slate-800 bg-slate-950/60 p-1 shadow-sm">
+            {[
+              { key: 'business' as const, label: 'Business', icon: <Building2 className="h-4 w-4" /> },
+              { key: 'profile' as const, label: 'Profile', icon: <User className="h-4 w-4" /> },
+              { key: 'security' as const, label: 'Security', icon: <Shield className="h-4 w-4" /> },
+              { key: 'billing' as const, label: 'Billing', icon: <CreditCard className="h-4 w-4" /> },
+            ].map((t) => {
+              const selected = activeTab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => {
+                    router.push(`/settings?tab=${t.key}`);
+                    try {
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                    selected
+                      ? 'bg-white/10 text-slate-50 border border-white/10 shadow-sm'
+                      : 'text-slate-300 hover:text-slate-50 hover:bg-white/5 border border-transparent'
+                  }`}
+                  aria-current={selected ? 'page' : undefined}
+                >
+                  <span className={selected ? 'text-emerald-200' : 'text-slate-400'}>{t.icon}</span>
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
           </div>
-
-          <button
-            type="button"
-            onClick={handleSaveBusinessProfile}
-            disabled={!sessionUserId || bizLoading || bizSaving}
-            className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {bizSaving ? 'Saving…' : 'Save'}
-          </button>
         </div>
+      </div>
 
-        {!sessionUserId && (
-          <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-            Please sign in to view and edit your business profile.
+      {/* Active tab panel */}
+      <div className="mx-auto w-full max-w-5xl pt-2">
+        {/* Business Profile */}
+        <section
+          hidden={activeTab !== 'business'}
+          className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5"
+        >
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/25">
+                <Building2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-100">Business Profile</h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Used on invoices and client-facing documents. Required: name + (email or phone).
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSaveBusinessProfile}
+              disabled={!sessionUserId || bizLoading || bizSaving}
+              className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {bizSaving ? 'Saving…' : 'Save'}
+            </button>
           </div>
-        )}
 
-        {bizError && (
-          <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-            {bizError}
-          </div>
-        )}
+          {!sessionUserId && (
+            <div className="mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Please sign in to view and edit your business profile.
+            </div>
+          )}
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {bizError && (
+            <div className="mt-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+              {bizError}
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
             <label className="block text-[11px] text-slate-400">Business name *</label>
             <input
@@ -800,269 +856,305 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
 
-      {/* Profile */}
-      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-100">Profile</h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Update your personal details.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-4">
-          {!sessionUserId && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              Please sign in to view and edit your settings.
-            </div>
-          )}
-
-          {profileError && (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-              {profileError}
-            </div>
-          )}
-
-          <div className="flex items-start gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-sm font-semibold text-emerald-300 border border-emerald-500/30">
-              {avatarInitials}
-            </div>
-            <div className="flex-1 min-w-0">
-              <label className="block text-[11px] text-slate-400">Email</label>
-              <input
-                value={sessionEmail || ''}
-                readOnly
-                placeholder="you@example.com"
-                className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 outline-none"
-              />
-              <p className="mt-1 text-[11px] text-slate-500">
-                Email is read-only right now.
+        {/* Profile */}
+        <section
+          hidden={activeTab !== 'profile'}
+          className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Profile</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Update your personal details.
               </p>
             </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="block text-[11px] text-slate-400">
-                Full name
-              </label>
-              <input
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                placeholder="Jane Doe"
-                disabled={!sessionUserId || profileLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[11px] text-slate-400">Phone</label>
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="(555) 555-5555"
-                disabled={!sessionUserId || profileLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[11px] text-slate-400">City</label>
-              <input
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                placeholder="Austin"
-                disabled={!sessionUserId || profileLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-[11px] text-slate-400">Country</label>
-              <input
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
-                placeholder="United States"
-                disabled={!sessionUserId || profileLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end pt-1">
-            <button
-              type="button"
-              onClick={() => void handleSaveProfile()}
-              disabled={!sessionUserId || profileLoading || profileSaving}
-              className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {profileSaving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Security */}
-      <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-100">Security</h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Password and session management.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-            <div className="text-xs font-semibold text-slate-100">
-              Change password
-            </div>
-            <p className="mt-1 text-[11px] text-slate-400">
-              Set a new password for your account.
-            </p>
-
-            {passwordError && (
-              <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
-                {passwordError}
+          <div className="mt-4 flex flex-col gap-4">
+            {!sessionUserId && (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                Please sign in to view and edit your settings.
               </div>
             )}
 
-            <div className="mt-3 space-y-3">
+            {profileError && (
+              <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                {profileError}
+              </div>
+            )}
+
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 text-sm font-semibold text-emerald-300 border border-emerald-500/30">
+                {avatarInitials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="block text-[11px] text-slate-400">Email</label>
+                <input
+                  value={sessionEmail || ''}
+                  readOnly
+                  placeholder="you@example.com"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 outline-none"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Email is read-only right now.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <label className="block text-[11px] text-slate-400">
-                  New password
+                  Full name
                 </label>
                 <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  disabled={!sessionUserId || passwordSaving}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500"
-                  placeholder="••••••••"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Jane Doe"
+                  disabled={!sessionUserId || profileLoading}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
+
               <div className="space-y-1">
-                <label className="block text-[11px] text-slate-400">
-                  Confirm new password
+                <label className="block text-[11px] text-slate-400">Phone</label>
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="(555) 555-5555"
+                  disabled={!sessionUserId || profileLoading}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] text-slate-400">City</label>
+                <input
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Austin"
+                  disabled={!sessionUserId || profileLoading}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[11px] text-slate-400">Country</label>
+                <input
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  placeholder="United States"
+                  disabled={!sessionUserId || profileLoading}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => void handleSaveProfile()}
+                disabled={!sessionUserId || profileLoading || profileSaving}
+                className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {profileSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+      {/* Security (password/session + danger zone) */}
+      <div hidden={activeTab !== 'security'} className="space-y-4">
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Security</h2>
+              <p className="text-xs text-slate-400 mt-1">
+                Password and session management.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="text-xs font-semibold text-slate-100">
+                Change password
+              </div>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Set a new password for your account.
+              </p>
+
+              {passwordError && (
+                <div className="mt-3 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-200">
+                  {passwordError}
+                </div>
+              )}
+
+              <div className="mt-3 space-y-3">
+                <div className="space-y-1">
+                  <label className="block text-[11px] text-slate-400">
+                    New password
+                  </label>
+                  <input
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    disabled={!sessionUserId || passwordSaving}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="••••••••"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[11px] text-slate-400">
+                    Confirm new password
+                  </label>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    disabled={!sessionUserId || passwordSaving}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="••••••••"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void handleChangePassword()}
+                    disabled={
+                      !sessionUserId ||
+                      passwordSaving ||
+                      newPassword.length < 8 ||
+                      newPassword !== confirmPassword
+                    }
+                    className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {passwordSaving ? 'Updating…' : 'Update password'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+              <div className="text-xs font-semibold text-slate-100">Session</div>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Sign out from this device.
+              </p>
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => void handleSignOut()}
+                  disabled={signingOut}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
+                >
+                  {signingOut ? 'Signing out…' : 'Sign out'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-rose-500/40 bg-rose-950/20 p-4 md:p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-semibold text-rose-100">Danger Zone</h2>
+              <p className="text-xs text-rose-200/80 mt-1">
+                Deletion is permanent and cannot be undone.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {deleteError && (
+              <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="text-xs text-rose-200/80">
+              Deleting your account will remove your data and revoke access
+              immediately.
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-rose-100">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={deleteAcknowledge}
+                onChange={(e) => setDeleteAcknowledge(e.target.checked)}
+                disabled={!sessionUserId || deleting}
+              />
+              I understand this is permanent.
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
+              <div className="space-y-1">
+                <label className="block text-[11px] text-rose-200/80">
+                  Type <span className="font-semibold text-rose-100">DELETE</span>{' '}
+                  to confirm
                 </label>
                 <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  disabled={!sessionUserId || passwordSaving}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-emerald-500"
-                  placeholder="••••••••"
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="DELETE"
+                  disabled={!sessionUserId || deleting}
+                  className="w-full rounded-xl border border-rose-500/30 bg-rose-950/40 px-3 py-2 text-sm text-rose-50 placeholder:text-rose-200/40 outline-none focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
               <div className="flex justify-end">
                 <button
                   type="button"
-                  onClick={() => void handleChangePassword()}
+                  onClick={() => void handleDeleteAccount()}
                   disabled={
                     !sessionUserId ||
-                    passwordSaving ||
-                    newPassword.length < 8 ||
-                    newPassword !== confirmPassword
+                    deleting ||
+                    !deleteAcknowledge ||
+                    deleteConfirm.trim() !== 'DELETE'
                   }
-                  className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="inline-flex items-center justify-center rounded-xl bg-rose-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-rose-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {passwordSaving ? 'Updating…' : 'Update password'}
+                  {deleting ? 'Deleting…' : 'Delete account'}
                 </button>
               </div>
             </div>
           </div>
+        </section>
+      </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-            <div className="text-xs font-semibold text-slate-100">Session</div>
-            <p className="mt-1 text-[11px] text-slate-400">
-              Sign out from this device.
-            </p>
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => void handleSignOut()}
-                disabled={signingOut}
-                className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70 disabled:opacity-50"
-              >
-                {signingOut ? 'Signing out…' : 'Sign out'}
-              </button>
-            </div>
+      {/* Billing */}
+      <section
+        hidden={activeTab !== 'billing'}
+        className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 md:p-5"
+      >
+        <div className="flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/25">
+            <CreditCard className="h-5 w-5" />
           </div>
-        </div>
-      </section>
-
-      {/* Danger Zone */}
-      <section className="rounded-2xl border border-rose-500/40 bg-rose-950/20 p-4 md:p-5">
-        <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-rose-100">Danger Zone</h2>
-            <p className="text-xs text-rose-200/80 mt-1">
-              Deletion is permanent and cannot be undone.
+            <h2 className="text-sm font-semibold text-slate-100">Billing</h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Manage your plan and subscription.
             </p>
           </div>
         </div>
 
-        <div className="mt-4 space-y-3">
-          {deleteError && (
-            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-              {deleteError}
-            </div>
-          )}
-
-          <div className="text-xs text-rose-200/80">
-            Deleting your account will remove your data and revoke access
-            immediately.
-          </div>
-
-          <label className="flex items-center gap-2 text-xs text-rose-100">
-            <input
-              type="checkbox"
-              className="h-4 w-4"
-              checked={deleteAcknowledge}
-              onChange={(e) => setDeleteAcknowledge(e.target.checked)}
-              disabled={!sessionUserId || deleting}
-            />
-            I understand this is permanent.
-          </label>
-
-          <div className="grid gap-2 sm:grid-cols-2 sm:items-end">
-            <div className="space-y-1">
-              <label className="block text-[11px] text-rose-200/80">
-                Type <span className="font-semibold text-rose-100">DELETE</span>{' '}
-                to confirm
-              </label>
-              <input
-                value={deleteConfirm}
-                onChange={(e) => setDeleteConfirm(e.target.value)}
-                placeholder="DELETE"
-                disabled={!sessionUserId || deleting}
-                className="w-full rounded-xl border border-rose-500/30 bg-rose-950/40 px-3 py-2 text-sm text-rose-50 placeholder:text-rose-200/40 outline-none focus:ring-2 focus:ring-rose-500"
-              />
-            </div>
-
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => void handleDeleteAccount()}
-                disabled={
-                  !sessionUserId ||
-                  deleting ||
-                  !deleteAcknowledge ||
-                  deleteConfirm.trim() !== 'DELETE'
-                }
-                className="inline-flex items-center justify-center rounded-xl bg-rose-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-rose-400 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {deleting ? 'Deleting…' : 'Delete account'}
-              </button>
-            </div>
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          <div className="text-sm text-slate-200">Billing settings live in the Pricing flow.</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => router.push('/pricing')}
+              className="rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-500"
+            >
+              View plans
+            </button>
           </div>
         </div>
       </section>
+      </div>
     </main>
   );
 }

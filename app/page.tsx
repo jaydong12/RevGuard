@@ -8,6 +8,7 @@ import {
   BadgeCheck,
   BarChart3,
   BookOpenCheck,
+  CalendarDays,
   Check,
   ChevronRight,
   Lock,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
   Timer,
+  Users,
   Wand2,
   X,
 } from 'lucide-react';
@@ -44,7 +46,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Image
-              src="/revguard-r.svg"
+              src="/logo.png"
               alt="RevGuard"
               width={32}
               height={32}
@@ -163,6 +165,23 @@ export default function LandingPage() {
               </Link>
             </div>
 
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                href="/dashboard/bookings"
+                className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+              >
+                <CalendarDays className="h-4 w-4 text-emerald-300" />
+                Open Bookings
+              </Link>
+              <Link
+                href="/workers"
+                className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+              >
+                <Users className="h-4 w-4 text-sky-300" />
+                Open Workers
+              </Link>
+            </div>
+
             <div className="mt-10 flex flex-wrap items-center gap-2 text-xs text-slate-300">
               {[
                 { icon: <Timer className="h-4 w-4 text-emerald-300" />, label: 'Fast, daily insights' },
@@ -273,6 +292,16 @@ export default function LandingPage() {
               icon: <BarChart3 className="h-5 w-5 text-sky-300" />,
               title: 'Live dashboard',
               desc: 'Cashflow, profitability, and trend views that update as your data changes.',
+            },
+            {
+              icon: <CalendarDays className="h-5 w-5 text-emerald-300" />,
+              title: 'Bookings',
+              desc: 'A modern booking hub with calendar + list views and rich booking details.',
+            },
+            {
+              icon: <Users className="h-5 w-5 text-sky-300" />,
+              title: 'Workers',
+              desc: 'Manage your team and time tracking with a simple worker manager + clock.',
             },
             {
               icon: <Sparkles className="h-5 w-5 text-emerald-300" />,
@@ -547,7 +576,7 @@ export default function LandingPage() {
 
         <footer className="mt-10 flex flex-col gap-3 border-t border-slate-800/70 pt-8 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2 text-slate-300">
-            <Image src="/revguard-r.svg" alt="RevGuard" width={20} height={20} className="h-5 w-5" />
+            <Image src="/logo.png" alt="RevGuard" width={20} height={20} className="h-5 w-5" />
             <span className="font-semibold text-slate-200">RevGuard</span>
             <span className="text-slate-500">© {new Date().getFullYear()}</span>
           </div>

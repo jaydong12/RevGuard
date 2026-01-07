@@ -5,6 +5,7 @@ import { supabase } from '../../utils/supabaseClient';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
 import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
+import { useToast } from '../../components/ToastProvider';
 
 function tryConsoleLog(...args: any[]) {
   try {
@@ -42,6 +43,7 @@ const initialCustomerForm = {
 };
 
 const CustomersSection: React.FC = () => {
+  const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const {
     businessId: selectedBusinessId,
@@ -58,6 +60,8 @@ const CustomersSection: React.FC = () => {
   const [saving, setSaving] = React.useState(false);
   const [editingCustomer, setEditingCustomer] =
     React.useState<Customer | null>(null);
+  const [page, setPage] = React.useState(1);
+  const pageSize = 12;
 
   const [form, setForm] =
     React.useState<typeof initialCustomerForm>(initialCustomerForm);
@@ -171,12 +175,13 @@ const CustomersSection: React.FC = () => {
     if (error) {
       // Log full error object (requirement)
       tryConsoleLog('Error saving customer', error);
-      alert('Could not save customer: ' + error.message);
+      pushToast({ tone: 'error', message: `Could not save customer: ${error.message}` });
       setSaving(false);
       return;
     }
 
     await queryClient.invalidateQueries({ queryKey: ['customers', businessIdToUse] });
+    pushToast({ tone: 'ok', message: editingCustomer ? 'Customer updated.' : 'Customer created.' });
 
     setEditingCustomer(null);
     setForm({
@@ -230,12 +235,14 @@ const CustomersSection: React.FC = () => {
       if (delErr) {
         tryConsoleLog('Error deleting customer', delErr);
         setError(delErr.message || 'Could not delete customer.');
+        pushToast({ tone: 'error', message: delErr.message || 'Could not delete customer.' });
         return;
       }
 
       await queryClient.invalidateQueries({
         queryKey: ['customers', businessIdToUse],
       });
+      pushToast({ tone: 'ok', message: 'Customer deleted.' });
     } finally {
       setSaving(false);
     }
@@ -250,6 +257,13 @@ const CustomersSection: React.FC = () => {
       c.phone?.toLowerCase().includes(q)
     );
   });
+
+  React.useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredCustomers.length / pageSize));
+  const pageCustomers = filteredCustomers.slice((page - 1) * pageSize, page * pageSize);
 
   function getTermDays(terms: string | null): number | null {
     if (!terms) return null;
@@ -392,8 +406,38 @@ const CustomersSection: React.FC = () => {
       )}
 
       {/* Customer grid */}
+      {filteredCustomers.length > 0 && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-400">
+            Showing {(page - 1) * pageSize + 1}–
+            {Math.min(page * pageSize, filteredCustomers.length)} of {filteredCustomers.length}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-lg border border-slate-700 bg-slate-950/50 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+            >
+              Prev
+            </button>
+            <div className="text-xs text-slate-400">
+              Page {page} / {pageCount}
+            </div>
+            <button
+              type="button"
+              className="rounded-lg border border-slate-700 bg-slate-950/50 px-2 py-1 text-xs text-slate-200 disabled:opacity-50"
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {filteredCustomers.map((c) => {
+        {pageCustomers.map((c) => {
           const initials = c.name
             .split(' ')
             .map((n) => n[0])

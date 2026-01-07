@@ -68,7 +68,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
   // Keep a ref for ResizeObserver when available, but do NOT block rendering on it.
   // Some environments may not support ResizeObserver; Recharts can still render.
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [containerReady, setContainerReady] = useState(true);
+  const [containerReady, setContainerReady] = useState(false);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -197,6 +197,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
   }, [normalizedTxs, years]);
 
   const data = mode === 'year' ? yearlyData : monthlyData;
+  const safeData = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   const txCountInView = useMemo(() => {
     if (mode === 'year') return normalizedTxs.length;
@@ -326,19 +327,20 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
       </div>
 
       {/* Bar chart for Jan–Dec net change */}
-      <div ref={containerRef} className="relative h-[260px] min-h-[260px] w-full">
-        <ResponsiveContainer width="100%" height="100%" minHeight={260}>
-          <BarChart
-            key={animationKey}
-            data={data}
-            margin={{ top: 14, right: 20, bottom: 14, left: 20 }}
-            barCategoryGap="22%"
-            onMouseMove={(state: any) => {
-              const idx = typeof state?.activeTooltipIndex === 'number' ? state.activeTooltipIndex : null;
-              setActiveBarIndex(idx);
-            }}
-            onMouseLeave={() => setActiveBarIndex(null)}
-          >
+      <div ref={containerRef} className="relative min-h-[260px] w-full">
+        {containerReady && !loading ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart
+              key={animationKey}
+              data={(safeData ?? []) as any}
+              margin={{ top: 14, right: 20, bottom: 14, left: 20 }}
+              barCategoryGap="22%"
+              onMouseMove={(state: any) => {
+                const idx = typeof state?.activeTooltipIndex === 'number' ? state.activeTooltipIndex : null;
+                setActiveBarIndex(idx);
+              }}
+              onMouseLeave={() => setActiveBarIndex(null)}
+            >
             <defs>
               <linearGradient id="rgGreen" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#34D399" stopOpacity="0.95" />
@@ -389,7 +391,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
               barSize={mode === 'year' ? 34 : 26}
               radius={[10, 10, 10, 10]}
             >
-              {data.map((entry: any, idx: number) => {
+              {(safeData ?? []).map((entry: any, idx: number) => {
                 const net = Number(entry?.net ?? 0) || 0;
                 const isPositive = net >= 0;
                 const isActive = activeBarIndex === idx;
@@ -434,8 +436,9 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
                 }}
               />
             </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+            </BarChart>
+          </ResponsiveContainer>
+        ) : null}
 
         {loading ? (
           <div className="absolute inset-0 rounded-xl border border-slate-800 bg-slate-950/60 backdrop-blur-sm">

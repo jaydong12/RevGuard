@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
+// Build stamp for prod verification. If you don't see this in the browser console,
+// you're deploying the wrong commit/project/branch.
+// eslint-disable-next-line no-console
+console.log('DASH_BUILD', '2026-01-07-1');
+
 // Home dashboard page: the primary RevGuard view with cash insights, CSV import,
 // financial statements, daily log, and AI helpers. This file was originally a
 // single monolithic page; changes here focus on:
@@ -16,7 +21,8 @@ import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import CashBarChart from '../../components/CashBarChart';
+// TEMP: disable CashOverview import entirely (prod crash isolation).
+// import { CashOverviewGate } from '../../components/CashOverviewGate';
 import { IncomeStatementCard } from '../../components/IncomeStatementCard';
 import { BalanceSheetCard } from '../../components/BalanceSheetCard';
 import { CashFlowCard } from '../../components/CashFlowCard';
@@ -25,9 +31,10 @@ import BusinessHealthSystemCard from '../../components/BusinessHealthSystemCard'
 import MonthlyReviewCalendar from '../../components/MonthlyReviewCalendar';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { computeHealthSystem } from '../../lib/healthSystem';
+import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAppData } from '../../components/AppDataProvider';
-import { CheckCircle2, Sparkles, Target, ReceiptText, CalendarClock, PiggyBank, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, Sparkles, Target } from 'lucide-react';
 
 type Transaction = {
   id: number;
@@ -82,7 +89,7 @@ type StatementKind = 'income' | 'balance' | 'cashflow';
 // year/month navigation instead of 7D/30D/1Y/All toggles.
 type Range = '7d' | '30d' | '90d' | 'ytd' | '1y' | 'all';
 type ChartRange = '1m' | '1y' | 'all';
-type ReportKind = 'profitability' | 'spending' | 'cashrunway' | 'tax';
+type ReportKind = 'profitability' | 'spending' | 'cashrunway';
 type ReportPeriodType = 'month' | 'year';
 
 type PeriodMode = 'month' | 'year';
@@ -250,31 +257,6 @@ function generateAlerts(transactions: Transaction[], totals: Totals): string[] {
   return alerts;
 }
 
-function SmartTaxStat({
-  icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-        {icon}
-        {label}
-      </div>
-      <div className="mt-2 text-xl font-semibold text-slate-50 tracking-tight tabular-nums">
-        {value}
-      </div>
-      <div className="mt-1 text-xs text-slate-400 leading-relaxed">{hint}</div>
-    </div>
-  );
-}
-
 function getBreakdown(
   transactions: Transaction[],
   kind: BreakdownKind
@@ -305,7 +287,9 @@ function getMonthlySummaries(transactions: Transaction[]): MonthSummary[] {
     { income: number; expenses: number; net: number }
   >();
   for (const tx of transactions) {
-    const monthKey = tx.date.slice(0, 7);
+    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
+    if (!dateStr) continue;
+    const monthKey = (dateStr ?? '').slice(0, 7);
     if (!map.has(monthKey)) {
       map.set(monthKey, { income: 0, expenses: 0, net: 0 });
     }
@@ -333,7 +317,9 @@ function getYearSummaries(transactions: Transaction[]): YearSummary[] {
     { income: number; expenses: number; net: number }
   >();
   for (const tx of transactions) {
-    const year = tx.date.slice(0, 4);
+    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
+    if (!dateStr) continue;
+    const year = (dateStr ?? '').slice(0, 4);
     if (!map.has(year)) {
       map.set(year, { income: 0, expenses: 0, net: 0 });
     }
@@ -375,7 +361,9 @@ function getYearlyCashSeries(
   }
   const netByMonth = new Map<string, number>();
   for (const tx of transactions) {
-    const key = tx.date.slice(0, 7);
+    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
+    if (!dateStr) continue;
+    const key = (dateStr ?? '').slice(0, 7);
     netByMonth.set(key, (netByMonth.get(key) ?? 0) + tx.amount);
   }
   let runningCash = 0;
@@ -404,24 +392,30 @@ function getMonthCashSeriesByKey(
   transactions: Transaction[],
   monthKey: string
 ): { label: string; value: number }[] {
-  const txs = transactions
-    .filter((tx) => tx.date.slice(0, 7) === monthKey)
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const txs = (transactions ?? [])
+    .filter((tx) => {
+      const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
+      return Boolean(dateStr) && (dateStr ?? '').slice(0, 7) === monthKey;
+    })
+    .sort((a, b) => String((a as any)?.date ?? '').localeCompare(String((b as any)?.date ?? '')));
   if (txs.length === 0) return [];
   const netByDay = new Map<string, number>();
   for (const tx of txs) {
-    const key = tx.date;
+    const dateStr = typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '';
+    if (!dateStr) continue;
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = (dateStr ?? '').slice(0, 10); // YYYY-MM-DD
     netByDay.set(key, (netByDay.get(key) ?? 0) + tx.amount);
   }
   const sortedDays = Array.from(netByDay.keys()).sort();
   let runningCash = 0;
   return sortedDays.map((day) => {
     runningCash += netByDay.get(day) ?? 0;
-    const d = new Date(day);
-    const label = d.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    });
+    const d = new Date(`${day}T00:00:00`);
+    const label = Number.isNaN(d.getTime())
+      ? String(day ?? '')
+      : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return { label, value: runningCash };
   });
 }
@@ -430,15 +424,24 @@ function buildCashCurveFromTransactions(
   transactions: Transaction[],
   openingBalance: number = 0
 ): TxPoint[] {
-  const sorted = [...transactions].sort((a, b) =>
-    a.date.localeCompare(b.date)
-  );
+  const sorted = [...(transactions ?? [])]
+    .map((tx) => ({
+      ...tx,
+      date: typeof (tx as any)?.date === 'string' ? String((tx as any).date) : '',
+    }))
+    .filter((tx) => {
+      const s = String((tx as any).date ?? '');
+      if (!s) return false;
+      const d = new Date(s);
+      return !Number.isNaN(d.getTime());
+    })
+    .sort((a, b) => String((a as any).date).localeCompare(String((b as any).date)));
   let running = openingBalance;
   return sorted.map((tx) => {
     const delta = Number(tx.amount) || 0;
     running += delta;
     return {
-      x: new Date(tx.date),
+      x: new Date(String((tx as any).date)),
       y: running,
       txId: Number(tx.id),
       description: tx.description,
@@ -534,19 +537,6 @@ function getReportContent(
           'For a stronger buffer, many owners try to keep 3–6 months of expenses in cash if possible.',
         ],
         tip: "Look at your cash curve chart. If it slopes up, you're building safety. If it slopes down, decide whether to adjust your spending or increase revenue.",
-      };
-    }
-    case 'tax': {
-      return {
-        title: 'Tax-Ready Check',
-        intro:
-          'This report is not tax advice, but it tells you how "clean" your numbers are for tax time.',
-        bullets: [
-          'You have your income and expenses separated, which is the first step to being tax-ready.',
-          'Each transaction should have a clear category (like "Meals", "Equipment", "Rent", "Payroll") so write-offs are easier to track.',
-          'Keeping everything in one tool all year is much cheaper than trying to fix a box of receipts at the end.',
-        ],
-        tip: "Once this is live with real data, you'll be able to export clean reports for your tax preparer instead of handing them a mess.",
       };
     }
   }
@@ -650,13 +640,20 @@ function parseAiSections(text: string): AiSection[] {
   return sections;
 }
 
-/** Normalize an amount from CSV: strip $, commas, spaces, etc. */
+/** Normalize an amount from CSV: strip $, commas, spaces, etc. Supports (123.45) negatives. */
 function normalizeAmount(raw: any): number | null {
   if (raw === null || raw === undefined) return null;
-  const cleaned = String(raw).replace(/[^0-9.-]/g, '');
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  const isParenNegative = /^\(.*\)$/.test(s);
+  // Keep digits, dot, minus. Remove currency symbols/commas/spaces.
+  const cleaned = s.replace(/[^\d.\-]/g, '');
   if (!cleaned) return null;
+
   const val = Number.parseFloat(cleaned);
-  return Number.isNaN(val) ? null : val;
+  if (Number.isNaN(val)) return null;
+  return isParenNegative ? -Math.abs(val) : val;
 }
 
 /** Normalize dates into YYYY-MM-DD; return null if totally broken */
@@ -787,7 +784,16 @@ function getRangeLabel(range: Range): string {
   }
 }
 
+// Wrapper: if businessId is missing, render nothing and run ZERO dashboard logic.
+// This prevents CashOverview from ever executing with businessId=null in production.
 export default function DashboardHome() {
+  const appData = useAppData();
+  const bid = typeof appData?.businessId === 'string' ? appData.businessId.trim() : '';
+  if (!bid) return null;
+  return <DashboardHomeInner appData={appData} />;
+}
+
+function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData> }) {
   const perfEnabled = useMemo(() => {
     try {
       return typeof window !== 'undefined' && localStorage.getItem('revguard:perf') === '1';
@@ -805,9 +811,14 @@ export default function DashboardHome() {
     invoices: invoicesRaw,
     loading: businessLoading,
     error: businessError,
-  } = useAppData();
+  } = appData;
 
-  const transactions = (transactionsRaw as any[]) as Transaction[];
+  // Defensive normalization: prod rows can have null/undefined dates.
+  // Ensure all downstream `.slice()` / date operations are safe.
+  const transactions = (((transactionsRaw as any[]) ?? []) as any[]).map((t) => ({
+    ...t,
+    date: typeof t?.date === 'string' ? String(t.date) : '',
+  })) as Transaction[];
   const bills = (billsRaw as any[]) ?? [];
   const invoices = (invoicesRaw as any[]) ?? [];
   const [range, setRange] = useState<Range>('30d');
@@ -826,18 +837,8 @@ export default function DashboardHome() {
   const [selectedReportYear, setSelectedReportYear] =
     useState<string | null>(null);
 
-  // Scenario
-  const [showScenario, setShowScenario] = useState(false);
-  const [scenario, setScenario] = useState<Record<string, number>>({});
-  const [scenarioActive, setScenarioActive] = useState(false);
-  const allCategories = [
-    'Payroll',
-    'Services',
-    'Advertising',
-    'Software',
-    'Supplies',
-    'Misc',
-  ];
+  // Keep period selection for KPI/statement calculations (cash overview lives elsewhere).
+  const [selectedPeriod, _setSelectedPeriod] = useState<SelectedPeriod | null>(null);
 
   const isTxLoading = businessLoading;
   const txError = businessError;
@@ -852,14 +853,9 @@ export default function DashboardHome() {
   const [activeInsightRunId, setActiveInsightRunId] = useState<string | null>(
     null
   );
-  const [aiInsightRunsEnabled, setAiInsightRunsEnabled] = useState<boolean>(() => {
-    try {
-      // If we previously detected the table is missing, do not keep retrying.
-      return sessionStorage.getItem('revguard:ai_insight_runs_missing') !== '1';
-    } catch {
-      return true;
-    }
-  });
+  // Production hardening: ai_insight_runs is not guaranteed to exist in prod.
+  // Disable the feature entirely so a 404/42P01 can never crash the dashboard.
+  const [aiInsightRunsEnabled, setAiInsightRunsEnabled] = useState<boolean>(false);
 
   function isMissingAiInsightRunsTable(err: any): boolean {
     const msg = String(err?.message ?? err ?? '').toLowerCase();
@@ -871,7 +867,11 @@ export default function DashboardHome() {
       (msg.includes('schema cache') ||
         msg.includes('could not find the table') ||
         msg.includes('does not exist') ||
-        msg.includes('relation'))
+        msg.includes('relation') ||
+        msg.includes('not found') ||
+        msg.includes('404') ||
+        String((err as any)?.code ?? '') === '42P01' ||
+        Number((err as any)?.status ?? 0) === 404)
     );
   }
 
@@ -931,33 +931,7 @@ export default function DashboardHome() {
   const pdfRef = useRef<HTMLDivElement | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
 
-  // Year + month navigation for the cash curve
-  const [selectedYear, setSelectedYear] = useState<number | 'all'>();
-  const [selectedMonth, setSelectedMonth] = useState<'all' | number>('all');
-
-  // Unified period selection shared by the cash chart, KPI cards, and
-  // financial statements. When null, views fall back to all-time.
-  const [selectedPeriod, setSelectedPeriod] =
-    useState<SelectedPeriod | null>(null);
-
-  // Keep the CashBarChart year navigation in sync with the dashboard's
-  // year/month filters that determine which transactions are fed into the chart.
-  // Without this, Prev/Next year can update `selectedPeriod` but the input data
-  // remains filtered to the old `selectedYear`, making the buttons appear broken.
-  function handleCashChartPeriodChange(p: SelectedPeriod) {
-    setSelectedPeriod(p);
-    setSelectedYear(p.year);
-    if (p.mode === 'month') {
-      if (typeof p.month === 'number') {
-        setSelectedMonth(Number(p.month));
-      } else {
-        setSelectedMonth('all');
-      }
-    } else {
-      // In "year" mode, the chart wants the whole year. Clear month filter.
-      setSelectedMonth('all');
-    }
-  }
+  // Cash overview is now isolated in <CashOverviewGate /> (crash-proof gating).
 
   // Financial statements load via a year-scoped date-range query on `date`
   // so prior years render reliably (no reliance on `created_at`).
@@ -965,18 +939,6 @@ export default function DashboardHome() {
   const statementsError: string | null = null;
 
   // ---------- scenario helper ----------
-
-  const plotted = useMemo((): Transaction[] => {
-    if (!scenarioActive) return transactions;
-    const adjustment: Record<string, number> = scenario;
-    return transactions.map((tx) => {
-      const adj = adjustment[tx.category] || 0;
-      return {
-        ...tx,
-        amount: Math.round(tx.amount * (1 + adj / 100) * 100) / 100,
-      };
-    });
-  }, [scenarioActive, scenario, transactions]);
 
   // Transactions are loaded once in `AppDataProvider` (React Query) and cached by `business_id`.
 
@@ -1090,7 +1052,8 @@ export default function DashboardHome() {
       if (topOut) bullets.push(`Money out: ${formatCurrency(topOut[1].out)} to ${topOut[0]}`);
       if (biggestAbs && bullets.length < 3) {
         const label = String((biggestAbs as any)?.description ?? '').trim();
-        const short = label.length > 42 ? `${label.slice(0, 42)}…` : label;
+        const shortLabel = String(label ?? '');
+        const short = shortLabel.length > 42 ? `${shortLabel.slice(0, 42)}…` : shortLabel;
         bullets.push(
           `Biggest item: ${formatCurrency(Number((biggestAbs as any)?.amount) || 0)}${
             short ? ` • ${short}` : ''
@@ -1150,7 +1113,7 @@ export default function DashboardHome() {
         netToday: todayNet,
         netYesterday: yesterdayNet,
         moneyMovesTakeaway: takeaway,
-        moneyMoves: bullets.slice(0, 3),
+        moneyMoves: (bullets ?? []).slice(0, 3),
         oneFocusTomorrow: focus,
         lowData: low,
       };
@@ -1176,184 +1139,6 @@ export default function DashboardHome() {
     []
   );
   const [reviewChecklist, setReviewChecklist] = useState<Record<string, boolean>>({});
-
-  // ---------- Smart Taxes (plain-English) ----------
-  const [smartTaxesLoading, setSmartTaxesLoading] = useState(false);
-  const [smartTaxesError, setSmartTaxesError] = useState<string | null>(null);
-  const [smartTaxes, setSmartTaxes] = useState<any | null>(null);
-
-  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const ytdStartIso = useMemo(() => `${new Date().getFullYear()}-01-01`, []);
-
-  useEffect(() => {
-    if (!selectedBusinessId) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        setSmartTaxesLoading(true);
-        setSmartTaxesError(null);
-
-        const { data: sess } = await supabase.auth.getSession();
-        const token = sess.session?.access_token ?? null;
-        if (!token) throw new Error('Please log in again.');
-
-        const res = await fetch('/api/tax-report', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            businessId: selectedBusinessId,
-            startDate: ytdStartIso,
-            endDate: todayIso,
-          }),
-        });
-
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          throw new Error(txt || `Smart Taxes failed (HTTP ${res.status}).`);
-        }
-
-        const json = await res.json();
-        if (!cancelled) setSmartTaxes(json);
-      } catch (e: any) {
-        if (!cancelled) setSmartTaxesError(e?.message ?? 'Could not load Smart Taxes.');
-      } finally {
-        if (!cancelled) setSmartTaxesLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedBusinessId, ytdStartIso, todayIso]);
-
-  const todaysTaxableProfit = useMemo(() => {
-    const todays = (transactions as any[]).filter((t) => String(t?.date ?? '') === todayIso);
-    if (!todays.length) return 0;
-
-    let income = 0;
-    let deductible = 0;
-
-    for (const tx of todays) {
-      const amt = Number(tx?.amount) || 0;
-      if (!Number.isFinite(amt) || amt === 0) continue;
-      const taxCat = String(tx?.tax_category ?? '').trim().toLowerCase();
-      const treat = String(tx?.tax_treatment ?? '').trim().toLowerCase();
-
-      // Exclusions / non-operating buckets
-      if (
-        taxCat === 'sales_tax_collected' ||
-        taxCat === 'sales_tax_paid' ||
-        taxCat === 'transfer' ||
-        taxCat === 'loan_principal' ||
-        taxCat === 'owner_draw' ||
-        taxCat === 'capex' ||
-        taxCat === 'owner_estimated_tax'
-      ) {
-        continue;
-      }
-
-      if (taxCat === 'gross_receipts' && amt > 0) {
-        income += amt;
-        continue;
-      }
-      if (taxCat === 'uncategorized' && amt > 0) {
-        income += amt;
-        continue;
-      }
-
-      if (amt < 0) {
-        const abs = Math.abs(amt);
-        if (treat === 'deductible') deductible += abs;
-        else if (treat === 'partial_50') deductible += abs * 0.5;
-      }
-    }
-
-    return Math.max(0, income - deductible);
-  }, [transactions, todayIso]);
-
-  const todaySetAside = useMemo(() => {
-    const pct = Number(smartTaxes?.simpleCards?.taxSetAside?.pct);
-    if (!Number.isFinite(pct) || pct <= 0) return 0;
-    return Math.max(0, todaysTaxableProfit * pct);
-  }, [smartTaxes?.simpleCards?.taxSetAside?.pct, todaysTaxableProfit]);
-
-  const smartTaxAlerts = useMemo(() => {
-    const alerts: Array<{ text: string; href: string }> = [];
-    if (!selectedBusinessId) return alerts;
-
-    const salesTaxOwed = Number(smartTaxes?.breakdown?.taxes?.salesTaxLiability ?? 0) || 0;
-    if (salesTaxOwed > 25) {
-      const lastPay = (transactions as any[])
-        .filter((t) => String(t?.tax_category ?? '').toLowerCase() === 'sales_tax_paid')
-        .map((t) => String(t?.date ?? ''))
-        .filter(Boolean)
-        .sort()
-        .pop();
-      if (!lastPay) {
-        alerts.push({
-          text: 'You’re collecting sales tax, but we don’t see a sales tax payment yet.',
-          href: '/transactions?q=sales%20tax',
-        });
-      } else {
-        const daysSince =
-          (new Date(todayIso).getTime() - new Date(`${lastPay}T00:00:00Z`).getTime()) /
-          (1000 * 60 * 60 * 24);
-        if (daysSince > 45) {
-          alerts.push({
-            text: 'Sales tax looks owed, but your last sales tax payment was a while ago.',
-            href: '/transactions?q=sales%20tax',
-          });
-        }
-      }
-    }
-
-    const uncSpend = (transactions as any[])
-      .filter((t) => String(t?.date ?? '') >= ytdStartIso && String(t?.date ?? '') <= todayIso)
-      .filter(
-        (t) =>
-          (Number(t?.amount) || 0) < 0 &&
-          (String(t?.tax_category ?? '').toLowerCase() === 'uncategorized' ||
-            String(t?.tax_treatment ?? '').toLowerCase() === 'review' ||
-            Number(t?.confidence_score ?? 1) < 0.75)
-      )
-      .reduce((sum, t) => sum + Math.abs(Number(t?.amount) || 0), 0);
-    if (uncSpend > 250) {
-      alerts.push({
-        text: 'Some spending needs review—fixing it will tighten your tax estimate.',
-        href: '/transactions?needsReview=1',
-      });
-    }
-
-    const misclassifiedTransfers = (transactions as any[]).filter((t) => {
-      const taxCat = String(t?.tax_category ?? '').toLowerCase();
-      if (taxCat !== 'gross_receipts') return false;
-      const txt = `${t?.description ?? ''} ${t?.category ?? ''}`.toLowerCase();
-      return txt.includes('transfer') || txt.includes('loan');
-    }).length;
-    if (misclassifiedTransfers > 0) {
-      alerts.push({
-        text: 'Some transactions look like transfers/loans but are tagged as income—worth a quick review.',
-        href: '/transactions?q=transfer',
-      });
-    }
-
-    const ownerPayments = (transactions as any[]).filter((t) => {
-      const tc = String(t?.tax_category ?? '').toLowerCase();
-      return tc === 'owner_draw' || tc === 'owner_estimated_tax';
-    }).length;
-    if (ownerPayments > 0) {
-      alerts.push({
-        text: 'We detected owner-related payments. These shouldn’t be counted as business expenses.',
-        href: '/transactions?q=estimated%20tax',
-      });
-    }
-
-    return alerts.slice(0, 4);
-  }, [selectedBusinessId, smartTaxes, transactions, todayIso, ytdStartIso]);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -1566,114 +1351,7 @@ export default function DashboardHome() {
   );
   const yearSummaries = useMemo(() => getYearSummaries(transactions), [transactions]);
 
-  // Distinct years present in the transaction data, oldest -> newest.
-  const years = useMemo(() => {
-    const set = new Set<number>();
-    for (const tx of transactions) {
-      if (!tx.date) continue;
-      const d = new Date(tx.date);
-      if (Number.isNaN(d.getTime())) continue;
-      set.add(d.getFullYear());
-    }
-    return Array.from(set.values()).sort((a, b) => a - b);
-  }, [transactions]);
-
-  // Default the selected year to the latest year once data is available.
-  useEffect(() => {
-    if (years.length > 0 && selectedYear === undefined) {
-      setSelectedYear(years[years.length - 1]);
-    }
-  }, [years, selectedYear]);
-
-  // Apply year + month navigation just for the cash curve.
-  const yearFilteredTxs = useMemo(() => {
-    if (selectedYear === 'all' || selectedYear === undefined) return plotted;
-    return plotted.filter((tx) => {
-      const d = new Date(tx.date);
-      if (Number.isNaN(d.getTime())) return false;
-      return d.getFullYear() === selectedYear;
-    });
-  }, [plotted, selectedYear]);
-
-  const monthFilteredTxs = useMemo(() => {
-    if (selectedMonth === 'all') return yearFilteredTxs;
-    return yearFilteredTxs.filter((tx) => {
-      const d = new Date(tx.date);
-      if (Number.isNaN(d.getTime())) return false;
-      // Support both 0–11 (Date.getMonth()) and 1–12 month conventions.
-      const m0 = d.getMonth(); // 0–11
-      if (selectedMonth >= 0 && selectedMonth <= 11) return m0 === selectedMonth;
-      return m0 + 1 === selectedMonth;
-    });
-  }, [yearFilteredTxs, selectedMonth]);
-
-  const chartTxs = useMemo((): Transaction[] => {
-    if (range === '1y') {
-      // 1Y now means "selected year" (plus optional month filter) for the chart.
-      return monthFilteredTxs;
-    }
-    // Other ranges still apply (7D, 30D, All), intersected with the year/month filter.
-    return getFilteredTransactions(monthFilteredTxs, range);
-  }, [monthFilteredTxs, range]);
-
-  const chartBounds = useMemo(() => {
-    const ds = chartTxs
-      .map((t) => new Date(t.date))
-      .filter((d) => !Number.isNaN(d.getTime()))
-      .sort((a, b) => a.getTime() - b.getTime());
-    return {
-      start: ds[0]?.toISOString().slice(0, 10) ?? 'none',
-      end: ds[ds.length - 1]?.toISOString().slice(0, 10) ?? 'none',
-    };
-  }, [chartTxs]);
-
-  // Debug: verify we are actually feeding the chart non-empty, correctly filtered data.
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[DashboardHome:CashOverview]', {
-      transactionsTotal: transactions?.length ?? 0,
-      plottedCount: plotted.length,
-      chartTxsCount: chartTxs.length,
-      businessId: selectedBusinessId ?? null,
-      range,
-      selectedYear,
-      selectedMonth,
-      chartStart: chartBounds.start,
-      chartEnd: chartBounds.end,
-      sampleDates: chartTxs.slice(0, 5).map((t) => t.date),
-    });
-  }, [
-    transactions?.length,
-    plotted.length,
-    chartTxs.length,
-    selectedBusinessId,
-    range,
-    selectedYear,
-    selectedMonth,
-    chartBounds.start,
-    chartBounds.end,
-  ]);
-
-  const chartPoints = useMemo(() => {
-    if (perfEnabled) {
-      // eslint-disable-next-line no-console
-      console.time('dashboard:buildCashCurve');
-    }
-    const res = buildCashCurveFromTransactions(chartTxs, 0);
-    if (perfEnabled) {
-      // eslint-disable-next-line no-console
-      console.timeEnd('dashboard:buildCashCurve');
-    }
-    return res;
-  }, [chartTxs, perfEnabled]);
-  const chartSeries = useMemo(
-    () =>
-      chartPoints.map((p) => ({
-        label: p.x.toISOString().split('T')[0],
-        value: p.y,
-      })),
-    [chartPoints]
-  );
+  // Cash overview computations moved to <CashOverviewGate />.
 
   function projectLine(
     series: { label: string; value: number }[],
@@ -1711,11 +1389,7 @@ export default function DashboardHome() {
     return { avgDailyNet: avg, projected30: proj30, currentCash: cash, runwayDays: runway };
   }, [filteredTransactions]);
 
-  const chartTitle = useMemo(() => {
-    return selectedYear && selectedYear !== 'all'
-      ? `Cash Curve – ${selectedYear}`
-      : `Cash Curve – ${getRangeLabel(range)}`;
-  }, [selectedYear, range]);
+  const chartTitle = useMemo(() => `Cash Curve – ${getRangeLabel(range)}`, [range]);
 
   const reportContent = useMemo(
     () => getReportContent(selectedReport, totals, monthlySummaries),
@@ -2023,7 +1697,7 @@ export default function DashboardHome() {
     const upTo = allMonthSummaries.filter(
       (m) => m.monthKey <= currentMonthKeyForPeriod
     );
-    const window = upTo.slice(-6); // last up to 6 months
+    const window = (upTo ?? []).slice(-6); // last up to 6 months
     if (window.length === 0) return 0;
     const burns = window
       .map((m) => m.net)
@@ -2068,10 +1742,10 @@ export default function DashboardHome() {
 
   function formatIsoDigitsOnly(input: string) {
     // Users can type numbers only; we auto-insert dashes for YYYY-MM-DD.
-    const digits = input.replace(/[^\d]/g, '').slice(0, 8);
-    const y = digits.slice(0, 4);
-    const m = digits.slice(4, 6);
-    const d = digits.slice(6, 8);
+    const digits = String(input ?? '').replace(/[^\d]/g, '').slice(0, 8);
+    const y = String(digits ?? '').slice(0, 4);
+    const m = String(digits ?? '').slice(4, 6);
+    const d = String(digits ?? '').slice(6, 8);
     if (digits.length <= 4) return y;
     if (digits.length <= 6) return `${y}-${m}`;
     return `${y}-${m}-${d}`;
@@ -2245,6 +1919,7 @@ export default function DashboardHome() {
   }
 
   useEffect(() => {
+    if (!aiInsightRunsEnabled) return;
     void loadInsightHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedBusinessId, aiInsightRunsEnabled]);
@@ -2561,7 +2236,7 @@ export default function DashboardHome() {
 
         // Amount is the ONLY hard requirement
         const amount = normalizeAmount(rawAmount);
-        if (amount === null) {
+        if (amount === null || !Number.isFinite(amount)) {
           skippedInvalid += 1;
           skippedReasons.set(
             'missing_amount',
@@ -2594,7 +2269,8 @@ export default function DashboardHome() {
           date,
           description,
           category,
-          amount,
+          amount, // numeric dollars (required)
+          amount_cents: Math.round(amount * 100),
           business_id: selectedBusinessId,
           customer_id: null as string | null,
           _raw_customer: customerCol ? String(row[customerCol] ?? '').trim() : '',
@@ -2727,55 +2403,85 @@ export default function DashboardHome() {
         return rest;
       });
 
-      const { data: insertedRows, error } = await supabase
-        .from('transactions')
-        .insert(chunk as any)
-        .select('id, description, category, amount');
+      // Prefer writing amount_cents + amount. If the DB doesn't have amount_cents yet, retry without it.
+      let insertedRows: any[] | null = null;
+      let error: any | null = null;
+      {
+        const attempt1 = chunk;
+        const { data, error: e1 } = await supabase
+          .from('transactions')
+          .insert(attempt1 as any)
+          .select('id, description, category, amount, amount_cents');
+        if (!e1) {
+          insertedRows = (data ?? []) as any[];
+          error = null;
+        } else if (String((e1 as any)?.code ?? '') === '42703') {
+          const attempt2 = chunk.map((r: any) => {
+            const { amount_cents: _omit, ...rest } = r ?? {};
+            return rest;
+          });
+          const { data, error: e2 } = await supabase
+            .from('transactions')
+            .insert(attempt2 as any)
+            .select('id, description, category, amount');
+          insertedRows = (data ?? []) as any[];
+          error = e2 ?? null;
+        } else {
+          insertedRows = (data ?? []) as any[];
+          error = e1 ?? null;
+        }
+      }
 
       if (!error) {
         imported += chunk.length;
         setImportLog(`Imported ${imported}/${mappedRows.length}. Tagging… ${tagged}/${imported}`);
 
-        // Post-insert tagging in batches (100)
-        try {
-          const classifyRes = await fetch('/api/transactions/classify-tax', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              transactions: (insertedRows ?? []).map((r: any) => ({
-                description: r.description ?? null,
-                merchant: null,
-                category: r.category ?? null,
-                amount: Number(r.amount) || 0,
-              })),
-            }),
-          });
+        // Post-insert tagging in batches (100) — disabled when tax features are off.
+        if (TAX_FEATURES_ENABLED) {
+          try {
+            const classifyRes = await fetch('/api/transactions/classify-tax', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                transactions: (insertedRows ?? []).map((r: any) => ({
+                  description: r.description ?? null,
+                  merchant: null,
+                  category: r.category ?? null,
+                  // Keep dollars consistent: prefer amount_cents if present.
+                  amount:
+                    Number.isFinite(Number(r.amount_cents))
+                      ? Number(r.amount_cents) / 100
+                      : Number(r.amount),
+                })),
+              }),
+            });
 
-          const json: any = classifyRes.ok ? await classifyRes.json() : null;
-          const results: any[] = Array.isArray(json?.results) ? json.results : [];
+            const json: any = classifyRes.ok ? await classifyRes.json() : null;
+            const results: any[] = Array.isArray(json?.results) ? json.results : [];
 
-          const updates = (insertedRows ?? []).map((r: any, idx: number) => {
-            const tag = results[idx] ?? null;
-            return {
-              id: r.id,
-              tax_category: String(tag?.tax_category ?? 'uncategorized'),
-              tax_treatment: String(tag?.tax_treatment ?? 'review'),
-              confidence_score: Number(tag?.confidence_score ?? 0.5),
-              tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
-            };
-          });
+            const updates = (insertedRows ?? []).map((r: any, idx: number) => {
+              const tag = results[idx] ?? null;
+              return {
+                id: r.id,
+                tax_category: String(tag?.tax_category ?? 'uncategorized'),
+                tax_treatment: String(tag?.tax_treatment ?? 'review'),
+                confidence_score: Number(tag?.confidence_score ?? 0.5),
+                tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
+              };
+            });
 
-          if (updates.length) {
-            const { error: upErr } = await supabase
-              .from('transactions')
-              .upsert(updates as any, { onConflict: 'id' });
-            if (!upErr) tagged += updates.length;
+            if (updates.length) {
+              const { error: upErr } = await supabase
+                .from('transactions')
+                .upsert(updates as any, { onConflict: 'id' });
+              if (!upErr) tagged += updates.length;
+            }
+          } catch {
+            // ignore; these rows will appear in Needs review
           }
-        } catch {
-          // ignore; these rows will appear in Needs review
         }
         setImportLog(`Imported ${imported}/${mappedRows.length}. Tagged ${tagged}/${imported}.`);
         continue;
@@ -2791,11 +2497,31 @@ export default function DashboardHome() {
       // eslint-disable-next-line no-console
       console.error('IMPORT_BATCH_FAILED', lastErrorMessage, firstFailedRow);
       for (const row of chunk) {
-        const { data: ins, error: rowError } = await supabase
-          .from('transactions')
-          .insert(row as any)
-          .select('id, description, category, amount')
-          .single();
+        let ins: any | null = null;
+        let rowError: any | null = null;
+        {
+          const { data: d1, error: e1 } = await supabase
+            .from('transactions')
+            .insert(row as any)
+            .select('id, description, category, amount, amount_cents')
+            .single();
+          if (!e1) {
+            ins = d1 as any;
+            rowError = null;
+          } else if (String((e1 as any)?.code ?? '') === '42703') {
+            const { amount_cents: _omit, ...rest } = row ?? {};
+            const { data: d2, error: e2 } = await supabase
+              .from('transactions')
+              .insert(rest as any)
+              .select('id, description, category, amount')
+              .single();
+            ins = d2 as any;
+            rowError = e2 ?? null;
+          } else {
+            ins = d1 as any;
+            rowError = e1 ?? null;
+          }
+        }
         if (rowError) {
           failed += 1;
           lastErrorMessage = rowError.message ?? String(rowError);
@@ -2807,40 +2533,45 @@ export default function DashboardHome() {
           console.error('IMPORT_ROW_FAILED', lastErrorMessage, row);
         } else {
           imported += 1;
-          // Tag this single row immediately
-          try {
-            const classifyRes = await fetch('/api/transactions/classify-tax', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                transactions: [
-                  {
-                    description: (ins as any)?.description ?? null,
-                    merchant: null,
-                    category: (ins as any)?.category ?? null,
-                    amount: Number((ins as any)?.amount) || 0,
-                  },
-                ],
-              }),
-            });
-            const json: any = classifyRes.ok ? await classifyRes.json() : null;
-            const tag = json?.results?.[0] ?? null;
-            await supabase
-              .from('transactions')
-              .update({
-                tax_category: String(tag?.tax_category ?? 'uncategorized'),
-                tax_treatment: String(tag?.tax_treatment ?? 'review'),
-                confidence_score: Number(tag?.confidence_score ?? 0.5),
-                tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
-              } as any)
-              .eq('id', (ins as any)?.id)
-              .eq('business_id', selectedBusinessId);
-            tagged += 1;
-          } catch {
-            // ignore
+          // Tag this single row immediately — disabled when tax features are off.
+          if (TAX_FEATURES_ENABLED) {
+            try {
+              const classifyRes = await fetch('/api/transactions/classify-tax', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                  transactions: [
+                    {
+                      description: (ins as any)?.description ?? null,
+                      merchant: null,
+                      category: (ins as any)?.category ?? null,
+                      amount:
+                        Number.isFinite(Number((ins as any)?.amount_cents))
+                          ? Number((ins as any)?.amount_cents) / 100
+                          : Number((ins as any)?.amount),
+                    },
+                  ],
+                }),
+              });
+              const json: any = classifyRes.ok ? await classifyRes.json() : null;
+              const tag = json?.results?.[0] ?? null;
+              await supabase
+                .from('transactions')
+                .update({
+                  tax_category: String(tag?.tax_category ?? 'uncategorized'),
+                  tax_treatment: String(tag?.tax_treatment ?? 'review'),
+                  confidence_score: Number(tag?.confidence_score ?? 0.5),
+                  tax_reason: String(tag?.tax_reason ?? tag?.reasoning ?? ''),
+                } as any)
+                .eq('id', (ins as any)?.id)
+                .eq('business_id', selectedBusinessId);
+              tagged += 1;
+            } catch {
+              // ignore
+            }
           }
           setImportLog(`Imported ${imported}/${mappedRows.length}. Tagged ${tagged}/${imported}.`);
         }
@@ -2913,6 +2644,8 @@ export default function DashboardHome() {
   }
 
   // ---------- render ----------
+
+  // Note: businessId gating happens in the outer wrapper. This inner component assumes businessId exists.
 
   return (
     <div>
@@ -3080,105 +2813,6 @@ export default function DashboardHome() {
             <WeeklyOverviewChart transactions={transactions as any} showNetLine />
           </div>
 
-          {/* Smart Taxes (plain-English) */}
-          <div className="mt-6 rg-enter rg-d2 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-              <div>
-                <div className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                  <ReceiptText className="h-4 w-4 text-emerald-300" />
-                  Smart Taxes
-                </div>
-                <div className="mt-2 text-lg font-semibold text-slate-50 tracking-tight">
-                  Today’s tax snapshot
-                </div>
-                <div className="mt-1 text-sm text-slate-300 leading-relaxed">
-                  Plain-English estimates based on your tagged transactions.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => router.push('/transactions?needsReview=1')}
-                disabled={!selectedBusinessId}
-                className="self-start inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <AlertTriangle className="h-4 w-4 text-amber-300" />
-                Needs review{Number(smartTaxes?.needsReviewCount ?? 0) > 0 ? ` (${Number(smartTaxes?.needsReviewCount)})` : ''}
-              </button>
-            </div>
-
-            {!selectedBusinessId ? (
-              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
-                Sign in to see Smart Taxes.
-              </div>
-            ) : smartTaxesLoading ? (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-[88px] rounded-2xl border border-white/10 bg-white/5 animate-pulse"
-                  />
-                ))}
-              </div>
-            ) : smartTaxesError ? (
-              <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-                {smartTaxesError}
-              </div>
-            ) : (
-              <div className="mt-4 space-y-4">
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <SmartTaxStat
-                    icon={<PiggyBank className="h-4 w-4 text-emerald-200" />}
-                    label="Set aside (today)"
-                    value={formatCurrency(todaySetAside)}
-                    hint="So taxes don’t surprise you."
-                  />
-                  <SmartTaxStat
-                    icon={<ReceiptText className="h-4 w-4 text-sky-200" />}
-                    label="Estimated taxes owed (YTD)"
-                    value={formatCurrency(Number(smartTaxes?.simpleCards?.estimatedTaxesOwedYtd ?? 0) || 0)}
-                    hint="Based on profit so far this year."
-                  />
-                  <SmartTaxStat
-                    icon={<CalendarClock className="h-4 w-4 text-violet-200" />}
-                    label="Next due date + suggested payment"
-                    value={`${formatCurrency(Number(smartTaxes?.nextPayment?.amount ?? 0) || 0)} • ${String(
-                      smartTaxes?.nextPayment?.dueDate ?? ''
-                    )}`}
-                    hint="A simple plan for the next quarter."
-                  />
-                  <SmartTaxStat
-                    icon={<ReceiptText className="h-4 w-4 text-amber-200" />}
-                    label="Sales tax owed"
-                    value={formatCurrency(Number(smartTaxes?.breakdown?.taxes?.salesTaxLiability ?? 0) || 0)}
-                    hint="What you’ve collected minus what you’ve paid."
-                  />
-                </div>
-
-                {smartTaxAlerts.length > 0 && (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                      Heads up
-                    </div>
-                    <ul className="mt-2 space-y-2 text-sm text-slate-200">
-                      {smartTaxAlerts.map((a) => (
-                        <li key={a.text} className="flex items-start gap-2">
-                          <span className="mt-1 h-1.5 w-1.5 rounded-full bg-amber-300/90" />
-                          <button
-                            type="button"
-                            onClick={() => router.push(a.href)}
-                            className="text-left leading-relaxed hover:text-slate-50 transition"
-                          >
-                            {a.text}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           {/* AI Insights (Today) */}
           <div className="mt-6 rg-enter rg-d2 rg-lift rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-6 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
@@ -3230,7 +2864,7 @@ export default function DashboardHome() {
               ) : (
                 <div className="space-y-3">
                   <ul className="space-y-2 text-sm text-slate-200">
-                    {moneyMoves.slice(0, 3).map((t) => (
+                    {(moneyMoves ?? []).slice(0, 3).map((t) => (
                       <li key={t} className="flex items-start gap-2">
                         <span className="mt-1 h-1.5 w-1.5 rounded-full bg-emerald-300/90" />
                         <span className="leading-relaxed">{t}</span>
@@ -3248,169 +2882,8 @@ export default function DashboardHome() {
           </div>
         </section>
 
-        {/* Scenario + chart */}
-        <section className="mb-8">
-
-          {showScenario && (
-            <div className="mb-4 px-4 py-5 bg-slate-950/80 rounded-2xl border border-blue-900/30 shadow shadow-blue-400/10 flex flex-col gap-3">
-              <h3 className="text-sm font-bold text-blue-300 mb-2">
-                Adjust Categories
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                {allCategories.map((cat) => (
-                  <div key={cat} className="flex gap-2 items-center">
-                    <label className="text-slate-200 w-20">{cat}</label>
-                    <input
-                      type="range"
-                      min="-50"
-                      max="100"
-                      value={scenario[cat] ?? 0}
-                      onChange={(e) =>
-                        setScenario((s) => ({
-                          ...s,
-                          [cat]: +e.target.value,
-                        }))
-                      }
-                      className="flex-1 accent-blue-400"
-                    />
-                    <span
-                      className={
-                        (scenario[cat] ?? 0) === 0
-                          ? 'text-blue-100'
-                          : (scenario[cat] ?? 0) > 0
-                          ? 'text-emerald-400'
-                          : 'text-rose-400'
-                      }
-                    >
-                      {scenario[cat]
-                        ? `${scenario[cat]! > 0 ? '+' : ''}${scenario[cat]}%`
-                        : '0%'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <button
-                onClick={() => setScenarioActive(true)}
-                className="mt-3 bg-gradient-to-tr from-emerald-600 via-blue-600 to-blue-500 text-white px-5 py-2 rounded-xl font-bold shadow hover:scale-105 transition"
-              >
-                Run Scenario
-              </button>
-            </div>
-          )}
-
-          {/* Header for the cash chart area */}
-          <div className="flex justify-between items-center mb-2 text-[11px] text-slate-300">
-            <span>Cash overview</span>
-          </div>
-
-          <div className="grid md:grid-cols-[2fr,1.1fr] gap-4 items-stretch">
-            <div>
-              <CashBarChart
-                key={`${selectedBusinessId ?? 'no-biz'}-${selectedPeriod?.mode ?? 'month'}-${chartBounds.start}-${chartBounds.end}-${range}-${selectedYear ?? 'u'}-${selectedMonth ?? 'u'}`}
-                // IMPORTANT: CashBarChart needs the full (business-scoped) tx list so it can
-                // compute available years and make Prev/Next year navigation work.
-                // Passing a range/year-filtered list can collapse `years` to a single year,
-                // making the buttons appear broken.
-                transactions={plotted}
-                selectedPeriod={selectedPeriod}
-                onPeriodChange={handleCashChartPeriodChange}
-                loading={isTxLoading}
-                animationKey={`${range}`}
-              />
-              {chartPoints.length > 0 && (
-                <div className="mt-3 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-[11px] text-slate-200">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-300 font-semibold">
-                      Recent periods
-                    </span>
-                    <span className="text-slate-500">
-                      Last {Math.min(chartPoints.length, 6)} of{' '}
-                      {chartPoints.length}
-                    </span>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full">
-                      <thead>
-                        <tr className="text-[10px] text-slate-400">
-                          <th className="text-left pr-2 py-1">Period</th>
-                          <th className="text-right px-2 py-1">Income</th>
-                          <th className="text-right px-2 py-1">Expenses</th>
-                          <th className="text-right px-2 py-1">Net</th>
-                          <th className="text-right pl-2 py-1">Balance</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {chartPoints
-                          .slice(-6)
-                          .map((p) => p)
-                          .reverse()
-                          .map((p) => (
-                            <tr
-                              key={p.txId ?? p.x.toISOString()}
-                              className="border-t border-slate-800/70"
-                            >
-                              <td className="pr-2 py-1 text-slate-200">
-                                {p.x.toLocaleDateString('en-US', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                })}
-                              </td>
-                              <td className="px-2 py-1 text-right text-emerald-300">
-                                {p.amount >= 0
-                                  ? formatCurrency(p.amount)
-                                  : formatCurrency(0)}
-                              </td>
-                              <td className="px-2 py-1 text-right text-rose-300">
-                                {p.amount < 0
-                                  ? formatCurrency(p.amount)
-                                  : formatCurrency(0)}
-                              </td>
-                              <td
-                                className={`px-2 py-1 text-right ${
-                                  p.amount >= 0
-                                    ? 'text-emerald-300'
-                                    : 'text-rose-300'
-                                }`}
-                              >
-                                {formatCurrency(p.amount)}
-                              </td>
-                              <td className="pl-2 py-1 text-right text-blue-200">
-                                {formatCurrency(p.y)}
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 gap-2 text-xs">
-              <MetricCard
-                label="Cash balance"
-                value={cashBalanceAtEndOfPeriod}
-                positive={cashBalanceAtEndOfPeriod >= 0}
-                highlight
-              />
-              <MetricCard
-                label={`Income (${selectedYearForStatements ?? 'year'})`}
-                value={statementTotals.income}
-              />
-              <MetricCard
-                label={`Expenses (${selectedYearForStatements ?? 'year'})`}
-                value={-statementTotals.expenses}
-              />
-              <MetricCard
-                label={`Net profit (${selectedYearForStatements ?? 'year'})`}
-                value={statementTotals.net}
-                positive={statementTotals.net >= 0}
-              />
-
-            </div>
-          </div>
-
-        </section>
+        {/* TEMP: disable CashOverview to confirm dashboard no longer crashes. */}
+        {null}
 
         {/* Financial statements */}
         <section className="mb-8 bg-slate-950/80 border border-slate-800 rounded-2xl p-4 text-xs">

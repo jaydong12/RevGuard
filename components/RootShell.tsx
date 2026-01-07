@@ -6,12 +6,15 @@ import AppLayout from './AppLayout';
 import KeepAliveTabs from './KeepAliveTabs';
 import ReactQueryProvider from './ReactQueryProvider';
 import { AppDataProvider } from './AppDataProvider';
+import { ToastProvider } from './ToastProvider';
+import { ClientCrashOverlay } from './ClientCrashOverlay';
 
 type Props = {
   children: React.ReactNode;
 };
 
 const AUTH_PREFIXES = ['/login', '/signup'];
+const CLOCK_PREFIXES = ['/clock'];
 
 // Routes that should render inside the app shell (sidebar + tabs).
 // Everything else (like the marketing landing page at "/") renders without shell.
@@ -21,6 +24,7 @@ const APP_SHELL_PREFIXES = [
   '/invoices',
   '/bills',
   '/customers',
+  '/workers',
   '/ai-advisor',
   '/reports',
   '/settings',
@@ -32,6 +36,7 @@ const APP_SHELL_PREFIXES = [
 export default function RootShell({ children }: Props) {
   const pathname = usePathname() || '/';
   const isAuth = AUTH_PREFIXES.some((p) => pathname.startsWith(p));
+  const isClock = CLOCK_PREFIXES.some((p) => pathname.startsWith(p));
   const hasShell = APP_SHELL_PREFIXES.some((p) => pathname.startsWith(p));
 
   if (isAuth) {
@@ -40,7 +45,22 @@ export default function RootShell({ children }: Props) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-50">
         <div className="max-w-6xl mx-auto px-4 py-10">{children}</div>
+        <ClientCrashOverlay />
       </div>
+    );
+  }
+
+  if (isClock) {
+    // Employee clock should not show the sidebar shell.
+    return (
+      <ReactQueryProvider>
+        <ToastProvider>
+          <div className="min-h-screen bg-slate-950 text-slate-50">
+            <div className="max-w-3xl mx-auto px-4 py-10">{children}</div>
+            <ClientCrashOverlay />
+          </div>
+        </ToastProvider>
+      </ReactQueryProvider>
     );
   }
 
@@ -51,11 +71,14 @@ export default function RootShell({ children }: Props) {
 
   return (
     <ReactQueryProvider>
-      <AppLayout>
-        <AppDataProvider>
-          <KeepAliveTabs>{children}</KeepAliveTabs>
-        </AppDataProvider>
-      </AppLayout>
+      <ToastProvider>
+        <AppLayout>
+          <AppDataProvider>
+            <KeepAliveTabs>{children}</KeepAliveTabs>
+          </AppDataProvider>
+        </AppLayout>
+        <ClientCrashOverlay />
+      </ToastProvider>
     </ReactQueryProvider>
   );
 }

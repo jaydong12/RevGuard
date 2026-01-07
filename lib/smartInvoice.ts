@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generateInvoiceNumber } from './invoiceNumber';
+import { upsertRevenueTransactionForInvoice } from './invoiceTransactionSync';
 
 export async function createSmartInvoiceForBooking(params: {
   supabase: SupabaseClient;
@@ -23,7 +25,12 @@ export async function createSmartInvoiceForBooking(params: {
     endAtIso,
   } = params;
 
-  const invNum = `INV-${Date.now()}`;
+  let invNum = `INV-${Date.now()}`;
+  try {
+    invNum = await generateInvoiceNumber({ supabase, businessId });
+  } catch {
+    // Fallback to timestamp-based if generation fails.
+  }
   const issueDate = new Date().toISOString().slice(0, 10);
   const dueDate = issueDate;
   const safePrice = Number.isFinite(Number(price)) ? Number(price) : 0;
@@ -42,7 +49,8 @@ export async function createSmartInvoiceForBooking(params: {
     client_name: clientName,
     issue_date: issueDate,
     due_date: dueDate,
-    status: 'sent',
+    // User request: "sent" invoices auto-mark as paid + create revenue transaction.
+    status: 'paid',
     subtotal: safePrice,
     tax: 0,
     total: safePrice,
@@ -59,6 +67,13 @@ export async function createSmartInvoiceForBooking(params: {
     .single();
 
   if (iErr || !invoice?.id) throw iErr ?? new Error('Failed to create invoice');
+
+  // Sync transaction (best-effort; may be skipped if schema doesn't support invoice_id yet).
+  try {
+    await upsertRevenueTransactionForInvoice({ supabase, businessId, invoice });
+  } catch {
+    // ignore
+  }
 
   // Create one line item
   const { error: itemErr } = await supabase.from('invoice_items').insert({

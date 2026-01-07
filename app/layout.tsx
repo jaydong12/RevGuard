@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import RootShell from "../components/RootShell";
+import { ClientCrashOverlay } from "../components/ClientCrashOverlay";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +22,9 @@ export const metadata: Metadata = {
   title: "RevGuard",
   description: "RevGuard — AI-powered accounting and cashflow clarity.",
   icons: {
-    icon: "/icon.png?v=2",
-    shortcut: "/favicon.ico?v=2",
-    apple: "/icon.png?v=2",
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
   },
 };
 
@@ -38,6 +39,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <RootShell>{children}</RootShell>
+        {/* Ensure crash overlay mounts for ALL routes, including /dashboard */}
+        <ClientCrashOverlay />
       </body>
     </html>
   );
