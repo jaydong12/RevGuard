@@ -18,6 +18,8 @@ import { supabase } from '../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../lib/getOrCreateBusinessId';
 import { generateInvoiceNumber } from '../lib/invoiceNumber';
 import { deleteInvoiceLinkedTransactions, upsertRevenueTransactionForInvoice } from '../lib/invoiceTransactionSync';
+import { BottomSheet } from './mobile/BottomSheet';
+import { MobileFab } from './mobile/MobileFab';
 
 type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue';
 
@@ -196,6 +198,7 @@ export default function InvoiceTab(_props: Props) {
   const [statusFilter, setStatusFilter] = useState<'all' | InvoiceStatus>('all');
   const [createdFrom, setCreatedFrom] = useState(''); // YYYY-MM-DD
   const [createdTo, setCreatedTo] = useState(''); // YYYY-MM-DD
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   // List expand/collapse + row expansion
   const [listExpanded, setListExpanded] = useState(false); // compact by default
@@ -245,6 +248,15 @@ export default function InvoiceTab(_props: Props) {
 
   function toggleRow(invId: any) {
     setExpandedRowId((prev: any) => (String(prev) === String(invId) ? null : invId));
+  }
+
+  function openNewInvoice() {
+    resetForm();
+    try {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch {
+      // ignore
+    }
   }
 
   async function loadInvoicesPage(params: {
@@ -1026,7 +1038,8 @@ export default function InvoiceTab(_props: Props) {
           </div>
 
           {/* Filters + pagination controls (active in both compact + expanded modes) */}
-          <div className="mt-3 grid gap-2 md:grid-cols-12">
+          {/* Desktop filters */}
+          <div className="hidden md:grid mt-3 gap-2 md:grid-cols-12">
             <div className="md:col-span-4">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
@@ -1080,6 +1093,30 @@ export default function InvoiceTab(_props: Props) {
                 <option value={50}>50 / page</option>
               </select>
             </div>
+          </div>
+
+          {/* Mobile filters trigger */}
+          <div className="md:hidden mt-3 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+            >
+              <Search className="h-4 w-4 text-slate-300" />
+              Filters
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setStatusFilter('all');
+                setCreatedFrom('');
+                setCreatedTo('');
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/40 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
+            >
+              Clear
+            </button>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -1273,6 +1310,92 @@ export default function InvoiceTab(_props: Props) {
           </div>
         )}
       </div>
+
+      {/* Mobile: slide-up filter sheet */}
+      <BottomSheet
+        open={mobileFiltersOpen}
+        onClose={() => setMobileFiltersOpen(false)}
+        title="Invoice filters"
+      >
+        <div className="space-y-4">
+          <div className="space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Search</div>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search invoice # or client…"
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 py-3 pl-9 pr-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Status</div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+            >
+              <option value="all">All statuses</option>
+              <option value="draft">Draft</option>
+              <option value="sent">Sent</option>
+              <option value="paid">Paid</option>
+              <option value="overdue">Overdue</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">From</div>
+              <input
+                type="date"
+                value={createdFrom}
+                onChange={(e) => setCreatedFrom(e.target.value)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">To</div>
+              <input
+                type="date"
+                value={createdTo}
+                onChange={(e) => setCreatedTo(e.target.value)}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Page size</div>
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize((Number(e.target.value) as any) ?? 20)}
+              className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-100 outline-none focus:border-slate-600"
+            >
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setSearch('');
+              setStatusFilter('all');
+              setCreatedFrom('');
+              setCreatedTo('');
+            }}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-slate-200 hover:bg-white/10"
+          >
+            Clear filters
+          </button>
+        </div>
+      </BottomSheet>
+
+      {/* Mobile primary action */}
+      <MobileFab onClick={openNewInvoice} label="New invoice" />
     </div>
   );
 }

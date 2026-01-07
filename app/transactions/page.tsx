@@ -13,6 +13,8 @@ import { useAppData } from '../../components/AppDataProvider';
 import { formatCurrency } from '../../lib/formatCurrency';
 import { useToast } from '../../components/ToastProvider';
 import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
+import { BottomSheet } from '../../components/mobile/BottomSheet';
+import { MobileFab } from '../../components/mobile/MobileFab';
 import {
   Calendar,
   FilterX,
@@ -113,6 +115,7 @@ export default function TransactionsPage() {
 
   // Simple client-side search by description.
   const [search, setSearch] = useState('');
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   // Date filter: store ISO internally (YYYY-MM-DD) for filtering, but allow typing MM/DD/YYYY.
   const [dateFromIso, setDateFromIso] = useState('');
@@ -840,8 +843,8 @@ export default function TransactionsPage() {
         {businessError && <div className="text-xs text-rose-300">{businessError}</div>}
         {businessLoading && <div className="text-xs text-slate-400">Loading business…</div>}
 
-        {/* Filter bar */}
-        <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+        {/* Filter bar (desktop) */}
+        <section className="hidden md:block rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
           <div className="flex flex-col gap-3">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -1004,6 +1007,37 @@ export default function TransactionsPage() {
           </div>
         </section>
 
+        {/* Mobile filters trigger (filters/search live in a bottom sheet) */}
+        <section className="md:hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Filters</div>
+              <div className="mt-1 text-sm text-slate-200 truncate">
+                {hasActiveFilters ? 'Filters active' : 'No filters'}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMobileFiltersOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                Filter
+              </button>
+              <button
+                type="button"
+                onClick={clearFilters}
+                disabled={!hasActiveFilters}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FilterX className="h-4 w-4" />
+                Clear
+              </button>
+            </div>
+          </div>
+        </section>
+
         {/* Table / list */}
         <section className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-3 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
           {loading ? (
@@ -1017,7 +1051,8 @@ export default function TransactionsPage() {
             </p>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="min-w-full text-left">
                   <thead className="bg-slate-950/60 text-slate-300 sticky top-0 z-10 backdrop-blur border-b border-white/10">
                     <tr>
@@ -1144,6 +1179,93 @@ export default function TransactionsPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Mobile card list */}
+              <div className="md:hidden space-y-3">
+                {paginatedTransactions.map((tx) => {
+                  const amt = getTxAmount(tx);
+                  const missingAmt = amt === null;
+                  const isNegative = !missingAmt && amt < 0;
+                  const amountClass = missingAmt
+                    ? 'text-slate-400'
+                    : isNegative
+                      ? 'text-rose-300'
+                      : 'text-emerald-300';
+                  const cat = String(tx.category ?? '').trim() || 'Uncategorized';
+                  const dateObj = new Date(tx.date);
+                  const dateLabel = Number.isNaN(dateObj.getTime())
+                    ? String(tx.date ?? '—')
+                    : dateObj.toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      });
+
+                  return (
+                    <div
+                      key={tx.id}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-100 truncate">
+                            {tx.description || '—'}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                            <span className="tabular-nums">{dateLabel}</span>
+                            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-200">
+                              {cat}
+                            </span>
+                            <span>{isNegative ? 'Expense' : 'Income'}</span>
+                          </div>
+                        </div>
+                        <div className={`text-sm font-semibold tabular-nums ${amountClass}`}>
+                          {missingAmt ? (
+                            '—'
+                          ) : (
+                            <>
+                              {isNegative ? '-' : '+'}
+                              {formatCurrency(Math.abs(amt))}
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-end gap-2">
+                        {TAX_FEATURES_ENABLED ? (
+                          <button
+                            type="button"
+                            onClick={() => openTaxModal(tx)}
+                            className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                            aria-label="Fix tax tag"
+                            title="Fix tax tag"
+                          >
+                            <Tag className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => openEditForm(tx)}
+                          className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                          aria-label="Edit transaction"
+                          title="Edit"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleDelete(tx)}
+                          className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-rose-200 hover:bg-white/10"
+                          aria-label="Delete transaction"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Simple client-side pagination controls */}
@@ -1408,6 +1530,168 @@ export default function TransactionsPage() {
             </div>
           </div>
         )}
+
+        {/* Mobile filter sheet */}
+        <BottomSheet
+          open={mobileFiltersOpen}
+          onClose={() => setMobileFiltersOpen(false)}
+          title="Filters"
+        >
+          <div className="space-y-4">
+            {/* Search */}
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Search</div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search description or category…"
+                  className="h-11 w-full rounded-xl border border-white/10 bg-white/5 px-9 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+            </div>
+
+            {/* Date range */}
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Date range</div>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="From (MM/DD/YYYY)"
+                    value={dateFromDisplay}
+                    onChange={(e) => {
+                      const next = maskUsDate(e.target.value);
+                      setDateFromDisplay(next);
+                      const iso = displayToIso(next);
+                      setDateFromIso(iso === null ? '' : iso);
+                      setCurrentPage(1);
+                    }}
+                    className="h-11 w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 tabular-nums"
+                  />
+                </div>
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="To (MM/DD/YYYY)"
+                    value={dateToDisplay}
+                    onChange={(e) => {
+                      const next = maskUsDate(e.target.value);
+                      setDateToDisplay(next);
+                      const iso = displayToIso(next);
+                      setDateToIso(iso === null ? '' : iso);
+                      setCurrentPage(1);
+                    }}
+                    className="h-11 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 tabular-nums"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Income/Expense */}
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Type</div>
+              <div className="h-11 grid grid-cols-3 rounded-xl border border-white/10 bg-white/5 p-1 text-[11px]">
+                {(['all', 'income', 'expenses'] as FlowFilter[]).map((f) => {
+                  const label = f === 'all' ? 'All' : f === 'income' ? 'Income' : 'Expense';
+                  const active = flowFilter === f;
+                  return (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => {
+                        setFlowFilter(f);
+                        setCurrentPage(1);
+                      }}
+                      className={`rounded-lg font-semibold transition ${
+                        active ? 'bg-white/10 text-slate-50' : 'text-slate-300 hover:bg-white/5'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Category */}
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Category</div>
+              <select
+                style={{ colorScheme: 'dark' }}
+                value={categoryFilter}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="h-11 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 hover:bg-slate-950/80 hover:border-white/20"
+              >
+                <option value="" className="bg-slate-950 text-slate-100">
+                  All categories
+                </option>
+                {categoryOptions.map((c) => (
+                  <option key={c} value={c} className="bg-slate-950 text-slate-100">
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Amount range */}
+            <div className="space-y-1">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Amount</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Min"
+                  value={amountMin}
+                  onChange={(e) => {
+                    setAmountMin(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="h-11 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Max"
+                  value={amountMax}
+                  onChange={(e) => {
+                    setAmountMax(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  className="h-11 flex-1 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+            </div>
+
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={clearFilters}
+                disabled={!hasActiveFilters}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-slate-200 hover:bg-white/10 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FilterX className="h-4 w-4" />
+                Clear filters
+              </button>
+            </div>
+          </div>
+        </BottomSheet>
+
+        {/* Mobile primary action */}
+        <MobileFab onClick={openCreateForm} label="New transaction" />
 
         {/* Tax tagging modal (plain-English) */}
         {TAX_FEATURES_ENABLED && taxModalOpen && taxTx && (

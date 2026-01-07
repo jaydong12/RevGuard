@@ -11,6 +11,12 @@ export type HealthPillar = {
   score: number; // 0–100
   state: HealthState;
   whatThisMeans?: string;
+  tooltip?: {
+    measures: string;
+    why: string;
+    changed: string;
+    action: string;
+  };
   help: {
     what: string;
     calc: string[];
@@ -88,6 +94,32 @@ function pctChange(current: number, prev: number): number | null {
   const baselineMin = Math.max(50, Math.abs(c) * 0.05); // $50 or 5% of current net
   if (Math.abs(p) < baselineMin) return null;
   return (c - p) / Math.abs(p);
+}
+
+function stripWhatThisMeans(s: string): string {
+  return String(s ?? '').replace(/^what this means:\s*/i, '').trim();
+}
+
+function fmtMoneyShort(nRaw: number): string {
+  const n = Number(nRaw) || 0;
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    const v = (abs / 1_000_000).toFixed(1).replace(/\.0$/, '');
+    return `${sign}$${v}M`;
+  }
+  if (abs >= 1_000) {
+    const v = (abs / 1_000).toFixed(1).replace(/\.0$/, '');
+    return `${sign}$${v}k`;
+  }
+  return `${sign}$${Math.round(abs).toLocaleString('en-US')}`;
+}
+
+function fmtPct(p: number | null): string {
+  if (p === null || !Number.isFinite(p)) return 'not enough history yet';
+  const pct = Math.round(p * 100);
+  const sign = pct > 0 ? '+' : pct < 0 ? '-' : '';
+  return `${sign}${Math.abs(pct)}%`;
 }
 
 function sumByRange(txs: Tx[], start: Date, endInclusive: Date) {
@@ -186,6 +218,26 @@ export function computeHealthSystem(params: {
     return 'You’ve been spending more than you’re bringing in lately — watch cash closely.';
   })();
 
+  const cashChanged = (() => {
+    const pct = pct7d;
+    if (pct === null) {
+      return 'Not enough history to compare the last 7 days to the week before.';
+    }
+    const last7 = cur7.net;
+    const dir = last7 >= 0 ? 'ended up up' : 'ended up down';
+    return `Last 7 days: you ${dir} ${fmtMoneyShort(last7)}. That’s ${fmtPct(pct)} vs the 7 days before.`;
+  })();
+
+  const cashAction = (() => {
+    if (cur30.income === 0 && cur30.expenses === 0) {
+      return 'Import or add a few transactions so the score reflects real activity.';
+    }
+    if (avgDailyNet30 < 0) {
+      return 'Pick your biggest weekly spend and reduce it (or add one new sale) until you’re at least break-even.';
+    }
+    return 'Keep it steady: review your biggest expense category once a week so it doesn’t creep up.';
+  })();
+
   // ---------- Pillar: Expense Control ----------
   const expenseRatio = cur30.income > 0 ? cur30.expenses / cur30.income : null;
   // lower expense ratio is better; 0.3 => ~100, 0.8 => ~0
@@ -198,6 +250,28 @@ export function computeHealthSystem(params: {
     prev7.expenses > 0 ? Math.abs(cur7.expenses - prev7.expenses) / prev7.expenses : 0;
   const volPenalty = clamp100(Math.min(25, expVol * 30));
   const expenseControlScore = clamp100(ratioScore - volPenalty + 10);
+
+  const expenseChanged = (() => {
+    const pct = prev7.expenses > 0 ? (cur7.expenses - prev7.expenses) / prev7.expenses : null;
+    if (pct === null || !Number.isFinite(pct)) {
+      return 'Not enough history to compare spending this week to last week.';
+    }
+    const dir = cur7.expenses >= prev7.expenses ? 'up' : 'down';
+    return `Spending in the last 7 days is ${dir} ${fmtPct(pct)} vs the week before.`;
+  })();
+
+  const expenseAction = (() => {
+    if (cur30.income === 0 && cur30.expenses === 0) {
+      return 'Add transactions so we can see your spending pattern.';
+    }
+    if (expVol > 0.55) {
+      return 'Find the category causing the swings and set a simple weekly cap for it.';
+    }
+    if (expenseRatio !== null && expenseRatio > 0.75) {
+      return 'Choose one expense to cut, pause, or delay this month to free up breathing room.';
+    }
+    return 'Keep an eye on spikes: if one week jumps, check what caused it and decide if it was worth it.';
+  })();
 
   const weights: Record<HealthPillarKey, number> = {
     cashFlow: params.weights?.cashFlow ?? 0.4,
@@ -220,6 +294,12 @@ export function computeHealthSystem(params: {
       score: cashScore,
       state: stateFromScore(cashScore),
       whatThisMeans: `What this means: ${cashWhatThisMeans}`,
+      tooltip: {
+        measures: 'Whether money coming in has been keeping up with money going out lately.',
+        why: cashWhatThisMeans,
+        changed: cashChanged,
+        action: cashAction,
+      },
       help: {
         what: 'Tells you if money in is keeping up with money out lately.',
         calc: [
@@ -247,6 +327,44 @@ export function computeHealthSystem(params: {
             : margin30 < 0.12
               ? 'What this means: Profit is thin—small expense spikes can wipe out gains.'
               : 'What this means: Profit looks healthy—keep expenses from creeping up as you grow.',
+      tooltip: (() => {
+        const why = stripWhatThisMeans(
+          margin30 === null
+            ? 'What this means: Add more income data to get a reliable profit read.'
+            : margin30 < 0
+              ? 'What this means: You’re losing money lately—either costs are too high or income is too low.'
+              : margin30 < 0.12
+                ? 'What this means: Profit is thin—small expense spikes can wipe out gains.'
+                : 'What this means: Profit looks healthy—keep expenses from creeping up as you grow.'
+        );
+
+        const prevMargin30 = prev30.income > 0 ? prev30.net / prev30.income : null;
+        const changed =
+          margin30 === null || prevMargin30 === null
+            ? 'Not enough history to compare profit now to the previous 30 days.'
+            : (() => {
+                const a = Math.round(prevMargin30 * 100);
+                const b = Math.round(margin30 * 100);
+                const dir = b > a ? 'improved' : b < a ? 'dropped' : 'stayed about the same';
+                return `Your profit rate ${dir}: ${a}% → ${b}% compared to the previous 30 days.`;
+              })();
+
+        const action =
+          margin30 === null
+            ? 'Import or add transactions so we can measure profit reliably.'
+            : margin30 < 0
+              ? 'Find your biggest cost this month and cut it or replace it with a cheaper option.'
+              : margin30 < 0.12
+                ? 'Raise prices a bit or cut one recurring cost so small spikes don’t wipe out your wins.'
+                : 'Keep costs from creeping up: review the top expense category weekly.';
+
+        return {
+          measures: 'How much you keep after expenses lately (last 30 days).',
+          why,
+          changed,
+          action,
+        };
+      })(),
       help: {
         what: 'Tells you if you’re keeping profit after expenses lately.',
         calc: [
@@ -272,6 +390,18 @@ export function computeHealthSystem(params: {
           : expVol > 0.35
             ? 'What this means: Spending is a bit uneven—watch for categories drifting up.'
             : 'What this means: Spending looks steady—fewer surprises week to week.',
+      tooltip: {
+        measures: 'How steady your spending is, and whether it’s growing faster than your income.',
+        why: stripWhatThisMeans(
+          expVol > 0.55
+            ? 'What this means: Spending is jumpy—big week-to-week swings make it harder to plan.'
+            : expVol > 0.35
+              ? 'What this means: Spending is a bit uneven—watch for categories drifting up.'
+              : 'What this means: Spending looks steady—fewer surprises week to week.'
+        ),
+        changed: expenseChanged,
+        action: expenseAction,
+      },
       help: {
         what: 'Tells you if spending is staying under control lately.',
         calc: [

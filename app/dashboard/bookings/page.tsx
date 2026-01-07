@@ -19,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { MobileFab } from '../../../components/mobile/MobileFab';
 
 function pad2(n: number) {
   return String(Math.floor(Math.abs(n))).padStart(2, '0');
@@ -861,7 +862,8 @@ export default function BookingsPage() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
               <table className="min-w-full text-left">
                 <thead className="bg-slate-950/40 text-slate-300 border-b border-white/10">
                   <tr>
@@ -937,6 +939,79 @@ export default function BookingsPage() {
                 </tbody>
               </table>
             </div>
+
+              {/* Mobile card list */}
+              <div className="md:hidden space-y-3">
+                {listRows.map((b) => {
+                  const when = safeWhenLabel(b?.start_at);
+                  const cust = String(b.customer_name ?? '').trim() || '—';
+                  const svc = b.service_id ? serviceById.get(String(b.service_id))?.name : '—';
+                  const inv = invoiceByBookingId.get(String(b.id));
+                  const paid = computeBookingPaid(b);
+                  return (
+                    <div
+                      key={String(b.id)}
+                      className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-100 truncate">{cust}</div>
+                          <div className="mt-1 text-[11px] text-slate-400">{when}</div>
+                          <div className="mt-1 text-[11px] text-slate-400 truncate">
+                            Service: <span className="text-slate-200">{svc}</span>
+                          </div>
+                          <div className="mt-2">
+                            {inv ? (
+                              <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200">
+                                {inv.invoice_number} • {inv.status}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-500">No invoice</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={paidBusyId === String(b.id)}
+                          onClick={async () => {
+                            if (!b?.id) return;
+                            const nextPaid = !paid;
+                            // eslint-disable-next-line no-console
+                            console.log('BOOKING_LIST_TOGGLE_PAID', { bookingId: String(b.id), nextPaid });
+                            try {
+                              setPaidBusyId(String(b.id));
+                              await toggleBookingPaid(b, nextPaid);
+                            } catch (e: any) {
+                              pushToast({ tone: 'error', message: String(e?.message ?? 'Could not update booking.') });
+                            } finally {
+                              setPaidBusyId(null);
+                            }
+                          }}
+                          className={`shrink-0 inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${
+                            paid
+                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100 hover:bg-emerald-500/15'
+                              : 'border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/15'
+                          } ${paidBusyId === String(b.id) ? 'opacity-60' : ''}`}
+                          title={paid ? 'Tap to mark unpaid' : 'Tap to mark paid'}
+                        >
+                          {paidBusyId === String(b.id) ? 'Saving…' : paid ? 'Paid' : 'Unpaid'}
+                        </button>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openBooking(b)}
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                        >
+                          Open
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )
         ) : tab === 'services' ? (
@@ -1170,6 +1245,11 @@ export default function BookingsPage() {
           </div>
         </div>
       )}
+
+      {/* Mobile primary action */}
+      {!createOpen && !drawerOpen && !dayPanelOpen ? (
+        <MobileFab onClick={() => setCreateOpen(true)} label="New booking" />
+      ) : null}
     </main>
   );
 }

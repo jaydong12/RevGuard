@@ -38,22 +38,36 @@ function CashOverviewInner({ businessId }: { businessId: string }) {
     async function load() {
       setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from('transactions')
-          .select('id,date,amount,category,description')
-          .eq('business_id', businessId)
-          .order('date', { ascending: true });
+        // Supabase/PostgREST often defaults to a 1k row cap. Paginate so the chart can
+        // navigate across ALL available years (not just the newest ~1000 rows).
+        const pageSize = 1000;
+        let from = 0;
+        const all: any[] = [];
 
-        if (cancelled) return;
+        while (true) {
+          const { data, error } = await supabase
+            .from('transactions')
+            .select('id,date,amount,category,description')
+            .eq('business_id', businessId)
+            .order('date', { ascending: true })
+            .range(from, from + pageSize - 1);
 
-        const safe = Array.isArray(data) ? data : [];
-        if (error) {
-          setTxs([]);
-          setLoading(false);
-          return;
+          if (cancelled) return;
+
+          if (error) {
+            setTxs([]);
+            setLoading(false);
+            return;
+          }
+
+          const batch = Array.isArray(data) ? data : [];
+          all.push(...batch);
+
+          if (batch.length < pageSize) break;
+          from += pageSize;
         }
 
-        const mapped = safe.map((r: any) => ({
+        const mapped = all.map((r: any) => ({
           id: Number(r?.id) || 0,
           date: typeof r?.date === 'string' ? String(r.date) : '',
           amount: Number(r?.amount) || 0,

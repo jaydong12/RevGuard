@@ -199,6 +199,17 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
   const data = mode === 'year' ? yearlyData : monthlyData;
   const safeData = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
+  // Symmetric Y-axis around 0 so negative months/years never clip.
+  const yDomain = useMemo(() => {
+    const rows = Array.isArray(safeData) ? safeData : [];
+    const absMax = rows.reduce((m, r: any) => {
+      const v = Number(r?.net ?? 0) || 0;
+      return Math.max(m, Math.abs(v));
+    }, 0);
+    const padded = absMax > 0 ? absMax * 1.12 : 1;
+    return [-padded, padded] as [number, number];
+  }, [safeData]);
+
   const txCountInView = useMemo(() => {
     if (mode === 'year') return normalizedTxs.length;
     if (!activeYear) return 0;
@@ -377,6 +388,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
               axisLine={{ stroke: '#475569', strokeWidth: 1 }}
               tickLine={{ stroke: '#475569', strokeWidth: 1 }}
               tickFormatter={(v: number) => fmt(v)}
+              domain={yDomain as any}
             />
             <Tooltip
               content={<TooltipCard />}
@@ -457,7 +469,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
         {!loading && !hasData ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <div className="rounded-lg border border-slate-800 bg-slate-950/80 px-3 py-2 text-[11px] text-slate-200">
-              No data yet.
+              {safeYear ? `No data in ${safeYear}.` : 'No data yet.'}
             </div>
           </div>
         ) : null}
@@ -465,7 +477,9 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
 
       {!loading && !hasData ? (
         <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300">
-          No data yet. Import transactions to see your cash overview.
+          {safeYear
+            ? `No transactions found for ${safeYear}. Import transactions to see this year.`
+            : 'No data yet. Import transactions to see your cash overview.'}
         </div>
       ) : null}
     </div>

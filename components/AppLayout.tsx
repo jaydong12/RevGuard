@@ -255,6 +255,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [subscriptionActive, setSubscriptionActive] = useState<boolean>(true);
   const [subscriptionChecked, setSubscriptionChecked] = useState<boolean>(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   // IMPORTANT: Avoid reading window/localStorage during render to prevent hydration mismatches.
   // Use a deterministic default for the first render, then hydrate from localStorage in an effect.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -308,6 +309,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const navItems = memberRole === 'employee'
     ? ([{ label: 'Clock', href: '/clock', icon: 'workers' }] as NavItem[])
     : NAV_ITEMS;
+
+  const bottomNavItems: Array<{ label: string; href: string; icon: NavItem['icon'] }> = [
+    { label: 'Home', href: '/dashboard', icon: 'dashboard' },
+    // Mobile label "Alerts" maps to existing AI Advisor route (no new routes).
+    { label: 'Alerts', href: '/ai-advisor', icon: 'ai' },
+    { label: 'Transactions', href: '/transactions', icon: 'transactions' },
+    { label: 'Invoices', href: '/invoices', icon: 'invoices' },
+  ];
+
+  const moreNavItems = navItems.filter(
+    (it) =>
+      !bottomNavItems.some((b) => b.href === it.href) &&
+      it.href !== '/pricing' // keep pricing accessible via sidebar/desktop; keep mobile More focused
+  );
 
   async function getSubscriptionActiveForOwner(userId: string): Promise<boolean> {
     if (!supabase) return false;
@@ -636,55 +651,56 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </Link>
             <button
               type="button"
-              onClick={() => setMobileNavOpen(true)}
+              onClick={() => setMobileMoreOpen(true)}
               className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] font-semibold text-slate-200 hover:bg-slate-900/70"
-              aria-label="Open navigation"
+              aria-label="Open more menu"
             >
-              Menu
+              More
             </button>
           </div>
         </div>
 
+        {/* Mobile “More” sheet */}
         <div
-          className={`no-print md:hidden fixed inset-0 z-[90] transition-opacity duration-200 ${
-            mobileNavOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+          className={`no-print md:hidden fixed inset-0 z-[95] transition-opacity duration-200 ${
+            mobileMoreOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
           }`}
         >
           <button
             type="button"
-            aria-label="Close navigation overlay"
+            aria-label="Close more menu"
             className="absolute inset-0 bg-black/60"
-            onClick={() => setMobileNavOpen(false)}
+            onClick={() => setMobileMoreOpen(false)}
           />
 
           <div
-            className={`absolute inset-y-0 left-0 w-[82%] max-w-xs bg-slate-950 border-r border-slate-800 p-4 transition-transform duration-200 ${
-              mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
+            className={`absolute inset-x-0 bottom-0 rounded-t-2xl bg-slate-950 border-t border-slate-800 p-4 pb-6 transition-transform duration-200 ${
+              mobileMoreOpen ? 'translate-y-0' : 'translate-y-full'
             }`}
           >
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-100">Navigation</div>
+              <div className="text-sm font-semibold text-slate-100">More</div>
               <button
                 type="button"
-                onClick={() => setMobileNavOpen(false)}
+                onClick={() => setMobileMoreOpen(false)}
                 className="rounded-lg border border-slate-800 bg-slate-950/30 px-2 py-1 text-xs text-slate-200"
               >
                 Close
               </button>
             </div>
 
-            <nav className="mt-4 space-y-1 text-sm max-h-[70vh] overflow-y-auto pr-1">
-              {navItems.map((item) => {
+            <nav className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              {moreNavItems.map((item) => {
                 const active = isActive(pathname, item.href);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    onClick={() => setMobileNavOpen(false)}
-                    className={`flex items-center gap-2 rounded-xl px-3 py-2 transition-colors ${
+                    onClick={() => setMobileMoreOpen(false)}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-3 transition-colors ${
                       active
                         ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40'
-                        : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
+                        : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-white/10 bg-white/5'
                     }`}
                   >
                     <NavIcon name={item.icon} />
@@ -692,15 +708,65 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   </Link>
                 );
               })}
+              {/* Keep Pricing reachable on mobile via More */}
+              <Link
+                href="/pricing"
+                onClick={() => setMobileMoreOpen(false)}
+                className="flex items-center gap-2 rounded-xl px-3 py-3 transition-colors text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-white/10 bg-white/5"
+              >
+                <NavIcon name="pricing" />
+                <span className="truncate">Pricing</span>
+              </Link>
             </nav>
           </div>
         </div>
 
         <div
           key={`${sessionUserId ?? 'anon'}:${appResetKey}`}
-          className="max-w-6xl mx-auto px-4 py-8 md:py-10"
+          className="max-w-6xl mx-auto px-4 py-8 pb-24 md:pb-10 md:py-10"
         >
           {children}
+        </div>
+
+        {/* Mobile bottom nav */}
+        <div className="no-print md:hidden fixed inset-x-0 bottom-0 z-[80] border-t border-slate-800/80 bg-slate-950/95 backdrop-blur">
+          <div className="mx-auto max-w-6xl px-3 py-2">
+            <div className="grid grid-cols-5 gap-1">
+              {bottomNavItems.map((item) => {
+                const active = isActive(pathname, item.href);
+                return (
+                  <button
+                    key={item.href}
+                    type="button"
+                    onClick={() => router.push(item.href)}
+                    className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-[10px] transition ${
+                      active
+                        ? 'text-emerald-200 bg-emerald-500/10 border border-emerald-500/30'
+                        : 'text-slate-300 hover:text-slate-50 hover:bg-white/5 border border-transparent'
+                    }`}
+                  >
+                    <span className="text-slate-200">{<NavIcon name={item.icon} />}</span>
+                    <span className="leading-none">{item.label}</span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setMobileMoreOpen(true)}
+                className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-[10px] transition ${
+                  mobileMoreOpen
+                    ? 'text-emerald-200 bg-emerald-500/10 border border-emerald-500/30'
+                    : 'text-slate-300 hover:text-slate-50 hover:bg-white/5 border border-transparent'
+                }`}
+                aria-label="Open more"
+              >
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
+                  <path d="M6 12h.01M12 12h.01M18 12h.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                </svg>
+                <span className="leading-none">More</span>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
