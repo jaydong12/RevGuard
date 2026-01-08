@@ -42,7 +42,8 @@ type NavItem = {
     | 'notifications'
     | 'reports'
     | 'pricing'
-    | 'settings';
+    | 'settings'
+    | 'logout';
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -58,9 +59,11 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Notifications', href: '/notifications', icon: 'notifications', feature: 'notifications' },
   { label: 'Settings', href: '/settings', icon: 'settings', feature: 'settings' },
   { label: 'Pricing', href: '/pricing', icon: 'pricing' },
+  { label: 'Logout', href: '__logout__', icon: 'logout' },
 ];
 
 function isActive(pathname: string, href: string) {
+  if (href === '__logout__') return false;
   if (href === '/dashboard') return pathname === '/dashboard';
   return pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -250,6 +253,32 @@ function NavIcon({ name }: { name: NavItem['icon'] }) {
       </svg>
     );
   }
+  if (name === 'logout') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M10 7V6a2 2 0 0 1 2-2h7v16h-7a2 2 0 0 1-2-2v-1"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M4 12h10"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <path
+          d="M7 9l-3 3 3 3"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
   // settings
   return (
     <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
@@ -284,6 +313,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [microGuideEnabled, setMicroGuideEnabled] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   // IMPORTANT: Avoid reading window/localStorage during render to prevent hydration mismatches.
   // Use a deterministic default for the first render, then hydrate from localStorage in an effect.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -476,6 +506,30 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
       return next;
     });
+  }
+
+  async function onLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      setMobileNavOpen(false);
+      setMobileMoreOpen(false);
+      clearAppClientCache();
+      setAuthCookie(null);
+      try {
+        if (supabase) {
+          await supabase.auth.signOut();
+        }
+      } catch {
+        // ignore (we still want to route away)
+      }
+      setSessionUserId(null);
+      setMemberRole(null);
+      setAppResetKey((k) => k + 1);
+      router.replace('/login');
+    } finally {
+      setLoggingOut(false);
+    }
   }
 
   useEffect(() => {
@@ -729,6 +783,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               const active = isActive(pathname, item.href);
               const lock = isLocked(item);
               const tour = tourKeyForHref(item.href);
+              const isLogout = item.href === '__logout__';
+              if (isLogout) {
+                return (
+                  <button
+                    key={item.href}
+                    type="button"
+                    title={sidebarCollapsed ? item.label : undefined}
+                    onClick={onLogout}
+                    disabled={loggingOut}
+                    className={`flex items-center rounded-xl py-2 transition-colors ${
+                      loggingOut
+                        ? 'text-slate-500 bg-transparent border border-transparent opacity-80 cursor-not-allowed'
+                        : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
+                    } ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
+                  >
+                    <NavIcon name={item.icon} />
+                    <span className={sidebarCollapsed ? 'hidden' : 'truncate'}>
+                      {loggingOut ? 'Logging out…' : item.label}
+                    </span>
+                  </button>
+                );
+              }
               return (
                 <Link
                   key={item.href}
