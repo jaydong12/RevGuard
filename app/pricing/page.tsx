@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAppData } from '../../components/AppDataProvider';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../../utils/supabaseClient';
-import { PLAN_FEATURES, type PlanId } from '../../lib/plans';
+import { PLAN_FEATURES, PLAN_META, type PlanId } from '../../lib/plans';
 import { StartPlanButton } from '../../components/StartPlanButton';
 
 export default function PricingPage() {
@@ -20,7 +20,12 @@ export default function PricingPage() {
   const plansQ = useQuery({
     queryKey: ['subscription_plans_public_v1'],
     queryFn: async () => {
-      const res = await fetch('/api/subscription-plans', { cache: 'no-store' });
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token ?? null;
+      const res = await fetch('/api/subscription-plans', {
+        cache: 'no-store',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       const body = (await res.json().catch(() => null)) as any;
       if (!res.ok) throw new Error(body?.error ?? 'Failed to load plans.');
       const plans = (body?.plans ?? []) as any[];
@@ -32,6 +37,24 @@ export default function PricingPage() {
       }>;
     },
   });
+
+  const fallbackPlans = React.useMemo(
+    () =>
+      (Object.values(PLAN_META) ?? []).map((p) => ({
+        id: p.id,
+        label: p.label,
+        priceMonthly: p.priceMonthly,
+        promoFirstMonth: p.promoFirstMonth,
+      })),
+    []
+  );
+
+  const displayedPlans = (plansQ.data && plansQ.data.length > 0 ? plansQ.data : fallbackPlans) as Array<{
+    id: string;
+    label: string;
+    priceMonthly: number | null;
+    promoFirstMonth: number | null;
+  }>;
 
   const [currentPlan, setCurrentPlan] = React.useState<PlanId>('none');
 
@@ -104,7 +127,7 @@ export default function PricingPage() {
 
         <section className="w-full max-w-[980px] mx-auto">
           <div className="grid md:grid-cols-3 gap-4 md:gap-6 items-stretch">
-            {(plansQ.data ?? [])
+            {displayedPlans
               .slice()
               .sort((a, b) => {
                 const order = (id: string) => (id === 'starter' ? 0 : id === 'growth' ? 1 : id === 'pro' ? 2 : 99);
@@ -191,6 +214,10 @@ export default function PricingPage() {
             <div className="mt-4 text-xs text-slate-400">Loading plans…</div>
           ) : plansQ.error ? (
             <div className="mt-4 text-xs text-rose-300">{String((plansQ.error as any)?.message ?? 'Could not load plans.')}</div>
+          ) : !plansQ.data?.length ? (
+            <div className="mt-4 text-xs text-slate-400">
+              Pricing is temporarily unavailable; showing standard pricing.
+            </div>
           ) : null}
         </section>
     </main>

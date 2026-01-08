@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getSupabaseAdmin } from '../../../../../lib/supabaseAdmin';
+import { getSupabaseAdmin } from '../../../../../lib/server/supabaseAdmin';
 import { generateInvoiceNumber } from '../../../../../lib/invoiceNumber';
 import { upsertRevenueTransactionForInvoice } from '../../../../../lib/invoiceTransactionSync';
 
