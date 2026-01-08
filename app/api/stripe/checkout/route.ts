@@ -85,7 +85,6 @@ export async function POST(request: Request) {
       ...(planRow.stripe_coupon_id ? { discounts: [{ coupon: String(planRow.stripe_coupon_id) }] } : {}),
       success_url: `${siteUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${siteUrl}/billing/cancel`,
-      allow_promotion_codes: !planRow.stripe_coupon_id,
       metadata: { planId, userId: String(user.id) },
       subscription_data: {
         metadata: { planId, userId: String(user.id) },
