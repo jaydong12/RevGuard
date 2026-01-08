@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -20,6 +20,27 @@ type Variant = 'green' | 'red' | 'blue';
 function safeNumber(x: unknown): number {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
+}
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    try {
+      const mq = window.matchMedia('(max-width: 767px)');
+      const apply = () => setIsMobile(Boolean(mq.matches));
+      apply();
+      if (typeof mq.addEventListener === 'function') {
+        mq.addEventListener('change', apply);
+        return () => mq.removeEventListener('change', apply);
+      }
+      mq.addListener(apply);
+      return () => mq.removeListener(apply);
+    } catch {
+      setIsMobile(false);
+      return;
+    }
+  }, []);
+  return isMobile;
 }
 
 function GlassTooltip({
@@ -72,6 +93,31 @@ export function PremiumBarChart({
   emptyMessage?: string;
 }) {
   const [activeBarIndex, setActiveBarIndex] = useState<number | null>(null);
+  const isMobile = useIsMobile();
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerReady, setContainerReady] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    if (typeof (globalThis as any).ResizeObserver === 'undefined') {
+      // Best-effort: assume ready on old browsers.
+      setContainerReady(true);
+      return;
+    }
+
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setContainerReady(r.width > 0 && r.height > 0);
+    };
+
+    update();
+
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const ids = useMemo(() => {
     const r = Math.random().toString(16).slice(2);
@@ -89,6 +135,13 @@ export function PremiumBarChart({
   }, [data]);
 
   const hasData = normalized.length > 0;
+
+  // Mobile-only spacing tweaks (keep desktop identical).
+  const effectiveMinHeight = isMobile ? Math.max(minHeight, 360) : minHeight;
+  const barCategoryGap = isMobile ? 20 : '22%';
+  const barSize = isMobile ? 20 : 26;
+  const effectiveXInterval = isMobile ? 1 : xInterval;
+  const yTickCount = isMobile ? 5 : undefined;
 
   const colors = useMemo(() => {
     if (variant === 'green') {
@@ -119,12 +172,17 @@ export function PremiumBarChart({
   }, [variant]);
 
   return (
-    <div className="relative h-full w-full" style={{ minHeight }}>
-      <ResponsiveContainer width="100%" height="100%" minHeight={minHeight}>
+    <div
+      ref={containerRef}
+      className="relative w-full min-h-[260px]"
+      style={{ minHeight: effectiveMinHeight }}
+    >
+      {containerReady ? (
+        <ResponsiveContainer width="100%" height="100%" minHeight={effectiveMinHeight}>
         <BarChart
           data={normalized}
           margin={{ top: 14, right: 10, bottom: 14, left: 10 }}
-          barCategoryGap="22%"
+          barCategoryGap={barCategoryGap as any}
           onMouseMove={(state: any) => {
             const idx = typeof state?.activeTooltipIndex === 'number' ? state.activeTooltipIndex : null;
             setActiveBarIndex(idx);
@@ -153,7 +211,7 @@ export function PremiumBarChart({
             tick={{ fill: '#94a3b8', fontSize: 10 }}
             axisLine={{ stroke: '#334155', strokeWidth: 1 }}
             tickLine={{ stroke: '#334155', strokeWidth: 1 }}
-            interval={xInterval as any}
+            interval={effectiveXInterval as any}
             angle={xAngle}
             textAnchor={xAngle ? 'end' : 'middle'}
             height={xHeight}
@@ -163,6 +221,7 @@ export function PremiumBarChart({
             axisLine={{ stroke: '#334155', strokeWidth: 1 }}
             tickLine={{ stroke: '#334155', strokeWidth: 1 }}
             tickFormatter={formatYAxisTick ? ((v: any) => formatYAxisTick(safeNumber(v))) : undefined}
+            tickCount={yTickCount as any}
           />
           <Tooltip
             content={
@@ -180,7 +239,7 @@ export function PremiumBarChart({
             isAnimationActive={true}
             animationDuration={520}
             animationEasing="ease-out"
-            barSize={26}
+            barSize={barSize}
           >
             {normalized.map((_, idx) => {
               const isActive = activeBarIndex === idx;
@@ -223,7 +282,8 @@ export function PremiumBarChart({
             />
           </Bar>
         </BarChart>
-      </ResponsiveContainer>
+        </ResponsiveContainer>
+      ) : null}
 
       {loading ? (
         <div className="absolute inset-0 rounded-xl border border-slate-800 bg-slate-950/60 backdrop-blur-sm">

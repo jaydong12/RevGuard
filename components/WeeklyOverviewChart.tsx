@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -108,6 +108,30 @@ export default function WeeklyOverviewChart({
   showNetLine?: boolean;
   title?: string;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerReady, setContainerReady] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    if (typeof (globalThis as any).ResizeObserver === 'undefined') {
+      setContainerReady(true);
+      return;
+    }
+
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setContainerReady(r.width > 0 && r.height > 0);
+    };
+
+    update();
+
+    const ro = new ResizeObserver(() => update());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const data = useMemo<Row[]>(() => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -160,9 +184,10 @@ export default function WeeklyOverviewChart({
         </div>
       </div>
 
-      <div className="relative h-[260px] min-h-[260px] w-full">
-        <ResponsiveContainer width="100%" height="100%" minHeight={260}>
-          <ComposedChart data={data} margin={{ top: 14, right: 18, bottom: 10, left: 8 }}>
+      <div ref={containerRef} className="relative w-full min-h-[260px] h-[260px]">
+        {containerReady ? (
+          <ResponsiveContainer width="100%" height="100%" minHeight={260}>
+            <ComposedChart data={data} margin={{ top: 14, right: 18, bottom: 10, left: 8 }}>
             <defs>
               <linearGradient id="rg_week_income" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#34D399" stopOpacity="0.95" />
@@ -222,8 +247,9 @@ export default function WeeklyOverviewChart({
                 activeDot={{ r: 4, fill: '#60A5FA', stroke: '#0B1220', strokeWidth: 2 }}
               />
             )}
-          </ComposedChart>
-        </ResponsiveContainer>
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : null}
 
         {!hasAny && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">

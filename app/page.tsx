@@ -1,35 +1,127 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import {
-  ArrowRight,
-  BadgeCheck,
-  BarChart3,
-  BookOpenCheck,
-  CalendarDays,
-  Check,
-  ChevronRight,
-  Lock,
-  Menu,
-  ShieldCheck,
-  Sparkles,
-  Timer,
-  Users,
-  Wand2,
-  X,
-} from 'lucide-react';
+import { ArrowRight, Check, ChevronRight, Menu, X } from 'lucide-react';
+import type { PlanId } from '../lib/plans';
+import { PLAN_META } from '../lib/plans';
+import { getSupabaseClient } from '../utils/supabaseClient';
+
+type PlanState = {
+  checked: boolean;
+  currentPlan: PlanId;
+};
+
+function classNames(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(' ');
+}
+
+function normalizePlanFromBusinessRow(row: any): PlanId {
+  const status = String(row?.subscription_status ?? 'inactive').trim().toLowerCase();
+  const rawPlan = String(row?.subscription_plan ?? '').trim().toLowerCase();
+  if (status !== 'active') return 'none';
+  if (rawPlan === 'starter') return 'starter';
+  if (rawPlan === 'growth') return 'growth';
+  if (rawPlan === 'pro') return 'pro';
+  // Legacy: active with no plan column means old single-plan (Pro).
+  return 'pro';
+}
 
 export default function LandingPage() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const supabase = getSupabaseClient();
+
+  const [plan, setPlan] = useState<PlanState>({ checked: false, currentPlan: 'none' });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        if (!supabase) {
+          if (!cancelled) setPlan({ checked: true, currentPlan: 'none' });
+      return;
+    }
+
+        const { data } = await supabase.auth.getSession();
+        const session = data.session ?? null;
+        const userId = session?.user?.id ?? null;
+        const email = String(session?.user?.email ?? '').trim().toLowerCase();
+        const isAdmin = email === 'jaydongant@gmail.com' || email === 'shannon_g75@yahoo.com';
+
+    if (!userId) {
+          if (!cancelled) setPlan({ checked: true, currentPlan: 'none' });
+      return;
+    }
+        if (isAdmin) {
+          if (!cancelled) setPlan({ checked: true, currentPlan: 'pro' });
+      return;
+    }
+
+        // subscription_plan may not exist in older DBs; fallback if needed.
+        const firstTry = await supabase
+          .from('business')
+          .select('id, subscription_status, subscription_plan')
+          .eq('owner_id', userId)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (firstTry.error) {
+          const msg = String((firstTry.error as any)?.message ?? '');
+          const code = String((firstTry.error as any)?.code ?? '');
+          const missingCol =
+            code === '42703' || /column .*subscription_plan.* does not exist/i.test(msg);
+
+          if (missingCol) {
+            const fallback = await supabase
+              .from('business')
+              .select('id, subscription_status')
+              .eq('owner_id', userId)
+              .order('created_at', { ascending: true })
+              .limit(1)
+              .maybeSingle();
+
+            if (!cancelled) {
+              setPlan({
+                checked: true,
+                currentPlan: normalizePlanFromBusinessRow(fallback.data),
+              });
+            }
+        return;
+      }
+
+          if (!cancelled) setPlan({ checked: true, currentPlan: 'none' });
+          return;
+        }
+
+        if (!cancelled) {
+          setPlan({ checked: true, currentPlan: normalizePlanFromBusinessRow(firstTry.data) });
+        }
+      } catch {
+        if (!cancelled) setPlan({ checked: true, currentPlan: 'none' });
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
+
+  const primaryCta = useMemo(() => {
+    const starterPromo = PLAN_META.starter.promoFirstMonth;
+    if (plan.checked && plan.currentPlan !== 'none') {
+      return { href: '/dashboard', label: 'Go to dashboard' };
+    }
+    return { href: '/pricing?upgrade=starter', label: `Start for $${starterPromo} (first month)` };
+  }, [plan.checked, plan.currentPlan]);
 
   const nav = [
-    { label: 'Features', href: '#features' },
-    { label: 'How it works', href: '#how' },
-    { label: 'Security', href: '#security' },
-    { label: 'Pricing', href: '#pricing' },
-    { label: 'FAQ', href: '#faq' },
+    { label: 'Problems', href: '#problems' },
+    { label: 'How it helps', href: '#levels' },
+    { label: 'Plans', href: '#plans' },
   ];
 
   return (
@@ -58,14 +150,13 @@ export default function LandingPage() {
 
           <nav className="hidden md:flex items-center gap-6 text-sm text-slate-300">
             {nav.map((n) => (
-              <a
-                key={n.href}
-                href={n.href}
-                className="hover:text-slate-50 transition-colors"
-              >
+              <a key={n.href} href={n.href} className="hover:text-slate-50 transition-colors">
                 {n.label}
               </a>
             ))}
+            <Link href="/pricing" className="hover:text-slate-50 transition-colors">
+              Pricing
+            </Link>
           </nav>
 
           <div className="hidden md:flex items-center gap-2">
@@ -76,12 +167,12 @@ export default function LandingPage() {
               Log in
             </Link>
             <Link
-              href="/signup"
+              href={primaryCta.href}
               className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
             >
-              Sign up
+              {primaryCta.label}
             </Link>
-          </div>
+              </div>
 
           <button
             type="button"
@@ -95,9 +186,10 @@ export default function LandingPage() {
 
         {/* Mobile menu */}
         <div
-          className={`md:hidden overflow-hidden border-t border-slate-800/70 transition-all duration-200 ${
-            mobileOpen ? 'max-h-80 opacity-100' : 'max-h-0 opacity-0'
-          }`}
+          className={classNames(
+            'md:hidden overflow-hidden border-t border-slate-800/70 transition-all duration-200',
+            mobileOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+          )}
         >
           <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3">
             <div className="flex flex-col gap-2 text-sm text-slate-300">
@@ -112,6 +204,14 @@ export default function LandingPage() {
                   <ChevronRight className="h-4 w-4 text-slate-400" />
                 </a>
               ))}
+              <Link
+                href="/pricing"
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 hover:bg-slate-900/70"
+              >
+                <span>Pricing</span>
+                <ChevronRight className="h-4 w-4 text-slate-400" />
+              </Link>
             </div>
             <div className="flex gap-2">
               <Link
@@ -121,85 +221,61 @@ export default function LandingPage() {
                 Log in
               </Link>
               <Link
-                href="/signup"
-                className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+                href={primaryCta.href}
+                className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 text-center"
               >
-                Sign up
+                {primaryCta.label}
               </Link>
+                  </div>
+                </div>
             </div>
-          </div>
-        </div>
       </header>
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-24 pb-20">
         <div className="grid gap-12 lg:grid-cols-2 lg:items-center">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-200">
-              <Sparkles className="h-4 w-4" />
-              AI Accounting for modern operators
-            </div>
-
-            <h1 className="mt-6 text-5xl sm:text-6xl font-semibold tracking-tight leading-[1.04]">
-              Close faster. Catch revenue leaks.
-              <span className="text-emerald-300"> Stay audit-ready.</span>
+              <div>
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.12] max-w-2xl">
+              Know if your business is healthy — without digging through numbers.
             </h1>
-            <p className="mt-5 text-lg text-slate-300 leading-relaxed max-w-xl">
-              RevGuard is a premium, AI-assisted accounting dashboard that turns messy
-              transactions into clean reporting—so you always know what changed, why,
-              and what to do next.
+            <p className="mt-6 text-lg text-slate-300 leading-relaxed max-w-xl">
+              RevGuard watches your money, flags problems, and keeps you organized as you grow.
             </p>
 
             <div className="mt-8 flex flex-col sm:flex-row gap-3">
               <Link
-                href="/signup"
+                href={primaryCta.href}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3.5 text-sm font-semibold text-slate-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/10"
               >
-                Start free <ArrowRight className="h-4 w-4" />
+                {primaryCta.label} <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href="/login"
+                href="/pricing"
                 className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-6 py-3.5 text-sm font-semibold text-slate-200 hover:bg-slate-900/70"
               >
-                Log in <ChevronRight className="h-4 w-4" />
+                See pricing <ChevronRight className="h-4 w-4" />
               </Link>
-            </div>
+                </div>
 
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Link
-                href="/dashboard/bookings"
-                className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
-              >
-                <CalendarDays className="h-4 w-4 text-emerald-300" />
-                Open Bookings
-              </Link>
-              <Link
-                href="/workers"
-                className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-900/70"
-              >
-                <Users className="h-4 w-4 text-sky-300" />
-                Open Workers
-              </Link>
-            </div>
-
-            <div className="mt-10 flex flex-wrap items-center gap-2 text-xs text-slate-300">
+            <div className="mt-8 grid gap-3 max-w-xl">
               {[
-                { icon: <Timer className="h-4 w-4 text-emerald-300" />, label: 'Fast, daily insights' },
-                { icon: <BarChart3 className="h-4 w-4 text-sky-300" />, label: 'Clean reporting' },
-                { icon: <ShieldCheck className="h-4 w-4 text-blue-300" />, label: 'Security-first' },
+                'Feel in control — even when you’re busy.',
+                'Catch issues early instead of reacting late.',
+                'Stay organized so money doesn’t slip away.',
               ].map((t) => (
                 <div
-                  key={t.label}
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/40 px-4 py-2"
+                  key={t}
+                  className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/45 px-4 py-3 text-sm text-slate-200"
                 >
-                  {t.icon}
-                  <span>{t.label}</span>
-                </div>
+                  <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-300 text-[11px] border border-emerald-500/20">
+                    ✓
+                  </span>
+                  <span className="leading-relaxed">{t}</span>
+                  </div>
               ))}
-            </div>
-          </div>
+              </div>
+                    </div>
 
-          {/* Mock */}
           <div className="relative">
             <div className="rounded-3xl border border-slate-800 bg-slate-950/60 shadow-xl shadow-emerald-500/10 overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-800/70 px-5 py-4">
@@ -207,393 +283,238 @@ export default function LandingPage() {
                   <div className="h-2.5 w-2.5 rounded-full bg-rose-400/80" />
                   <div className="h-2.5 w-2.5 rounded-full bg-amber-300/80" />
                   <div className="h-2.5 w-2.5 rounded-full bg-emerald-300/80" />
-                </div>
+                    </div>
                 <div className="text-xs text-slate-400">RevGuard</div>
                 <div className="h-6 w-20 rounded-full bg-slate-900/70 border border-slate-800" />
-              </div>
+                      </div>
 
               <div className="p-5">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { label: 'Net cashflow', value: '+$12,480', tone: 'text-emerald-300' },
-                    { label: 'Expenses', value: '$8,230', tone: 'text-rose-300' },
-                    { label: 'Revenue', value: '$20,710', tone: 'text-sky-300' },
-                  ].map((c) => (
-                    <div
-                      key={c.label}
-                      className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4"
-                    >
-                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                        {c.label}
-                      </div>
-                      <div className={`mt-2 text-lg font-semibold ${c.tone}`}>
-                        {c.value}
-                      </div>
-                      <div className="mt-3 h-2 rounded-full bg-slate-900 border border-slate-800 overflow-hidden">
-                        <div className="h-full w-2/3 bg-gradient-to-r from-emerald-400/60 via-sky-400/60 to-blue-400/60" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-semibold text-slate-100 flex items-center gap-2">
-                        <Wand2 className="h-4 w-4 text-emerald-300" />
-                        AI Insights
-                      </div>
-                      <div className="mt-1 text-[11px] text-slate-400">
-                        Clear drivers. Next actions. No fluff.
-                      </div>
-                    </div>
-                    <div className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200">
-                      <BadgeCheck className="h-4 w-4" />
-                      Ready
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-2">
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <div className="text-xs font-semibold text-slate-100">Today</div>
+                  <div className="mt-2 grid gap-2">
                     {[
-                      'Refunds spiked → review top SKUs.',
-                      'Payroll up MoM → validate changes.',
-                      'Revenue concentrated → diversify clients.',
-                    ].map((t) => (
+                      { label: 'Cash is trending down', note: 'You spent more than you earned this week.' },
+                      { label: 'Two bills are coming up', note: 'So you’re not surprised.' },
+                      { label: 'An invoice is overdue', note: 'So you get paid without chasing.' },
+                    ].map((r) => (
                       <div
-                        key={t}
-                        className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-[11px] text-slate-300"
+                        key={r.label}
+                        className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2"
                       >
-                        <Check className="h-4 w-4 text-emerald-300" />
-                        <span className="truncate">{t}</span>
+                        <div className="text-[11px] font-semibold text-slate-100 flex items-center gap-2">
+                          <Check className="h-4 w-4 text-emerald-300" />
+                          <span>{r.label}</span>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
+                        <div className="mt-0.5 text-[11px] text-slate-400 leading-relaxed">
+                          {r.note}
+                    </div>
+                        </div>
+                          ))}
+                      </div>
+                        </div>
+                      </div>
+                        </div>
 
-            <div className="pointer-events-none absolute -inset-6 -z-10 rounded-[32px] bg-gradient-to-br from-emerald-500/15 via-sky-500/10 to-blue-500/15 blur-2xl" />
+            <div className="pointer-events-none absolute -bottom-10 -right-10 h-56 w-56 rounded-full bg-emerald-500/15 blur-3xl" />
+            <div className="pointer-events-none absolute -top-10 -left-10 h-56 w-56 rounded-full bg-sky-500/12 blur-3xl" />
+                      </div>
+                    </div>
+      </section>
+
+      {/* Problems */}
+      <section id="problems" className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="max-w-2xl">
+          <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">The problem</div>
+          <h2 className="mt-2 text-3xl font-semibold tracking-tight">
+            Running a business is hard enough.
+          </h2>
+          <p className="mt-3 text-slate-300 leading-relaxed">
+            Most owners don’t need more “finance work.” They need clarity and calm.
+          </p>
+                        </div>
+
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          {[
+            'Not sure where your money is going',
+            'Invoices, bills, and workers slipping through the cracks',
+            'You only look at finances when something goes wrong',
+          ].map((t) => (
+            <div
+              key={t}
+              className="rounded-3xl border border-slate-800 bg-slate-950/55 p-6 shadow-[0_0_0_1px_rgba(148,163,184,0.06)]"
+            >
+              <div className="text-sm font-semibold text-slate-100">{t}</div>
+              <div className="mt-2 text-sm text-slate-300 leading-relaxed">
+                RevGuard helps you stay ahead — with small nudges, not big headaches.
+                                </div>
+                        </div>
+          ))}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Features */}
-      <section id="features" className="max-w-6xl mx-auto px-6 py-20">
-        <div>
-          <h2 className="text-3xl font-semibold tracking-tight">Features</h2>
-          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
-            Everything you need for clean numbers, fast decisions, and confident reporting.
-          </p>
-        </div>
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[
-            {
-              icon: <BarChart3 className="h-5 w-5 text-sky-300" />,
-              title: 'Live dashboard',
-              desc: 'Cashflow, profitability, and trend views that update as your data changes.',
-            },
-            {
-              icon: <CalendarDays className="h-5 w-5 text-emerald-300" />,
-              title: 'Bookings',
-              desc: 'A modern booking hub with calendar + list views and rich booking details.',
-            },
-            {
-              icon: <Users className="h-5 w-5 text-sky-300" />,
-              title: 'Workers',
-              desc: 'Manage your team and time tracking with a simple worker manager + clock.',
-            },
-            {
-              icon: <Sparkles className="h-5 w-5 text-emerald-300" />,
-              title: 'AI insights',
-              desc: 'What changed, top drivers, next actions, and follow-ups—written clearly.',
-            },
-            {
-              icon: <BookOpenCheck className="h-5 w-5 text-amber-300" />,
-              title: 'Statements & reports',
-              desc: 'Income statement, balance sheet, cashflow, and premium reporting views.',
-            },
-            {
-              icon: <Timer className="h-5 w-5 text-emerald-300" />,
-              title: 'Faster close',
-              desc: 'Spend less time reconciling and more time acting on what matters.',
-            },
-            {
-              icon: <ShieldCheck className="h-5 w-5 text-blue-300" />,
-              title: 'Security-first',
-              desc: 'RLS-protected data model and server-side account deletion for safety.',
-            },
-            {
-              icon: <Lock className="h-5 w-5 text-slate-200" />,
-              title: 'Audit-ready',
-              desc: 'Clear data boundaries per business, with cascade deletes and ownership checks.',
-            },
-          ].map((f) => (
-            <div
-              key={f.title}
-              className="group rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm hover:shadow-emerald-500/10 transition"
-            >
-              <div className="flex items-start gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-800 bg-slate-950/60 shadow-sm">
-                  {f.icon}
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">{f.title}</div>
-                  <div className="mt-2 text-sm text-slate-400 leading-relaxed">{f.desc}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section id="how" className="max-w-6xl mx-auto px-6 py-20">
-        <div>
-          <h2 className="text-3xl font-semibold tracking-tight">How it works</h2>
-          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
-            Three steps to go from “messy ledger” to “clear actions.”
-          </p>
-        </div>
-
-        <div className="mt-8 grid gap-4 lg:grid-cols-3">
-          {[
-            {
-              n: '01',
-              title: 'Connect & import',
-              desc: 'Bring in transactions and keep your data organized by business.',
-            },
-            {
-              n: '02',
-              title: 'Categorize & review',
-              desc: 'Clean categories and spot anomalies with premium summaries.',
-            },
-            {
-              n: '03',
-              title: 'Get insights',
-              desc: 'Ask RevGuard “what changed” and get next actions you can execute today.',
-            },
-          ].map((s) => (
-            <div
-              key={s.n}
-              className="rounded-3xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
-            >
-              <div className="flex items-center gap-3">
-                <div className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200">
-                  {s.n}
-                </div>
-                <div className="text-sm font-semibold text-slate-100">{s.title}</div>
-              </div>
-              <p className="mt-3 text-sm text-slate-400 leading-relaxed">{s.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Security */}
-      <section id="security" className="max-w-6xl mx-auto px-6 py-20">
-        <div className="rounded-3xl border border-slate-800/80 bg-gradient-to-br from-slate-950/70 via-slate-950/40 to-emerald-950/25 p-8 shadow-sm">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      {/* Levels */}
+      <section id="levels" className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="grid gap-10 lg:grid-cols-2 lg:items-start">
             <div>
-              <h2 className="text-3xl font-semibold tracking-tight">Security</h2>
-              <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
-                Built with least-privilege defaults and ownership checks.
-              </p>
-            </div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1 text-xs text-slate-200">
-              <ShieldCheck className="h-4 w-4 text-emerald-300" />
-              RLS + server-side deletion
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-4 lg:grid-cols-3">
-            {[
-              {
-                title: 'Row Level Security',
-                desc: 'User data is isolated with RLS and business ownership checks.',
-              },
-              {
-                title: 'Server-side account deletion',
-                desc: 'Deletion is verified via session and executed using service role on the server.',
-              },
-              {
-                title: 'Cascade deletes',
-                desc: 'Foreign keys cascade from auth user → business → child data.',
-              },
-            ].map((it) => (
-              <div
-                key={it.title}
-                className="rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
-              >
-                <div className="text-sm font-semibold text-slate-100">{it.title}</div>
-                <div className="mt-2 text-sm text-slate-400 leading-relaxed">{it.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Pricing */}
-      <section id="pricing" className="max-w-6xl mx-auto px-6 py-20">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="text-3xl font-semibold tracking-tight">Pricing</h2>
-            <p className="mt-3 text-base text-slate-400 leading-relaxed">
-              One plan. All features included.
+            <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">The solution</div>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight">
+              RevGuard is simple — and it grows with you.
+            </h2>
+            <p className="mt-4 text-slate-300 leading-relaxed max-w-xl">
+              Start where you are today. Add structure as your business gets busier.
             </p>
           </div>
-          <div className="text-xs text-slate-400">Cancel anytime • No surprises</div>
-        </div>
 
-        <div className="mt-8">
-          <div className="mx-auto w-full max-w-lg rounded-3xl border border-emerald-500/35 bg-emerald-500/10 p-6 shadow-lg shadow-emerald-500/12">
-            <div className="flex items-start justify-between gap-3">
+          <div className="grid gap-4">
+            {[
+              {
+                n: '1',
+                title: 'Starter – Stay organized & get paid',
+                desc: 'Keep money tidy, keep invoices moving, and stay on top of basics without stress.',
+              },
+              {
+                n: '2',
+                title: 'Growth – Run operations without chaos',
+                desc: 'Add the tools that prevent slip-ups as you juggle bookings, bills, and a team.',
+              },
+              {
+                n: '3',
+                title: 'Pro – AI watches your business for you',
+                desc: 'Get proactive warnings and guidance so you don’t have to think about finances daily.',
+              },
+            ].map((s) => (
+              <div key={s.n} className="rounded-3xl border border-slate-800 bg-slate-950/55 p-6">
+                <div className="flex items-start gap-4">
+                  <div className="h-9 w-9 rounded-2xl bg-emerald-500/12 border border-emerald-500/20 text-emerald-200 flex items-center justify-center text-sm font-semibold">
+                    {s.n}
+              </div>
+                <div>
+                    <div className="text-sm font-semibold text-slate-100">{s.title}</div>
+                    <div className="mt-1 text-sm text-slate-300 leading-relaxed">{s.desc}</div>
+                  </div>
+                </div>
+                  </div>
+            ))}
+                </div>
+              </div>
+      </section>
+
+      {/* Plans preview */}
+      <section id="plans" className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="flex items-end justify-between gap-4 flex-wrap">
+          <div className="max-w-2xl">
+            <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Plans preview</div>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight">Pick your starting point.</h2>
+            <p className="mt-3 text-slate-300 leading-relaxed">
+              Less stress. More clarity. Upgrade any time.
+                  </p>
+                </div>
+          <Link
+            href="/pricing"
+            className="text-sm text-slate-300 hover:text-slate-50 inline-flex items-center gap-2"
+          >
+            See full pricing <ChevronRight className="h-4 w-4" />
+          </Link>
+              </div>
+
+        <div className="mt-8 grid gap-4 md:grid-cols-3 items-stretch">
+          {(['starter', 'growth', 'pro'] as const).map((p) => {
+            const meta = PLAN_META[p];
+            const isCurrent = plan.checked && plan.currentPlan === p;
+            const startHref = plan.checked && plan.currentPlan !== 'none' ? '/dashboard' : `/pricing?upgrade=${p}`;
+            return (
+              <div
+                key={p}
+                className="rounded-3xl border border-slate-800 bg-slate-950/55 p-6 shadow-[0_0_0_1px_rgba(148,163,184,0.06)] flex flex-col"
+              >
+                <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-slate-100">RevGuard Pro</div>
-                <div className="mt-1 text-[11px] text-slate-400">All features included</div>
-              </div>
-              <div className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200">
-                <BadgeCheck className="h-4 w-4" />
-                Most popular
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <div className="text-[11px] uppercase tracking-[0.22em] text-slate-400">
-                Intro promo (first 2 months)
-              </div>
-              <div className="mt-2 flex items-end gap-3">
-                <div className="text-4xl font-semibold tracking-tight text-emerald-200">
-                  $69
-                  <span className="ml-1 text-sm font-medium text-slate-400">/mo</span>
+                    <div className="text-sm font-semibold text-slate-100">{meta.label}</div>
+                    <div className="mt-2 text-3xl font-semibold tracking-tight text-emerald-300">
+                      ${meta.promoFirstMonth}
                 </div>
-                <div className="pb-1 text-sm text-slate-400">
-                  <span className="line-through">$99/mo</span>
+                    <div className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                      First month, then ${meta.priceMonthly}/mo.
+              </div>
+            </div>
+                  {isCurrent ? (
+                    <div className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+                      Current plan
+              </div>
+                  ) : null}
                 </div>
-              </div>
-              <div className="mt-2 text-sm text-slate-300">
-                Then <span className="font-semibold text-slate-100">$99/mo</span>. Cancel anytime.
-              </div>
-              <div className="mt-2 text-xs text-slate-300">
-                Save <span className="font-semibold text-emerald-200">$60</span> in your first 2 months.
-              </div>
-            </div>
 
-            <div className="mt-6 space-y-2 text-sm text-slate-300">
-              {[
-                'AI insights + premium reports',
-                'Cash overview, statements, and exports',
-                'Business-scoped data + audit-ready controls',
-              ].map((f) => (
-                <div key={f} className="flex items-start gap-2">
-                  <Check className="mt-0.5 h-4 w-4 text-emerald-300" />
-                  <span>{f}</span>
-                </div>
-              ))}
-            </div>
+                <div className="mt-4 text-sm text-slate-300 leading-relaxed">
+                  {p === 'starter'
+                    ? 'Stay organized and get paid on time.'
+                    : p === 'growth'
+                      ? 'Run operations without chaos as you get busier.'
+                      : 'Feel confident because the system is watching for you.'}
+                  </div>
 
-            <div className="mt-6">
-              <Link
-                href="/signup"
-                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
-              >
-                Start now — save $60 <ChevronRight className="h-4 w-4" />
-              </Link>
-              <div className="mt-2 text-[11px] text-slate-400">
-                Start at $69/mo for 2 months • then $99/mo
-              </div>
-            </div>
-          </div>
-        </div>
+                <div className="mt-auto pt-5">
+                  <Link
+                    href={startHref}
+                    className={classNames(
+                      'inline-flex w-full items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition',
+                      isCurrent
+                        ? 'border border-slate-800 bg-slate-950/40 text-slate-300 hover:bg-slate-900/60'
+                        : 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                    )}
+                  >
+                    {isCurrent ? 'Go to dashboard' : 'Start here'} <ArrowRight className="h-4 w-4" />
+                  </Link>
+                      </div>
+                      </div>
+            );
+          })}
+                      </div>
       </section>
 
-      {/* FAQ */}
-      <section id="faq" className="max-w-6xl mx-auto px-6 py-20">
-        <div>
-          <h2 className="text-3xl font-semibold tracking-tight">FAQ</h2>
-          <p className="mt-3 text-base text-slate-400 leading-relaxed max-w-2xl">
-            Quick answers to common questions.
-          </p>
-        </div>
-
-        <div className="mt-8 grid gap-3">
-          {[
-            {
-              q: 'Do I need an accountant to use RevGuard?',
-              a: 'No—RevGuard is designed to be usable by founders and operators. If you work with an accountant, RevGuard helps you hand them cleaner data.',
-            },
-            {
-              q: 'Is my data isolated per business?',
-              a: 'Yes. Tables are business-scoped and enforced with ownership checks + RLS policies.',
-            },
-            {
-              q: 'Can I delete my account and data?',
-              a: 'Yes. Account deletion is server-side using a Supabase service role, and data is removed via cascade foreign keys.',
-            },
-          ].map((item) => (
-            <details
-              key={item.q}
-              className="group rounded-2xl border border-slate-800/80 bg-slate-950/50 p-6 shadow-sm"
-            >
-              <summary className="cursor-pointer list-none select-none flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-slate-100">{item.q}</span>
-                <ChevronRight className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-90" />
-              </summary>
-              <p className="mt-3 text-sm text-slate-400 leading-relaxed">{item.a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
-
-      {/* Final CTA */}
+      {/* Social proof (placeholder) */}
       <section className="max-w-6xl mx-auto px-6 pb-20">
-        <div className="rounded-3xl border border-slate-800/80 bg-gradient-to-br from-emerald-500/14 via-slate-950/40 to-blue-500/10 p-10 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-2xl font-semibold tracking-tight">
-                Ready to run your numbers with confidence?
-              </h3>
-              <p className="mt-3 text-base text-slate-300 leading-relaxed max-w-xl">
-                Create your account and get a premium dashboard in minutes.
-              </p>
+        <div className="rounded-3xl border border-slate-800 bg-slate-950/55 p-8 md:p-10">
+          <div className="grid gap-6 md:grid-cols-2">
+            {[
+              {
+                title: 'Built for solo and growing service businesses',
+                desc: 'If you’re running jobs, managing clients, and trying to stay on top of payments — RevGuard is made for you.',
+              },
+              {
+                title: 'Designed for owners who don’t want to think about finances daily',
+                desc: 'You shouldn’t need a “finance day” to feel confident. RevGuard helps you stay calm and in control all week.',
+              },
+            ].map((c) => (
+              <div key={c.title} className="rounded-2xl border border-slate-800 bg-slate-950/40 p-6">
+                <div className="text-lg font-semibold text-slate-100">{c.title}</div>
+                <div className="mt-2 text-sm text-slate-300 leading-relaxed">{c.desc}</div>
+                    </div>
+            ))}
+                </div>
             </div>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <Link
-                href="/signup"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
-              >
-                Sign up <ArrowRight className="h-4 w-4" />
-              </Link>
-              <Link
-                href="/login"
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-slate-950/40 px-5 py-3 text-sm font-semibold text-slate-200 hover:bg-slate-900/70"
-              >
-                Log in <ChevronRight className="h-4 w-4" />
-              </Link>
-            </div>
-          </div>
-        </div>
+          </section>
 
-        <footer className="mt-10 flex flex-col gap-3 border-t border-slate-800/70 pt-8 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2 text-slate-300">
+      {/* Footer */}
+      <footer className="border-t border-slate-800/70 py-10">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-400">
+          <div className="flex items-center gap-2">
             <Image src="/logo.png" alt="RevGuard" width={20} height={20} className="h-5 w-5" />
             <span className="font-semibold text-slate-200">RevGuard</span>
-            <span className="text-slate-500">© {new Date().getFullYear()}</span>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-2">
-            <Link href="/pricing" className="hover:text-slate-200">
+          <div className="flex items-center gap-4">
+            <Link href="/pricing" className="hover:text-slate-200 transition-colors">
               Pricing
             </Link>
-            <Link href="/login" className="hover:text-slate-200">
+            <Link href="/login" className="hover:text-slate-200 transition-colors">
               Log in
             </Link>
-            <Link href="/signup" className="hover:text-slate-200">
+            <Link href="/signup" className="hover:text-slate-200 transition-colors">
               Sign up
             </Link>
           </div>
-        </footer>
-      </section>
-    </div>
+        </div>
+      </footer>
+      </div>
   );
 }
 

@@ -9,6 +9,7 @@ type BusinessRow = {
   name: string | null;
   owner_id: string | null;
   subscription_status?: string | null;
+  subscription_plan?: string | null;
   email?: string | null;
   phone?: string | null;
   website?: string | null;

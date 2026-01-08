@@ -61,15 +61,22 @@ export default function BillingSuccessClient() {
 
         while (alive && Date.now() - started < timeoutMs) {
           const first = await supabase
-            .from('business')
-            .select('id, subscription_status')
-            .eq('owner_id', userId)
-            .order('created_at', { ascending: true })
-            .limit(1)
+            .from('subscriptions')
+            .select('status,current_period_end')
+            .eq('user_id', userId)
             .maybeSingle();
 
-          const sub = String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
-          if (sub === 'active') {
+          const st = String((first.data as any)?.status ?? 'inactive').trim().toLowerCase();
+          const cpe = (first.data as any)?.current_period_end ? String((first.data as any).current_period_end) : null;
+          const okStatus = st === 'active' || st === 'trialing';
+          const okPeriod = !cpe
+            ? true
+            : (() => {
+                const d = new Date(cpe);
+                return Number.isNaN(d.getTime()) ? true : d.getTime() > Date.now();
+              })();
+
+          if (okStatus && okPeriod) {
             if (!alive) return;
             setStatus('active');
             setDetail('Subscription active. Redirecting to your dashboard…');

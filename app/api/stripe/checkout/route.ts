@@ -1,167 +1,94 @@
-import Stripe from 'stripe';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import type { PlanId } from '../../../../lib/plans';
+import { getSupabaseAdmin } from '../../../../lib/server/supabaseAdmin';
+import { getStripeServer, getSiteUrlFromRequest } from '../../../../lib/server/stripeServer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function normalizeSiteUrl(raw: string) {
-  return raw.replace(/\/+$/, '');
+function normalizePlanId(raw: any): Exclude<PlanId, 'none'> | null {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'starter' || s === 'growth' || s === 'pro') return s;
+  return null;
 }
 
 export async function POST(request: Request) {
   try {
-    const secretKey = process.env.STRIPE_SECRET_KEY;
-    const priceId = process.env.STRIPE_PRICE_ID;
-    const couponId = process.env.STRIPE_COUPON_ID;
+    const stripe = getStripeServer();
+    const siteUrl = getSiteUrlFromRequest(request);
 
-    const origin = request.headers.get('origin') ?? new URL(request.url).origin;
-    const appUrl = normalizeSiteUrl(
-      process.env.NEXT_PUBLIC_SITE_URL ||
-        process.env.NEXT_PUBLIC_APP_URL ||
-        process.env.APP_URL ||
-        origin
-    );
-
-    if (!secretKey) {
-      return NextResponse.json(
-        {
-          error:
-            'Missing STRIPE_SECRET_KEY. Add it to your .env.local and restart the dev server.',
-        },
-        { status: 500 }
-      );
-    }
-    if (!priceId) {
-      return NextResponse.json(
-        {
-          error:
-            'Missing STRIPE_PRICE_ID. Create a $99/mo recurring Price in Stripe and set STRIPE_PRICE_ID.',
-        },
-        { status: 500 }
-      );
-    }
-    if (priceId.startsWith('prod_')) {
-      return NextResponse.json(
-        {
-          error:
-            'Invalid STRIPE_PRICE_ID: you set a Product ID (prod_...). Stripe Checkout needs a Price ID (price_...). Create a recurring Price ($99/mo) and copy its Price ID.',
-        },
-        { status: 500 }
-      );
-    }
-    if (!priceId.startsWith('price_')) {
-      return NextResponse.json(
-        {
-          error:
-            'Invalid STRIPE_PRICE_ID: expected a Price ID like price_..., but got something else. Copy the Price ID from Stripe (not the Product ID).',
-        },
-        { status: 500 }
-      );
+    const body = (await request.json().catch(() => null)) as any;
+    const planId = normalizePlanId(body?.planId);
+    if (!planId) {
+      return NextResponse.json({ error: 'Missing planId (starter/growth/pro).' }, { status: 400 });
     }
 
-    // Require authenticated Supabase user.
     const authHeader = request.headers.get('authorization') ?? '';
-    const token = authHeader.toLowerCase().startsWith('bearer ')
-      ? authHeader.slice(7)
-      : null;
-
+    const token = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7) : null;
     if (!token) {
-      return NextResponse.json(
-        { error: 'Not authenticated. Please log in again.' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Not authenticated. Please log in again.' }, { status: 401 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnon) {
-      return NextResponse.json(
-        { error: 'Server is missing Supabase env vars (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY).' },
-        { status: 500 }
-      );
-    }
+    const supabaseAdmin = getSupabaseAdmin();
 
-    const supabase = createClient(
-      supabaseUrl,
-      supabaseAnon,
-      {
-        global: { headers: { Authorization: `Bearer ${token}` } },
-        auth: { persistSession: false, autoRefreshToken: false },
-      }
-    );
-
-    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+    const { data: userRes, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const user = userRes?.user ?? null;
-    if (userErr || !user) {
-      return NextResponse.json(
-        { error: 'Not authenticated. Please log in again.' },
-        { status: 401 }
-      );
+    if (userErr || !user?.id) {
+      return NextResponse.json({ error: 'Not authenticated. Please log in again.' }, { status: 401 });
     }
 
-    // Load the user's business (business.owner_id = auth.uid()).
-    const { data: biz, error: bizErr } = await supabase
-      .from('business')
-      .select('id, name, owner_id, stripe_customer_id')
-      .eq('owner_id', user.id)
-      .order('created_at', { ascending: true })
-      .limit(1)
+    const { data: planRow, error: planErr } = await supabaseAdmin
+      .from('subscription_plans')
+      .select('id,stripe_price_id,stripe_coupon_id')
+      .eq('id', planId)
       .maybeSingle();
 
-    if (bizErr || !biz?.id) {
-      return NextResponse.json(
-        { error: 'Could not load your business. Please refresh and try again.' },
-        { status: 400 }
-      );
+    if (planErr || !planRow?.stripe_price_id) {
+      return NextResponse.json({ error: 'Plan not found. Please contact support.' }, { status: 400 });
     }
 
-    const stripe = new Stripe(secretKey);
+    // Create/retrieve Stripe customer for this user.
+    const { data: subRow } = await supabaseAdmin
+      .from('subscriptions')
+      .select('user_id,stripe_customer_id')
+      .eq('user_id', user.id)
+      .maybeSingle();
 
-    // Create Stripe customer if needed and store on the business record.
-    let stripeCustomerId = (biz as any).stripe_customer_id as string | null;
+    let stripeCustomerId = (subRow as any)?.stripe_customer_id ? String((subRow as any).stripe_customer_id) : null;
     if (!stripeCustomerId) {
       const customer = await stripe.customers.create({
         email: user.email ?? undefined,
-        name: (biz as any).name ?? undefined,
-        metadata: {
-          business_id: String(biz.id),
-          owner_id: String(user.id),
-        },
+        metadata: { user_id: String(user.id) },
       });
-
       stripeCustomerId = customer.id;
 
-      const { error: updErr } = await supabase
-        .from('business')
-        .update({ stripe_customer_id: stripeCustomerId })
-        .eq('id', biz.id)
-        .eq('owner_id', user.id);
-
-      if (updErr) {
-        return NextResponse.json(
+      const { error: upErr } = await supabaseAdmin
+        .from('subscriptions')
+        .upsert(
           {
-            error:
-              'Failed to save billing customer. Run `supabase/business_stripe_fields.sql` then try again.',
-          },
-          { status: 500 }
+            user_id: user.id,
+            stripe_customer_id: stripeCustomerId,
+            plan_id: planId,
+            status: 'incomplete',
+          } as any,
+          { onConflict: 'user_id' }
         );
+      if (upErr) {
+        return NextResponse.json({ error: 'Failed to save Stripe customer.' }, { status: 500 });
       }
     }
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: stripeCustomerId,
-      line_items: [{ price: priceId, quantity: 1 }],
-      ...(couponId ? { discounts: [{ coupon: couponId }] } : {}),
-      success_url: `${appUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appUrl}/pricing`,
-      // If you don't provide STRIPE_COUPON_ID, allow users to enter a promo code.
-      allow_promotion_codes: !couponId,
-      client_reference_id: String(biz.id),
-      metadata: { business_id: String(biz.id), owner_id: String(user.id) },
+      line_items: [{ price: String((planRow as any).stripe_price_id), quantity: 1 }],
+      ...(planRow.stripe_coupon_id ? { discounts: [{ coupon: String(planRow.stripe_coupon_id) }] } : {}),
+      success_url: `${siteUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${siteUrl}/billing/cancel`,
+      allow_promotion_codes: !planRow.stripe_coupon_id,
+      metadata: { planId, userId: String(user.id) },
       subscription_data: {
-        metadata: { business_id: String(biz.id), owner_id: String(user.id) },
+        metadata: { planId, userId: String(user.id) },
       },
     });
 

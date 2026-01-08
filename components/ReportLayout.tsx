@@ -31,8 +31,8 @@ export function ReportLayout({
   const hasDetails = Boolean(details) || Boolean(printDetails);
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+    <div className="space-y-6 md:space-y-4">
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5 md:p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-semibold text-slate-200">{chartTitle}</div>
           <div className="text-[11px] text-slate-500">{chartSubtitle}</div>
@@ -42,7 +42,7 @@ export function ReportLayout({
 
       {hasDetails && (
         <div className="rounded-2xl border border-slate-800 bg-slate-950/40 overflow-hidden">
-          <div className="no-print px-4 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
+          <div className="no-print px-5 py-4 md:px-4 md:py-3 border-b border-slate-800 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="text-xs font-semibold text-slate-200">{detailsTitle}</div>
               {detailsRight}
@@ -62,7 +62,7 @@ export function ReportLayout({
           </div>
 
           {/* Print-only details are always shown when printing. */}
-          {printDetails && <div className="print-only px-4 py-3">{printDetails}</div>}
+          {printDetails && <div className="print-only px-5 py-4 md:px-4 md:py-3">{printDetails}</div>}
 
           {detailsOpen && details && <div className="no-print">{details}</div>}
         </div>

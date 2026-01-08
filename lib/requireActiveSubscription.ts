@@ -41,6 +41,29 @@ export async function requireActiveSubscription(request: Request): Promise<Subsc
     return { ok: true, userId: user.id, status: 'active' };
   }
 
+  // New model (preferred): subscriptions table
+  const { data: sub, error: subErr } = await supabase
+    .from('subscriptions')
+    .select('status,current_period_end')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!subErr && sub) {
+    const st = String((sub as any)?.status ?? 'inactive').trim().toLowerCase();
+    const cpe = (sub as any)?.current_period_end ? String((sub as any).current_period_end) : null;
+    const okStatus = st === 'active' || st === 'trialing';
+    const okPeriod = !cpe
+      ? true
+      : (() => {
+          const d = new Date(cpe);
+          return Number.isNaN(d.getTime()) ? true : d.getTime() > Date.now();
+        })();
+    if (okStatus && okPeriod) {
+      return { ok: true, userId: user.id, status: 'active' };
+    }
+  }
+
+  // Legacy fallback: business.subscription_status
   const { data: biz, error: bizErr } = await supabase
     .from('business')
     .select('id, subscription_status')
@@ -49,12 +72,8 @@ export async function requireActiveSubscription(request: Request): Promise<Subsc
     .limit(1)
     .maybeSingle();
 
-  if (bizErr || !biz?.id) {
-    return NextResponse.json({ error: 'Subscription inactive' }, { status: 403 });
-  }
-
   const status = String((biz as any)?.subscription_status ?? 'inactive').toLowerCase();
-  if (status !== 'active') {
+  if (bizErr || !biz?.id || status !== 'active') {
     return NextResponse.json({ error: 'Subscription inactive' }, { status: 403 });
   }
 

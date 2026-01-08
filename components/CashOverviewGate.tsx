@@ -24,8 +24,8 @@ export function CashOverviewGate() {
 }
 
 function CashOverviewInner({ businessId }: { businessId: string }) {
-  // If businessId ever becomes empty, render nothing (paranoia guard).
-  if (!businessId) return null;
+  // If businessId ever becomes empty, do not fetch and render nothing (paranoia guard).
+  const safeBusinessId = typeof businessId === 'string' ? businessId.trim() : '';
 
   const [loading, setLoading] = useState(true);
   const [txs, setTxs] = useState<TransactionRow[]>([]);
@@ -36,6 +36,11 @@ function CashOverviewInner({ businessId }: { businessId: string }) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      if (!safeBusinessId) {
+        setTxs([]);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       try {
         // Supabase/PostgREST often defaults to a 1k row cap. Paginate so the chart can
@@ -48,7 +53,7 @@ function CashOverviewInner({ businessId }: { businessId: string }) {
           const { data, error } = await supabase
             .from('transactions')
             .select('id,date,amount,category,description')
-            .eq('business_id', businessId)
+            .eq('business_id', safeBusinessId)
             .order('date', { ascending: true })
             .range(from, from + pageSize - 1);
 
@@ -87,7 +92,7 @@ function CashOverviewInner({ businessId }: { businessId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [businessId]);
+  }, [safeBusinessId]);
 
   const chartTxs = useMemo(() => {
     const rows = Array.isArray(txs) ? txs : [];
@@ -114,17 +119,21 @@ function CashOverviewInner({ businessId }: { businessId: string }) {
         <span>Cash overview</span>
       </div>
 
-      {loading ? (
-        <div className="min-h-[260px] rounded-2xl border border-slate-800 bg-slate-950/80 animate-pulse" />
-      ) : (
-        <CashBarChart
-          transactions={chartTxs as any}
-          selectedPeriod={selectedPeriod as any}
-          onPeriodChange={(p: any) => setSelectedPeriod(p)}
-          loading={false}
-          animationKey="cash"
-        />
-      )}
+      {safeBusinessId
+        ? loading
+          ? (
+            <div className="min-h-[260px] rounded-2xl border border-slate-800 bg-slate-950/80 animate-pulse" />
+          )
+          : (
+            <CashBarChart
+              transactions={chartTxs as any}
+              selectedPeriod={selectedPeriod as any}
+              onPeriodChange={(p: any) => setSelectedPeriod(p)}
+              loading={false}
+              animationKey="cash"
+            />
+          )
+        : null}
     </section>
   );
 }

@@ -1,16 +1,20 @@
-import Stripe from 'stripe';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import Stripe from 'stripe';
+import { getSupabaseAdmin } from '../../../../lib/server/supabaseAdmin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function toIsoFromUnixSeconds(secs: number | null | undefined): string | null {
+function isoFromUnixSeconds(secs: number | null | undefined): string | null {
   if (!secs || !Number.isFinite(secs)) return null;
-  const ms = secs * 1000;
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString();
+  const d = new Date(secs * 1000);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function getStringMeta(meta: any, key: string): string | null {
+  const v = meta?.[key] ?? null;
+  const s = String(v ?? '').trim();
+  return s ? s : null;
 }
 
 export async function POST(request: Request) {
@@ -44,64 +48,109 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
   }
 
-  // Service-role Supabase client for webhook writes.
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    null;
-
-  if (!url || !serviceKey) {
-    return NextResponse.json(
-      { error: 'Missing Supabase service role key' },
-      { status: 500 }
-    );
+  let supabaseAdmin: ReturnType<typeof getSupabaseAdmin>;
+  try {
+    supabaseAdmin = getSupabaseAdmin();
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Missing Supabase service role key' }, { status: 500 });
   }
 
-  const supabaseAdmin = createClient(url, serviceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  // Dedupe: insert event.id into stripe_events (ignore conflicts).
+  try {
+    const ins = await supabaseAdmin.from('stripe_events').insert({ id: event.id, type: event.type } as any);
+    if (ins.error) {
+      const code = String((ins.error as any)?.code ?? '');
+      if (code === '23505') {
+        return NextResponse.json({ received: true }, { status: 200 });
+      }
+      // If the table isn't migrated yet, don't crash prod webhooks.
+      const msg = String((ins.error as any)?.message ?? '');
+      if (!/stripe_events/i.test(msg)) {
+        // eslint-disable-next-line no-console
+        console.error('STRIPE_WEBHOOK_DEDUPE_FAILED', ins.error);
+      }
+    }
+  } catch {
+    // ignore dedupe failures
+  }
 
-  // Subscription lifecycle events: link strictly by Stripe customer (cus_*), never email.
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const planId = getStringMeta((session as any).metadata, 'planId');
+    const userId = getStringMeta((session as any).metadata, 'userId');
+    const stripeCustomerId =
+      typeof (session as any).customer === 'string' ? (session as any).customer : (session as any).customer?.id ?? null;
+    const stripeSubscriptionId =
+      typeof (session as any).subscription === 'string' ? (session as any).subscription : (session as any).subscription?.id ?? null;
+
+    if (userId && stripeCustomerId) {
+      let subStatus: string | null = null;
+      let currentPeriodEnd: string | null = null;
+      let cancelAtPeriodEnd = false;
+      if (stripeSubscriptionId) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+          subStatus = String((sub as any).status ?? 'active');
+          currentPeriodEnd = isoFromUnixSeconds((sub as any).current_period_end);
+          cancelAtPeriodEnd = Boolean((sub as any).cancel_at_period_end);
+        } catch {
+          subStatus = 'active';
+        }
+      }
+
+      await supabaseAdmin.from('subscriptions').upsert(
+        {
+          user_id: userId,
+          plan_id: planId,
+          status: subStatus ?? 'active',
+          stripe_customer_id: stripeCustomerId,
+          stripe_subscription_id: stripeSubscriptionId,
+          current_period_end: currentPeriodEnd,
+          cancel_at_period_end: cancelAtPeriodEnd,
+          updated_at: new Date().toISOString(),
+        } as any,
+        { onConflict: 'user_id' }
+      );
+    }
+
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
   if (
     event.type === 'customer.subscription.created' ||
     event.type === 'customer.subscription.updated' ||
     event.type === 'customer.subscription.deleted'
   ) {
     const sub = event.data.object as Stripe.Subscription;
-    const customerId =
-      typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
-    if (!customerId) {
-      return NextResponse.json({ received: true }, { status: 200 });
-    }
+    const meta = (sub as any).metadata ?? {};
+    const planId = getStringMeta(meta, 'planId');
+    const userId = getStringMeta(meta, 'userId');
+    const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id ?? null;
 
-    const { data: biz, error: bizErr } = await supabaseAdmin
-      .from('business')
-      .select('id')
-      .eq('stripe_customer_id', customerId)
-      .limit(1)
-      .maybeSingle();
-
-    if (bizErr || !biz?.id) {
-      // Not found: ignore (could be a customer created outside this app).
-      return NextResponse.json({ received: true }, { status: 200 });
-    }
-
-    const patch = {
+    const patch: any = {
+      plan_id: planId,
+      status: String((sub as any).status ?? 'inactive'),
+      stripe_customer_id: customerId,
       stripe_subscription_id: sub.id,
-      subscription_status: sub.status ?? 'inactive',
-      current_period_end: toIsoFromUnixSeconds((sub as any).current_period_end),
+      current_period_end: isoFromUnixSeconds((sub as any).current_period_end),
+      cancel_at_period_end: Boolean((sub as any).cancel_at_period_end),
+      updated_at: new Date().toISOString(),
     };
 
-    const { error: updErr } = await supabaseAdmin
-      .from('business')
-      .update(patch)
-      .eq('id', biz.id);
+    // Prefer linking by userId (metadata), else fall back to stripe_subscription_id/customer.
+    if (userId) {
+      await supabaseAdmin.from('subscriptions').upsert({ user_id: userId, ...patch } as any, { onConflict: 'user_id' });
+      return NextResponse.json({ received: true }, { status: 200 });
+    }
 
-    if (updErr) {
-      // eslint-disable-next-line no-console
-      console.error('STRIPE_WEBHOOK_BUSINESS_UPDATE_FAILED', updErr);
-      return NextResponse.json({ error: 'Failed to update business' }, { status: 500 });
+    if (sub.id) {
+      const upd = await supabaseAdmin.from('subscriptions').update(patch).eq('stripe_subscription_id', sub.id);
+      if (!upd.error) return NextResponse.json({ received: true }, { status: 200 });
+    }
+
+    if (customerId) {
+      await supabaseAdmin.from('subscriptions').update(patch).eq('stripe_customer_id', customerId);
+      return NextResponse.json({ received: true }, { status: 200 });
     }
 
     return NextResponse.json({ received: true }, { status: 200 });

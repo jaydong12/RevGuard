@@ -21,6 +21,9 @@ import {
 } from 'recharts';
 import { PremiumBarChart } from '../../components/PremiumBarChart';
 import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
+import { atLeast, type PlanId } from '../../lib/plans';
+import { UpgradeModal } from '../../components/UpgradeModal';
+import { useRouter } from 'next/navigation';
 
 function ChartFrame({
   children,
@@ -1456,6 +1459,7 @@ const REPORT_LIBRARY_BASE: Array<{
   description: string;
   category: ReportCategory;
   icon: React.ComponentProps<typeof Icon>['name'];
+  minPlan: Exclude<PlanId, 'none'>;
 }> = [
   {
     id: 'pnl',
@@ -1464,6 +1468,7 @@ const REPORT_LIBRARY_BASE: Array<{
     description: 'Income, expenses, and net income with category breakdown.',
     category: 'Overview',
     icon: 'trend',
+    minPlan: 'starter',
   },
   {
     id: 'balance',
@@ -1472,6 +1477,7 @@ const REPORT_LIBRARY_BASE: Array<{
     description: 'Assets, liabilities, and equity with a simple breakdown.',
     category: 'Overview',
     icon: 'balance',
+    minPlan: 'starter',
   },
   {
     id: 'cashflow',
@@ -1480,6 +1486,7 @@ const REPORT_LIBRARY_BASE: Array<{
     description: 'Operating / investing / financing plus net cash change.',
     category: 'Cash',
     icon: 'cash',
+    minPlan: 'starter',
   },
   {
     id: 'sales_by_customer',
@@ -1489,6 +1496,7 @@ const REPORT_LIBRARY_BASE: Array<{
       'Sales are revenue transactions (amount > 0), grouped by customer_id (missing → Unknown Customer).',
     category: 'Sales',
     icon: 'doc',
+    minPlan: 'growth',
   },
   {
     id: 'expenses_by_vendor',
@@ -1497,6 +1505,7 @@ const REPORT_LIBRARY_BASE: Array<{
     description: 'Who you’re paying the most and where costs creep in.',
     category: 'Expenses',
     icon: 'doc',
+    minPlan: 'growth',
   },
 ];
 
@@ -1515,6 +1524,7 @@ const REPORT_LIBRARY = TAX_FEATURES_ENABLED
   : REPORT_LIBRARY_BASE;
 
 export default function ReportsPage() {
+  const router = useRouter();
   const perfEnabled = useMemo(() => {
     try {
       return typeof window !== 'undefined' && localStorage.getItem('revguard:perf') === '1';
@@ -1527,6 +1537,7 @@ export default function ReportsPage() {
     businessId: selectedBusinessId,
     userId,
     business,
+    userEmail,
     transactions: allTransactionsRaw,
     customers: customersRaw,
     loading: businessLoading,
@@ -1536,6 +1547,28 @@ export default function ReportsPage() {
   const [activeReportId, setActiveReportId] = useState<string>('pnl');
   const [search, setSearch] = useState('');
   const [basis, setBasis] = useState<Basis>('cash');
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [upgradeRequiredPlan, setUpgradeRequiredPlan] = useState<Exclude<PlanId, 'none'>>('growth');
+
+  const currentPlan: PlanId = useMemo(() => {
+    const email = String(userEmail ?? '').trim().toLowerCase();
+    const isAdmin = email === 'jaydongant@gmail.com' || email === 'shannon_g75@yahoo.com';
+    if (isAdmin) return 'pro';
+    const status = String((business as any)?.subscription_status ?? '').trim().toLowerCase();
+    const rawPlan = String((business as any)?.subscription_plan ?? '').trim().toLowerCase();
+    if (status !== 'active') return 'none';
+    if (rawPlan === 'starter') return 'starter';
+    if (rawPlan === 'growth') return 'growth';
+    return 'pro';
+  }, [business, userEmail]);
+
+  useEffect(() => {
+    const active = REPORT_LIBRARY.find((r) => r.id === activeReportId) ?? null;
+    if (!active) return;
+    if (!atLeast(currentPlan, active.minPlan)) {
+      setActiveReportId('pnl');
+    }
+  }, [activeReportId, currentPlan]);
 
   const now = useMemo(() => new Date(), []);
   const defaultRange = useMemo(() => getPresetRange(now, 'ytd'), [now]);
@@ -2179,7 +2212,7 @@ export default function ReportsPage() {
   }, [taxSettingsQ.isError]);
 
   return (
-    <main>
+    <main className="leading-relaxed md:leading-normal">
         {/* Top header */}
         <div className="no-print mb-5 flex flex-col md:flex-row md:items-start md:justify-between gap-3">
           <div>
@@ -2211,10 +2244,10 @@ export default function ReportsPage() {
           <div className="no-print mb-4 text-xs text-slate-400">Loading business…</div>
         )}
 
-        <div className="grid md:grid-cols-[280px,1fr] gap-4 items-start">
+        <div className="grid md:grid-cols-[280px,1fr] gap-6 md:gap-4 items-start">
           {/* Left sidebar: report library */}
           <aside className="no-print">
-            <GlassCard className="p-4">
+            <GlassCard className="p-5 md:p-4">
               <div className="flex items-center gap-2 mb-3">
                 <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-emerald-400/30 via-sky-400/20 to-blue-500/20 border border-slate-700/60 flex items-center justify-center text-emerald-200">
                   <Icon name="doc" />
@@ -2241,7 +2274,7 @@ export default function ReportsPage() {
                 />
               </div>
 
-              <div className="space-y-4">
+              <div className="space-y-5 md:space-y-4">
                 {(['Overview', 'Sales', 'Expenses', 'Taxes', 'Cash'] as const).map(
                   (cat) => {
                     const items = filteredLibrary.get(cat) ?? [];
@@ -2254,16 +2287,24 @@ export default function ReportsPage() {
                         <div className="space-y-1">
                           {items.map((r) => {
                             const active = r.id === activeReportId;
+                            const locked = !atLeast(currentPlan, r.minPlan);
                             return (
                               <button
                                 key={r.id}
                                 type="button"
                                 onClick={() => {
+                                  if (locked) {
+                                    setUpgradeRequiredPlan(r.minPlan);
+                                    setUpgradeOpen(true);
+                                    return;
+                                  }
                                   setActiveReportId(r.id);
                                 }}
                                 className={classNames(
                                   'w-full text-left rounded-xl px-3 py-2 border transition relative group',
-                                  active
+                                  locked
+                                    ? 'border-transparent bg-slate-900/20 text-slate-500 cursor-not-allowed'
+                                    : active
                                     ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.18)]'
                                     : 'border-transparent bg-slate-900/40 text-slate-200 hover:bg-slate-900/70',
                                 )}
@@ -2272,7 +2313,9 @@ export default function ReportsPage() {
                                   <div
                                     className={classNames(
                                       'mt-0.5 h-7 w-7 rounded-lg border flex items-center justify-center',
-                                      active
+                                      locked
+                                        ? 'border-slate-800/60 bg-slate-950/20 text-slate-600'
+                                        : active
                                         ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
                                         : 'border-slate-700/70 bg-slate-950/30 text-slate-400 group-hover:text-slate-200'
                                     )}
@@ -2287,8 +2330,11 @@ export default function ReportsPage() {
                                       {r.description}
                                     </div>
                                   </div>
+                                  {locked ? (
+                                    <div className="ml-auto text-xs text-slate-600">🔒</div>
+                                  ) : null}
                                 </div>
-                                {!active && (
+                                {!active && !locked && (
                                   <div className="pointer-events-none absolute inset-0 rounded-xl opacity-0 group-hover:opacity-100 transition shadow-[0_0_24px_rgba(34,197,94,0.08)]" />
                                 )}
                               </button>
@@ -2304,9 +2350,9 @@ export default function ReportsPage() {
           </aside>
 
           {/* Main panel */}
-          <section className="space-y-4">
+          <section className="space-y-6 md:space-y-4">
             {/* Top filter bar */}
-            <GlassCard className="no-print p-4">
+            <GlassCard className="no-print p-5 md:p-4">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2">
@@ -4223,6 +4269,17 @@ export default function ReportsPage() {
             </div>
           </section>
         </div>
+
+        <UpgradeModal
+          open={upgradeOpen}
+          requiredPlan={upgradeRequiredPlan}
+          currentPlan={currentPlan}
+          onClose={() => setUpgradeOpen(false)}
+          onConfirm={() => {
+            setUpgradeOpen(false);
+            router.push(`/pricing?upgrade=${encodeURIComponent(upgradeRequiredPlan)}&redirect=/reports`);
+          }}
+        />
     </main>
   );
 }

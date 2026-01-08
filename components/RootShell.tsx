@@ -25,6 +25,7 @@ const APP_SHELL_PREFIXES = [
   '/customers',
   '/workers',
   '/ai-advisor',
+  '/notifications',
   '/reports',
   '/settings',
   '/pricing',

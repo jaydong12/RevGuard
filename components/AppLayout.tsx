@@ -8,6 +8,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { getSupabaseClient, getSupabaseEnvError } from '../utils/supabaseClient';
+import type { FeatureKey, PlanId } from '../lib/plans';
+import { atLeast, requiredPlanForFeature } from '../lib/plans';
+import { UpgradeModal } from './UpgradeModal';
+import { MicroGuide } from './MicroGuide';
 
 function setAuthCookie(token: string | null) {
   try {
@@ -25,6 +29,7 @@ function setAuthCookie(token: string | null) {
 type NavItem = {
   label: string;
   href: string;
+  feature?: FeatureKey;
   icon:
     | 'dashboard'
     | 'transactions'
@@ -34,22 +39,24 @@ type NavItem = {
     | 'bills'
     | 'customers'
     | 'ai'
+    | 'notifications'
     | 'reports'
     | 'pricing'
     | 'settings';
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: 'dashboard' },
-  { label: 'Transactions', href: '/transactions', icon: 'transactions' },
-  { label: 'Bookings', href: '/dashboard/bookings', icon: 'bookings' },
-  { label: 'Workers', href: '/workers', icon: 'workers' },
-  { label: 'Invoices', href: '/invoices', icon: 'invoices' },
-  { label: 'Bills', href: '/bills', icon: 'bills' },
-  { label: 'Customers', href: '/customers', icon: 'customers' },
-  { label: 'AI Advisor', href: '/ai-advisor', icon: 'ai' },
-  { label: 'Reports', href: '/reports', icon: 'reports' },
-  { label: 'Settings', href: '/settings', icon: 'settings' },
+  { label: 'Dashboard', href: '/dashboard', icon: 'dashboard', feature: 'dashboard' },
+  { label: 'Transactions', href: '/transactions', icon: 'transactions', feature: 'transactions' },
+  { label: 'Bookings', href: '/dashboard/bookings', icon: 'bookings', feature: 'bookings' },
+  { label: 'Workers', href: '/workers', icon: 'workers', feature: 'workers' },
+  { label: 'Invoices', href: '/invoices', icon: 'invoices', feature: 'invoices' },
+  { label: 'Bills', href: '/bills', icon: 'bills', feature: 'bills' },
+  { label: 'Customers', href: '/customers', icon: 'customers', feature: 'customers' },
+  { label: 'AI Advisor', href: '/ai-advisor', icon: 'ai', feature: 'ai_advisor' },
+  { label: 'Reports', href: '/reports', icon: 'reports', feature: 'reports_basic' },
+  { label: 'Notifications', href: '/notifications', icon: 'notifications', feature: 'notifications' },
+  { label: 'Settings', href: '/settings', icon: 'settings', feature: 'settings' },
   { label: 'Pricing', href: '/pricing', icon: 'pricing' },
 ];
 
@@ -226,6 +233,23 @@ function NavIcon({ name }: { name: NavItem['icon'] }) {
       </svg>
     );
   }
+  if (name === 'notifications') {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M12 22a2.3 2.3 0 0 0 2.2-1.7H9.8A2.3 2.3 0 0 0 12 22Z"
+          fill="currentColor"
+          opacity="0.8"
+        />
+        <path
+          d="M18 16H6l1.2-1.5V10a4.8 4.8 0 0 1 9.6 0v4.5L18 16Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
   // settings
   return (
     <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
@@ -254,8 +278,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [appResetKey, setAppResetKey] = useState(0);
   const [subscriptionActive, setSubscriptionActive] = useState<boolean>(true);
   const [subscriptionChecked, setSubscriptionChecked] = useState<boolean>(false);
+  const [currentPlan, setCurrentPlan] = useState<PlanId>('none');
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [upgradeRequiredPlan, setUpgradeRequiredPlan] = useState<Exclude<PlanId, 'none'>>('starter');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [microGuideEnabled, setMicroGuideEnabled] = useState(false);
   // IMPORTANT: Avoid reading window/localStorage during render to prevent hydration mismatches.
   // Use a deterministic default for the first render, then hydrate from localStorage in an effect.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -324,21 +352,84 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       it.href !== '/pricing' // keep pricing accessible via sidebar/desktop; keep mobile More focused
   );
 
-  async function getSubscriptionActiveForOwner(userId: string): Promise<boolean> {
-    if (!supabase) return false;
+  async function getSubscriptionInfoForOwner(userId: string): Promise<{
+    active: boolean;
+    plan: PlanId;
+  }> {
+    if (!supabase) return { active: false, plan: 'none' };
+
+    // New model (preferred): subscriptions table (per-user)
+    try {
+      const subRes = await supabase
+        .from('subscriptions')
+        .select('plan_id,status,current_period_end')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (!subRes.error) {
+        const status = String((subRes.data as any)?.status ?? 'inactive').trim().toLowerCase();
+        const rawPlan = String((subRes.data as any)?.plan_id ?? '').trim().toLowerCase();
+        const cpe = (subRes.data as any)?.current_period_end ? String((subRes.data as any).current_period_end) : null;
+        const okStatus = status === 'active' || status === 'trialing';
+        const okPeriod = !cpe
+          ? true
+          : (() => {
+              const d = new Date(cpe);
+              return Number.isNaN(d.getTime()) ? true : d.getTime() > Date.now();
+            })();
+        const active = okStatus && okPeriod;
+        const plan: PlanId =
+          rawPlan === 'starter'
+            ? 'starter'
+            : rawPlan === 'growth'
+              ? 'growth'
+              : rawPlan === 'pro'
+                ? 'pro'
+                : active
+                  ? 'pro'
+                  : 'none';
+        return { active, plan: active ? plan : 'none' };
+      }
+    } catch {
+      // ignore and fall back
+    }
+
+    // Legacy fallback (older schema): business.subscription_status/subscription_plan
     const first = await supabase
       .from('business')
-      .select('id, subscription_status')
+      // subscription_plan may not exist in older DBs; fallback below.
+      .select('id, subscription_status, subscription_plan')
       .eq('owner_id', userId)
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
 
     // If the row doesn't exist yet (trigger not applied / race), treat as inactive (paywall).
-    if (first.error || !first.data?.id) return false;
+    if (first.error) {
+      const msg = String((first.error as any)?.message ?? '');
+      const code = String((first.error as any)?.code ?? '');
+      const missingCol = code === '42703' || /column .*subscription_plan.* does not exist/i.test(msg);
+      if (!missingCol) return { active: false, plan: 'none' };
+
+      // Fallback: older DB without subscription_plan column.
+      const fallback = await supabase
+        .from('business')
+        .select('id, subscription_status')
+        .eq('owner_id', userId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (fallback.error || !fallback.data?.id) return { active: false, plan: 'none' };
+      const status = String((fallback.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+      return { active: status === 'active', plan: status === 'active' ? 'pro' : 'none' };
+    }
+    if (!first.data?.id) return { active: false, plan: 'none' };
 
     const status = String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
-    return status === 'active';
+    const rawPlan = String((first.data as any)?.subscription_plan ?? '').trim().toLowerCase();
+    const plan: PlanId =
+      rawPlan === 'starter' ? 'starter' : rawPlan === 'growth' ? 'growth' : rawPlan === 'pro' ? 'pro' : status === 'active' ? 'pro' : 'none';
+    return { active: status === 'active', plan: status === 'active' ? plan : 'none' };
   }
 
   function clearAppClientCache() {
@@ -397,6 +488,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         if (email && (email === 'jaydongant@gmail.com' || email === 'shannon_g75@yahoo.com')) {
           if (!mounted) return;
           setSubscriptionActive(true);
+          setCurrentPlan('pro');
           setSubscriptionChecked(true);
           return;
         }
@@ -405,17 +497,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         if (!userId) {
           if (!mounted) return;
           setSubscriptionActive(true);
+          setCurrentPlan('none');
           setSubscriptionChecked(true);
           return;
         }
 
-        const isActive = await getSubscriptionActiveForOwner(userId);
+        const info = await getSubscriptionInfoForOwner(userId);
         if (!mounted) return;
-        setSubscriptionActive(isActive);
+        setSubscriptionActive(info.active);
+        setCurrentPlan(info.plan);
         setSubscriptionChecked(true);
       } catch {
         if (!mounted) return;
         setSubscriptionActive(false);
+        setCurrentPlan('none');
         setSubscriptionChecked(true);
       }
     }
@@ -487,10 +582,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           const { data } = await supabase.auth.getSession();
           const userId = data.session?.user?.id ?? null;
           if (!userId) return;
-          const isActive = await getSubscriptionActiveForOwner(userId);
+          const info = await getSubscriptionInfoForOwner(userId);
           if (cancelled) return;
-          if (isActive) {
+          if (info.active) {
             setSubscriptionActive(true);
+            setCurrentPlan(info.plan);
           }
         } catch {
           // ignore
@@ -503,6 +599,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       window.clearInterval(interval);
     };
   }, [subscriptionChecked, subscriptionActive]);
+
+  // Minimal micro-guide: runs once per user (tracked in localStorage).
+  // IMPORTANT: must live above any early returns so hooks are never conditional.
+  useEffect(() => {
+    const uid = String(sessionUserId ?? '').trim();
+    if (!uid) {
+      setMicroGuideEnabled(false);
+      return;
+    }
+    if (String(memberRole ?? '').toLowerCase() === 'employee') {
+      setMicroGuideEnabled(false);
+      return;
+    }
+    try {
+      const guideDone = localStorage.getItem(`revguard:onboarding:micro_guide_v1:${uid}`) === '1';
+      setMicroGuideEnabled(!guideDone);
+    } catch {
+      setMicroGuideEnabled(false);
+    }
+  }, [sessionUserId, memberRole, pathname]);
 
   if (!mounted) {
     // Keep markup stable between server + first client render, while still running hooks in a stable order.
@@ -525,6 +641,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  function openUpgrade(required: Exclude<PlanId, 'none'>) {
+    setUpgradeRequiredPlan(required);
+    setUpgradeOpen(true);
+  }
+
+  function isLocked(item: NavItem): { locked: boolean; required: Exclude<PlanId, 'none'> | null } {
+    if (!item.feature) return { locked: false, required: null };
+    const req = requiredPlanForFeature(item.feature);
+    // req can be 'none' only if mapping is missing; treat as pro.
+    const required = (req === 'starter' || req === 'growth' || req === 'pro' ? req : 'pro') as Exclude<PlanId, 'none'>;
+    const allowed = atLeast(currentPlan, required);
+    return { locked: !allowed, required };
+  }
+
+  function tourKeyForHref(href: string): string | null {
+    if (href === '/dashboard') return 'nav-dashboard';
+    if (href === '/transactions') return 'nav-transactions';
+    if (href === '/ai-advisor') return 'nav-alerts';
+    if (href === '/reports') return 'nav-reports';
+    return null;
   }
 
   return (
@@ -589,13 +727,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <nav className="h-full space-y-1 text-sm overflow-y-auto pr-1">
             {navItems.map((item) => {
               const active = isActive(pathname, item.href);
+              const lock = isLocked(item);
+              const tour = tourKeyForHref(item.href);
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  data-tour={tour ?? undefined}
                   title={sidebarCollapsed ? item.label : undefined}
+                  onClick={(e) => {
+                    if (lock.locked && lock.required) {
+                      e.preventDefault();
+                      openUpgrade(lock.required);
+                    }
+                  }}
                   className={`flex items-center rounded-xl py-2 transition-colors ${
-                    active
+                    lock.locked
+                      ? 'text-slate-500 bg-transparent border border-transparent opacity-80 cursor-not-allowed'
+                      : active
                       ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40 shadow-sm shadow-emerald-500/40'
                       : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-transparent'
                   } ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
@@ -604,6 +753,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   <span className={sidebarCollapsed ? 'hidden' : 'truncate'}>
                     {item.label}
                   </span>
+                  {!sidebarCollapsed && lock.locked ? (
+                    <span className="ml-auto text-xs text-slate-600">🔒</span>
+                  ) : null}
                 </Link>
               );
             })}
@@ -692,19 +844,32 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <nav className="mt-4 grid grid-cols-2 gap-2 text-sm">
               {moreNavItems.map((item) => {
                 const active = isActive(pathname, item.href);
+                const lock = isLocked(item);
+                const tour = tourKeyForHref(item.href);
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
+                    data-tour={tour ?? undefined}
                     onClick={() => setMobileMoreOpen(false)}
                     className={`flex items-center gap-2 rounded-xl px-3 py-3 transition-colors ${
-                      active
+                      lock.locked
+                        ? 'text-slate-500 border border-white/10 bg-white/5 opacity-80'
+                        : active
                         ? 'bg-emerald-500/15 text-emerald-200 border border-emerald-500/40'
                         : 'text-slate-300 hover:text-slate-50 hover:bg-slate-900/80 border border-white/10 bg-white/5'
                     }`}
+                    onClickCapture={(e) => {
+                      if (lock.locked && lock.required) {
+                        e.preventDefault();
+                        setMobileMoreOpen(false);
+                        openUpgrade(lock.required);
+                      }
+                    }}
                   >
                     <NavIcon name={item.icon} />
                     <span className="truncate">{item.label}</span>
+                    {lock.locked ? <span className="ml-auto text-xs text-slate-600">🔒</span> : null}
                   </Link>
                 );
               })}
@@ -734,13 +899,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="grid grid-cols-5 gap-1">
               {bottomNavItems.map((item) => {
                 const active = isActive(pathname, item.href);
+                const lock = isLocked(NAV_ITEMS.find((x) => x.href === item.href) ?? ({} as any));
+                const tour = tourKeyForHref(item.href);
                 return (
                   <button
                     key={item.href}
                     type="button"
-                    onClick={() => router.push(item.href)}
+                    data-tour={tour ?? undefined}
+                    onClick={() => {
+                      if (lock?.locked && lock?.required) {
+                        openUpgrade(lock.required);
+                        return;
+                      }
+                      router.push(item.href);
+                    }}
                     className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-[10px] transition ${
-                      active
+                      lock?.locked
+                        ? 'text-slate-500 border border-transparent opacity-80'
+                        : active
                         ? 'text-emerald-200 bg-emerald-500/10 border border-emerald-500/30'
                         : 'text-slate-300 hover:text-slate-50 hover:bg-white/5 border border-transparent'
                     }`}
@@ -769,6 +945,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </div>
+
+      <UpgradeModal
+        open={upgradeOpen}
+        requiredPlan={upgradeRequiredPlan}
+        currentPlan={currentPlan}
+        onClose={() => setUpgradeOpen(false)}
+        onConfirm={() => {
+          setUpgradeOpen(false);
+          router.push(`/pricing?upgrade=${encodeURIComponent(upgradeRequiredPlan)}`);
+        }}
+      />
+
+      <MicroGuide
+        enabled={microGuideEnabled}
+        userId={String(sessionUserId ?? '')}
+        pathname={pathname}
+        onDone={() => setMicroGuideEnabled(false)}
+      />
     </div>
   );
 }

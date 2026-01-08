@@ -18,6 +18,28 @@ function fmt(value: unknown) {
   return Math.round(n).toLocaleString('en-US');
 }
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    try {
+      const mq = window.matchMedia('(max-width: 767px)');
+      const apply = () => setIsMobile(Boolean(mq.matches));
+      apply();
+      if (typeof mq.addEventListener === 'function') {
+        mq.addEventListener('change', apply);
+        return () => mq.removeEventListener('change', apply);
+      }
+      // Safari fallback
+      mq.addListener(apply);
+      return () => mq.removeListener(apply);
+    } catch {
+      setIsMobile(false);
+      return;
+    }
+  }, []);
+  return isMobile;
+}
+
 function parseTxDate(raw: unknown): Date | null {
   if (typeof raw !== 'string') return null;
   // Common case: YYYY-MM-DD stored as a date (no timezone). Parse as LOCAL date
@@ -65,6 +87,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
   loading = false,
   animationKey,
 }) => {
+  const isMobile = useIsMobile();
   // Keep a ref for ResizeObserver when available, but do NOT block rendering on it.
   // Some environments may not support ResizeObserver; Recharts can still render.
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -210,6 +233,13 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
     return [-padded, padded] as [number, number];
   }, [safeData]);
 
+  // Mobile-only chart spacing tweaks (keep desktop identical).
+  const chartHeight = isMobile ? 320 : 260;
+  const barCategoryGap = isMobile ? 18 : '22%';
+  const barSize = isMobile ? (mode === 'year' ? 26 : 18) : mode === 'year' ? 34 : 26;
+  const xInterval = isMobile && mode !== 'year' ? 1 : 0; // show every other month on mobile
+  const yTickCount = isMobile ? 5 : undefined;
+
   const txCountInView = useMemo(() => {
     if (mode === 'year') return normalizedTxs.length;
     if (!activeYear) return 0;
@@ -338,14 +368,14 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
       </div>
 
       {/* Bar chart for Jan–Dec net change */}
-      <div ref={containerRef} className="relative min-h-[260px] w-full">
+      <div ref={containerRef} className="relative min-h-[320px] md:min-h-[260px] w-full">
         {containerReady && !loading ? (
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={chartHeight}>
             <BarChart
               key={animationKey}
               data={(safeData ?? []) as any}
               margin={{ top: 14, right: 20, bottom: 14, left: 20 }}
-              barCategoryGap="22%"
+              barCategoryGap={barCategoryGap as any}
               onMouseMove={(state: any) => {
                 const idx = typeof state?.activeTooltipIndex === 'number' ? state.activeTooltipIndex : null;
                 setActiveBarIndex(idx);
@@ -379,16 +409,18 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
             />
             <XAxis
               dataKey="label"
-              tick={{ fill: '#94a3b8', fontSize: 10 }}
+              tick={{ fill: '#94a3b8', fontSize: isMobile ? 9 : 10 }}
               axisLine={{ stroke: '#475569', strokeWidth: 1 }}
               tickLine={{ stroke: '#475569', strokeWidth: 1 }}
+              interval={xInterval as any}
             />
             <YAxis
-              tick={{ fill: '#94a3b8', fontSize: 10 }}
+              tick={{ fill: '#94a3b8', fontSize: isMobile ? 9 : 10 }}
               axisLine={{ stroke: '#475569', strokeWidth: 1 }}
               tickLine={{ stroke: '#475569', strokeWidth: 1 }}
               tickFormatter={(v: number) => fmt(v)}
               domain={yDomain as any}
+              tickCount={yTickCount as any}
             />
             <Tooltip
               content={<TooltipCard />}
@@ -400,7 +432,7 @@ const CashBarChart: React.FC<CashBarChartProps> = ({
               isAnimationActive={true}
               animationDuration={520}
               animationEasing="ease-out"
-              barSize={mode === 'year' ? 34 : 26}
+              barSize={barSize}
               radius={[10, 10, 10, 10]}
             >
               {(safeData ?? []).map((entry: any, idx: number) => {

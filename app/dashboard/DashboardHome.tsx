@@ -801,6 +801,8 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
   const {
     businessId: selectedBusinessId,
     userId,
+    business,
+    memberRole,
     transactions: transactionsRaw,
     bills: billsRaw,
     invoices: invoicesRaw,
@@ -1929,21 +1931,26 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
       }
       const { data: sess } = await supabase.auth.getSession();
       const userId = sess.session?.user?.id;
+      const token = sess.session?.access_token ?? null;
       if (!userId) {
         setInsightsError('Log in to run analysis.');
         return;
       }
 
       const { from, to } = getRangeForPreset(insightPreset);
-      if (insightPreset === 'custom') {
-        if (!isValidIsoDate(from) || !isValidIsoDate(to)) {
-          setInsightsError('Enter valid dates (numbers only). Format: YYYY-MM-DD.');
-          return;
-        }
-        if (from > to) {
-          setInsightsError('Start date must be before end date.');
-          return;
-        }
+      // Validate for ALL presets so we never hit the API with invalid params (prevents 400s).
+      if (!isValidIsoDate(from) || !isValidIsoDate(to)) {
+        setInsightsError('Enter valid dates (numbers only). Format: YYYY-MM-DD.');
+        return;
+      }
+      if (from > to) {
+        setInsightsError('Start date must be before end date.');
+        return;
+      }
+      if (!token) {
+        // Without a token we can’t attach memory context; fail closed to avoid confusing 400s.
+        setInsightsError('Please log in again to run analysis.');
+        return;
       }
       const prev = insightPreset === 'ytd'
         ? { from: `${new Date().getFullYear() - 1}-01-01`, to: addDaysISO(todayISO(), -365) }
@@ -1954,8 +1961,9 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
 
       const res = await fetch('/api/ai/analysis-run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
+          businessId: selectedBusinessId,
           businessName: 'My Business',
           from,
           to,
