@@ -3143,9 +3143,7 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
                         type="button"
                         onClick={() =>
                           router.push(
-                            `/login?redirect=${encodeURIComponent(
-                              '/transactions'
-                            )}`
+                            `/login?next=${encodeURIComponent('/transactions')}`
                           )
                         }
                         className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400"
@@ -3157,9 +3155,7 @@ function DashboardHomeInner({ appData }: { appData: ReturnType<typeof useAppData
                           type="button"
                           onClick={() =>
                             router.push(
-                              `/signup?redirect=${encodeURIComponent(
-                                '/transactions'
-                              )}`
+                              `/signup?next=${encodeURIComponent('/transactions')}`
                             )
                           }
                           className="text-emerald-200 hover:text-emerald-100"

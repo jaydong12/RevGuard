@@ -158,7 +158,7 @@ export default function ClockPage() {
       const { data: sess } = await supabase.auth.getSession();
       const userId = sess.session?.user?.id ?? null;
       if (!userId) {
-        router.replace('/login?redirect=/clock');
+        router.replace('/signup?next=/clock');
         return;
       }
 

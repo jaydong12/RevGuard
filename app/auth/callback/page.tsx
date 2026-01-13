@@ -19,11 +19,29 @@ function setAuthCookie(token: string | null) {
 export default function AuthCallbackPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get('next') || params.get('redirect') || '/dashboard';
+  const rawNext = params.get('next') || '/dashboard';
+  const legacyRedirectParam = params.get('redirect');
+  const codeParam = params.get('code');
+  const next =
+    rawNext === '/login' ||
+    rawNext === '/signup' ||
+    String(rawNext).startsWith('/login/') ||
+    String(rawNext).startsWith('/signup/')
+      ? '/dashboard'
+      : rawNext;
 
   const [message, setMessage] = useState('Finishing sign-in…');
 
   useEffect(() => {
+    // Hard sanitizer: strip legacy `redirect` param, preserving `code` + `next`.
+    if (legacyRedirectParam !== null) {
+      const sp = new URLSearchParams();
+      if (codeParam) sp.set('code', codeParam);
+      sp.set('next', '/dashboard');
+      router.replace(`/auth/callback?${sp.toString()}`);
+      return;
+    }
+
     let alive = true;
     (async () => {
       try {
@@ -48,7 +66,7 @@ export default function AuthCallbackPage() {
         setMessage(e?.message ? `Sign-in failed: ${e.message}` : 'Sign-in failed.');
         // Give them a way out.
         window.setTimeout(() => {
-          router.replace('/login?redirect=/dashboard');
+          router.replace('/dashboard');
         }, 800);
       }
     })();

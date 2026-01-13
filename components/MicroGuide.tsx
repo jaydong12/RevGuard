@@ -171,13 +171,8 @@ export function MicroGuide({
   const cy = r ? r.top + r.height / 2 : 100;
   const radius = r ? Math.max(44, Math.max(r.width, r.height) / 2 + pad) : 64;
 
-  // Tooltip placement
-  const tooltipW = 320;
-  const tooltipX = clamp(cx - tooltipW / 2, 12, window.innerWidth - tooltipW - 12);
-  const tooltipY = clamp((r ? r.bottom + 12 : cy + 12), 12, window.innerHeight - 140);
-
   return (
-    <div className="fixed inset-0 z-[105] pointer-events-none">
+    <div className="fixed inset-0 z-[220] pointer-events-none">
       {/* Spotlight layer (non-blocking) */}
       <div
         className="absolute inset-0"
@@ -187,10 +182,7 @@ export function MicroGuide({
       />
 
       {/* Tooltip */}
-      <div
-        className="absolute pointer-events-auto"
-        style={{ left: tooltipX, top: tooltipY, width: tooltipW }}
-      >
+      <div className="fixed bottom-6 right-6 pointer-events-auto z-[230] w-[280px] sm:w-[320px] max-w-[calc(100vw-32px)]">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/95 backdrop-blur shadow-[0_18px_60px_rgba(0,0,0,0.45)] overflow-hidden">
           <div className="px-4 py-3 flex items-start justify-between gap-3">
             <div>

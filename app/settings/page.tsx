@@ -287,7 +287,7 @@ export default function SettingsPage() {
       } catch {
         // ignore
       }
-      router.push('/login');
+      router.push('/signup');
     } finally {
       setSigningOut(false);
     }

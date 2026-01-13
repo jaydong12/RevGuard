@@ -47,7 +47,7 @@ export function AuthCard({
           </Link>
         </div>
 
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/50 backdrop-blur-sm shadow-[0_0_0_1px_rgba(148,163,184,0.06)] overflow-hidden">
+        <div className="relative rounded-2xl border border-slate-800 bg-slate-950/50 backdrop-blur-sm shadow-[0_0_0_1px_rgba(148,163,184,0.06)] overflow-hidden">
           <div className="px-6 py-5 border-b border-slate-800/80">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -69,10 +69,10 @@ export function AuthCard({
             </div>
           </div>
 
-          <div className="px-6 py-5">{children}</div>
+          <div className="relative px-6 py-5">{children}</div>
 
           {footer && (
-            <div className={classNames('px-6 py-4 border-t border-slate-800/80')}>
+            <div className={classNames('relative z-10 px-6 py-4 border-t border-slate-800/80 pointer-events-auto')}>
               {footer}
             </div>
           )}

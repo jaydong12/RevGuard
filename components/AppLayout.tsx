@@ -370,8 +370,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const bottomNavItems: Array<{ label: string; href: string; icon: NavItem['icon'] }> = [
     { label: 'Home', href: '/dashboard', icon: 'dashboard' },
-    // Mobile label "Alerts" maps to existing AI Advisor route (no new routes).
-    { label: 'Alerts', href: '/ai-advisor', icon: 'ai' },
+    { label: 'Advisor', href: '/ai-advisor', icon: 'ai' },
     { label: 'Transactions', href: '/transactions', icon: 'transactions' },
     { label: 'Invoices', href: '/invoices', icon: 'invoices' },
   ];
@@ -526,7 +525,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       setSessionUserId(null);
       setMemberRole(null);
       setAppResetKey((k) => k + 1);
-      router.replace('/login');
+      router.replace('/signup');
     } finally {
       setLoggingOut(false);
     }
@@ -714,7 +713,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   function tourKeyForHref(href: string): string | null {
     if (href === '/dashboard') return 'nav-dashboard';
     if (href === '/transactions') return 'nav-transactions';
-    if (href === '/ai-advisor') return 'nav-alerts';
+    if (href === '/ai-advisor') return 'nav-advisor';
     if (href === '/reports') return 'nav-reports';
     return null;
   }

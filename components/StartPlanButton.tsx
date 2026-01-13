@@ -36,6 +36,31 @@ async function ensureSingleBusiness(userId: string, email?: string | null) {
   return String((ins.data as any)?.id);
 }
 
+export async function startStripeCheckout(plan: Exclude<PlanId, 'none'>, session: any) {
+  if (!session?.access_token || !session?.user?.id) {
+    throw new Error('Not authenticated.');
+  }
+
+  const userId = String(session.user.id);
+  await ensureSingleBusiness(userId, session.user.email);
+
+  const res = await fetch('/api/stripe/checkout', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${String(session.access_token)}`,
+    },
+    body: JSON.stringify({ planId: plan }),
+  });
+
+  const body = (await res.json().catch(() => null)) as { url?: string; error?: string } | null;
+  if (!res.ok || !body?.url) {
+    throw new Error(body?.error || 'Failed to start checkout.');
+  }
+
+  return body.url;
+}
+
 export function StartPlanButton({
   plan,
   className,
@@ -59,27 +84,14 @@ export function StartPlanButton({
       const { data } = await supabase.auth.getSession();
       const session = data.session;
       if (!session) {
-        router.push('/login?redirect=/pricing');
+        // Only require login once the user confirms they want to start checkout (this click).
+        // Preserve the chosen plan so pricing can continue checkout post-login.
+        router.push(`/signup?next=/pricing&plan=${encodeURIComponent(plan)}`);
         return;
       }
 
-      const userId = session.user.id;
-      await ensureSingleBusiness(userId, session.user.email);
-
-      const res = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ planId: plan }),
-      });
-      const body = (await res.json()) as { url?: string; error?: string };
-      if (!res.ok || !body.url) {
-        throw new Error(body.error || 'Failed to start checkout.');
-      }
-
-      window.location.href = body.url;
+      const url = await startStripeCheckout(plan, session);
+      window.location.href = url;
     } catch (e: any) {
       // eslint-disable-next-line no-console
       console.error('START_PLAN_ERROR', plan, e);

@@ -2,10 +2,9 @@
 
 import React, { Suspense, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { AuthCard } from '../../components/AuthCard';
 import { supabase } from '../../utils/supabaseClient';
-import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 
 function classNames(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ');
@@ -37,43 +36,42 @@ export default function LoginPage() {
 
 function LoginInner() {
   const router = useRouter();
+  const params = useSearchParams();
+  const nextParam = String(params.get('next') ?? '').trim();
+  const planParam = String(params.get('plan') ?? '').trim().toLowerCase();
+  const legacyRedirectParam = params.get('redirect');
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
-  async function getSubscriptionStatus(userId: string): Promise<string> {
-    const first = await supabase
-      .from('business')
-      .select('id, subscription_status')
-      .eq('owner_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    // If the row doesn't exist yet (trigger not applied / race), treat as inactive (paywall).
-    if (first.error || !first.data?.id) return 'inactive';
-
-    return String((first.data as any)?.subscription_status ?? 'inactive').toLowerCase();
+  function normalizeNextPath(raw: string): string | null {
+    if (!raw) return null;
+    // Only allow same-origin relative paths.
+    if (!raw.startsWith('/')) return null;
+    // Avoid weird protocol-relative URLs.
+    if (raw.startsWith('//')) return null;
+    // Avoid loops.
+    if (raw === '/login' || raw.startsWith('/login/')) return '/dashboard';
+    if (raw === '/signup' || raw.startsWith('/signup/')) return '/dashboard';
+    return raw;
   }
 
-  async function businessProfileIncompleteForUser(userId: string): Promise<boolean> {
-    const bizId = await getOrCreateBusinessId(supabase);
-    const { data: biz, error } = await supabase
-      .from('business')
-      .select('id, name, email, phone')
-      .eq('id', bizId)
-      .maybeSingle();
-
-    if (error || !biz) return true;
-
-    const name = String((biz as any)?.name ?? '').trim();
-    const emailV = String((biz as any)?.email ?? '').trim();
-    const phoneV = String((biz as any)?.phone ?? '').trim();
-    return !name || (!emailV && !phoneV);
+  function normalizePlanId(raw: string): 'starter' | 'growth' | 'pro' | null {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (s === 'starter' || s === 'growth' || s === 'pro') return s;
+    return null;
   }
+
+  // Hard sanitizer: if legacy `redirect` param exists at all (e.g. /login?redirect=/login),
+  // immediately replace the URL to a safe canonical form.
+  React.useEffect(() => {
+    if (legacyRedirectParam === null) return;
+    router.replace('/login?next=/dashboard');
+  }, [legacyRedirectParam, router]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -94,7 +92,7 @@ function LoginInner() {
       const userId = sess.session?.user?.id ?? null;
       const userEmail = String(sess.session?.user?.email ?? '').trim().toLowerCase();
       if (!userId) {
-        router.replace('/login?redirect=/pricing');
+        setError('Login succeeded, but your session could not be loaded. Please refresh and try again.');
         return;
       }
 
@@ -103,39 +101,19 @@ function LoginInner() {
         return;
       }
 
-      // Employee routing: employees should go straight to /clock and must not be forced through business creation/profile.
-      try {
-        const { data: member, error: memberErr } = await supabase
-          .from('business_members')
-          .select('business_id, role')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        const mRole = String((member as any)?.role ?? '').toLowerCase();
-        if (!memberErr && (member as any)?.business_id && mRole === 'employee') {
-          router.replace('/clock');
-          return;
-        }
-      } catch {
-        // ignore and fall through
+      // Honor a requested post-login destination (e.g. pricing -> continue checkout).
+      const nextPath = normalizeNextPath(nextParam);
+      const plan = normalizePlanId(planParam);
+      if (nextPath === '/pricing' && plan) {
+        router.replace(`/pricing?plan=${encodeURIComponent(plan)}`);
+        return;
+      }
+      if (nextPath) {
+        router.replace(nextPath);
+        return;
       }
 
-      // Ensure business exists and route to Business Profile if incomplete.
-      try {
-        const needsBizProfile = await businessProfileIncompleteForUser(userId);
-        if (needsBizProfile) {
-          router.replace('/settings');
-          return;
-        }
-      } catch {
-        // ignore; fall through to paywall logic
-      }
-
-      const status = await getSubscriptionStatus(userId);
-
-      if (status !== 'active') router.replace('/pricing');
-      else router.replace('/dashboard');
+      router.replace('/dashboard');
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error('LOGIN_ERROR', err);
@@ -214,12 +192,57 @@ function LoginInner() {
             </label>
             <label className="block text-xs text-slate-300">
               Password
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-slate-950/60 border border-slate-800 px-3 py-2 text-sm text-slate-100"
-              />
+              <div className="mt-1 relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-xl bg-slate-950/60 border border-slate-800 px-3 py-2 pr-12 text-sm text-slate-100"
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-800 bg-slate-950/40 text-slate-200 hover:bg-slate-900/60"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? (
+                    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
+                      <path
+                        d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      />
+                      <path
+                        d="M4 4l16 16"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
+                      <path
+                        d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      />
+                    </svg>
+                  )}
+                </button>
+              </div>
             </label>
 
             <div className="flex items-center justify-between">

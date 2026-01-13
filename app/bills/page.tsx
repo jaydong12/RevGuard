@@ -88,6 +88,7 @@ function BillingSection() {
     if (bill.status === 'PAID') return 'PAID';
     const due = new Date(bill.due_date);
     const isSameDay = due.toDateString() === today.toDateString();
+    // Overdue = due_date < today AND unpaid (status != PAID).
     if (due < today && !isSameDay) return 'OVERDUE';
     if (isSameDay) return 'TODAY';
     return 'UPCOMING';
@@ -498,7 +499,81 @@ function BillingSection() {
           </div>
         </div>
       )}
-      <div className="border border-slate-800 rounded-2xl overflow-hidden bg-slate-950/80">
+
+      {/* Mobile: stacked bill cards */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 text-xs text-slate-400">
+            Loading bills...
+          </div>
+        ) : filteredBills.length === 0 ? (
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 text-xs text-slate-500">
+            No bills to show.
+          </div>
+        ) : (
+          pageBills.map((bill) => {
+            const status = getComputedStatus(bill);
+            const statusLabel =
+              status === 'UPCOMING'
+                ? 'Upcoming'
+                : status === 'TODAY'
+                  ? 'Due Today'
+                  : status === 'OVERDUE'
+                    ? 'Overdue'
+                    : 'Paid';
+            const statusClass =
+              status === 'OVERDUE'
+                ? 'bg-rose-900 text-rose-200'
+                : status === 'TODAY'
+                  ? 'bg-amber-900 text-amber-100'
+                  : status === 'UPCOMING'
+                    ? 'bg-emerald-900 text-emerald-200'
+                    : 'bg-slate-700 text-slate-200';
+
+            return (
+              <div
+                key={bill.id}
+                className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-100 truncate">
+                      {bill.vendor || 'Vendor'}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-400">
+                      Due: <span className="text-slate-200">{bill.due_date || '—'}</span>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-lg font-bold text-slate-50">
+                      ${formatCurrency(bill.amount)}
+                    </div>
+                    <div className={`mt-1 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${statusClass}`}>
+                      {statusLabel}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                  <div className="min-w-0">
+                    <div className="text-slate-500">Category</div>
+                    <div className="mt-0.5 text-slate-200 truncate">
+                      {bill.category || '—'}
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-slate-500">Status</div>
+                    <div className="mt-0.5 text-slate-200 truncate">{statusLabel}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Desktop: table layout */}
+      <div className="hidden md:block border border-slate-800 rounded-2xl overflow-hidden bg-slate-950/80">
         <table className="w-full text-sm">
           <thead className="bg-slate-900 text-xs text-slate-400">
             <tr>
@@ -534,7 +609,7 @@ function BillingSection() {
               </tr>
             )}
             {!loading &&
-              filteredBills.map((bill) => {
+              pageBills.map((bill) => {
                 const status = getComputedStatus(bill);
                 const due =
                   bill.due_date && !Number.isNaN(new Date(bill.due_date).getTime())

@@ -20,6 +20,8 @@ const AUTH_ONLY_NO_SUBSCRIPTION = new Set<string>(['/billing/success']);
 
 function isPublicPath(pathname: string) {
   if (PUBLIC_PATHS.has(pathname)) return true;
+  // Make pricing explicitly public (even if a trailing slash or nested segment appears).
+  if (pathname === '/pricing' || pathname.startsWith('/pricing/')) return true;
   if (pathname.startsWith('/auth/')) return true;
   return false;
 }
@@ -28,12 +30,128 @@ function isAuthOnlyNoSubscriptionPath(pathname: string) {
   return AUTH_ONLY_NO_SUBSCRIPTION.has(pathname);
 }
 
+function isOnboardingPath(pathname: string) {
+  return pathname === '/onboarding' || pathname.startsWith('/onboarding/');
+}
+
+function isOnboardingApi(pathname: string) {
+  return pathname === '/api/onboarding' || pathname.startsWith('/api/onboarding/');
+}
+
+async function getAccountCompletionState(params: {
+  token: string;
+  userId: string;
+}): Promise<{
+  profileExists: boolean;
+  profileOnboardingComplete: boolean;
+  businessMemberExists: boolean;
+  businessId: string | null;
+  businessOnboardingComplete: boolean | null;
+  memberRole: string | null;
+}> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) {
+    // Fail open if Supabase is not configured.
+    return {
+      profileExists: true,
+      profileOnboardingComplete: true,
+      businessMemberExists: true,
+      businessId: null,
+      businessOnboardingComplete: null,
+      memberRole: null,
+    };
+  }
+
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${params.token}`,
+    Accept: 'application/json',
+  } as const;
+
+  let profileExists = false;
+  let profileOnboardingComplete = false;
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/profiles`);
+    url.searchParams.set('select', 'id,onboarding_complete');
+    url.searchParams.set('id', `eq.${params.userId}`);
+    url.searchParams.set('limit', '1');
+    const res = await fetch(url.toString(), { headers, cache: 'no-store' });
+    if (res.ok) {
+      const rows = (await res.json().catch(() => [])) as any[];
+      profileExists = Boolean(rows?.[0]?.id);
+      profileOnboardingComplete = Boolean(rows?.[0]?.onboarding_complete);
+    }
+  } catch {
+    profileExists = false;
+    profileOnboardingComplete = false;
+  }
+
+  let businessMemberExists = false;
+  let businessId: string | null = null;
+  let memberRole: string | null = null;
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/business_members`);
+    url.searchParams.set('select', 'business_id,role');
+    url.searchParams.set('user_id', `eq.${params.userId}`);
+    url.searchParams.set('order', 'created_at.asc');
+    url.searchParams.set('limit', '1');
+    const res = await fetch(url.toString(), { headers, cache: 'no-store' });
+    if (res.ok) {
+      const rows = (await res.json().catch(() => [])) as any[];
+      const r = rows?.[0] ?? null;
+      businessMemberExists = Boolean(r?.business_id);
+      businessId = r?.business_id ? String(r.business_id) : null;
+      memberRole = r?.role ? String(r.role).toLowerCase() : null;
+    }
+  } catch {
+    businessMemberExists = false;
+    businessId = null;
+    memberRole = null;
+  }
+
+  // Optional: check business.onboarding_complete (if the column exists / is present)
+  let businessOnboardingComplete: boolean | null = null;
+  if (businessId) {
+    try {
+      const url = new URL(`${supabaseUrl}/rest/v1/business`);
+      url.searchParams.set('select', 'onboarding_complete');
+      url.searchParams.set('id', `eq.${businessId}`);
+      url.searchParams.set('limit', '1');
+      const res = await fetch(url.toString(), { headers, cache: 'no-store' });
+      if (res.ok) {
+        const rows = (await res.json().catch(() => [])) as any[];
+        if (rows?.[0] && 'onboarding_complete' in rows[0]) {
+          const v = (rows[0] as any).onboarding_complete;
+          businessOnboardingComplete = v === null || v === undefined ? null : Boolean(v);
+        }
+      }
+    } catch {
+      businessOnboardingComplete = null;
+    }
+  }
+
+  return {
+    profileExists,
+    profileOnboardingComplete,
+    businessMemberExists,
+    businessId,
+    businessOnboardingComplete,
+    memberRole,
+  };
+}
+
 function isPublicApi(pathname: string) {
+  // Stripe endpoints: middleware should never block these with a redirect.
+  // Each route still enforces auth where required (e.g. checkout/portal require a bearer token).
+  if (pathname === '/api/checkout') return true;
+  if (pathname.startsWith('/api/stripe/')) return true;
   // Webhook must be publicly accessible (Stripe calls it).
   if (pathname === '/api/stripe/webhook') return true;
   // Users must be able to start checkout even when inactive.
   if (pathname === '/api/stripe/checkout') return true;
   if (pathname === '/api/stripe/create-checkout-session') return true;
+  if (pathname === '/api/stripe/portal') return true;
   // Pricing page lists plans from a safe server endpoint.
   if (pathname === '/api/subscription-plans') return true;
   return false;
@@ -44,6 +162,15 @@ function getBearerToken(req: NextRequest): string | null {
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7);
   const cookieToken = req.cookies.get('rg_at')?.value ?? null;
   return cookieToken || null;
+}
+
+function sanitizeNextPath(pathname: string): string {
+  const p = String(pathname ?? '').trim() || '/dashboard';
+  if (!p.startsWith('/')) return '/dashboard';
+  if (p.startsWith('//')) return '/dashboard';
+  if (p === '/login' || p.startsWith('/login/')) return '/dashboard';
+  if (p === '/signup' || p.startsWith('/signup/')) return '/dashboard';
+  return p;
 }
 
 function decodeJwtPayload(token: string): any | null {
@@ -306,34 +433,68 @@ async function getBusinessMemberForUser(userId: string): Promise<{
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Absolute allowlist (MUST be first): never redirect auth routes or APIs or Next internals.
+  // This prevents ERR_TOO_MANY_REDIRECTS caused by /login -> /login loops and keeps APIs callable.
+  if (
+    pathname === '/login' ||
+    pathname.startsWith('/login/') ||
+    pathname === '/signup' ||
+    pathname.startsWith('/signup/') ||
+    pathname.startsWith('/auth') ||
+    pathname.startsWith('/api') ||
+    pathname.startsWith('/_next')
+  ) {
+    return NextResponse.next();
+  }
+
+  // Public landing + pricing should always be accessible without any auth/onboarding redirect.
+  if (pathname === '/' || pathname === '/pricing' || pathname.startsWith('/pricing/')) {
+    return NextResponse.next();
+  }
+
   // Ignore Next internals / assets
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
+    pathname === '/robots.txt' ||
+    pathname.startsWith('/sitemap') ||
     pathname.endsWith('.svg') ||
     pathname.endsWith('.png') ||
     pathname.endsWith('.jpg') ||
     pathname.endsWith('.jpeg') ||
     pathname.endsWith('.webp') ||
     pathname.endsWith('.gif') ||
-    pathname.endsWith('.ico')
+    pathname.endsWith('.ico') ||
+    pathname.endsWith('.css') ||
+    pathname.endsWith('.js') ||
+    pathname.endsWith('.map') ||
+    pathname.endsWith('.txt') ||
+    pathname.endsWith('.xml') ||
+    pathname.endsWith('.woff') ||
+    pathname.endsWith('.woff2') ||
+    pathname.endsWith('.ttf') ||
+    pathname.endsWith('.eot')
   ) {
     return NextResponse.next();
   }
 
   const isApi = pathname.startsWith('/api/');
 
-  if (!isApi && isPublicPath(pathname)) return NextResponse.next();
+  // Get token early so we can allow truly-public pages to load for logged-out users,
+  // while still enforcing onboarding gating for logged-in users on otherwise-public pages (e.g. /pricing).
+  const token = getBearerToken(req);
+
+  // Public APIs should not be blocked, even if logged out.
   if (isApi && isPublicApi(pathname)) return NextResponse.next();
 
-  const token = getBearerToken(req);
   if (!token) {
+    if (!isApi && isPublicPath(pathname)) return NextResponse.next();
     if (isApi) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const url = req.nextUrl.clone();
     url.pathname = '/login';
-    url.searchParams.set('redirect', pathname);
+    url.searchParams.set('next', sanitizeNextPath(pathname));
     return NextResponse.redirect(url);
   }
 
@@ -344,8 +505,43 @@ export async function middleware(req: NextRequest) {
     if (isApi) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const url = req.nextUrl.clone();
     url.pathname = '/login';
-    url.searchParams.set('redirect', pathname);
+    url.searchParams.set('next', sanitizeNextPath(pathname));
     return NextResponse.redirect(url);
+  }
+
+  // Always allow onboarding routes after authentication, to avoid loops.
+  if (!isApi && isOnboardingPath(pathname)) return NextResponse.next();
+  // Pricing is public and should never be gated.
+  if (!isApi && (pathname === '/pricing' || pathname.startsWith('/pricing/'))) return NextResponse.next();
+  if (isApi && isOnboardingApi(pathname)) return NextResponse.next();
+
+  // Admin bypass: authenticated admin users skip setup/onboarding gating.
+  const adminEmail = await getEmailForToken(token, payload);
+  if (adminEmail && ADMIN_EMAILS.includes(adminEmail)) {
+    return NextResponse.next();
+  }
+
+  // Account completeness gate (ONLY redirects when logged-in account is incomplete).
+  // If missing profile row OR onboarding_complete=false OR no business_members row -> redirect to /signup.
+  const acct = await getAccountCompletionState({ token, userId });
+  const isEmployeeSetupGate = String(acct.memberRole ?? '').toLowerCase() === 'employee';
+  if (!isEmployeeSetupGate) {
+    const businessIncomplete = acct.businessOnboardingComplete === false;
+    const incomplete =
+      !acct.profileExists ||
+      !acct.profileOnboardingComplete ||
+      !acct.businessMemberExists ||
+      businessIncomplete;
+
+    if (incomplete) {
+      if (isApi) {
+        return NextResponse.json({ error: 'Setup required', redirect: '/signup' }, { status: 403 });
+      }
+      const url = req.nextUrl.clone();
+      url.pathname = '/signup';
+      url.searchParams.set('next', sanitizeNextPath(pathname));
+      return NextResponse.redirect(url);
+    }
   }
 
   // Authenticated, but subscription gating is skipped for certain routes.
@@ -353,11 +549,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Admin bypass: authenticated admin users skip subscription gating.
-  const email = await getEmailForToken(token, payload);
-  if (email && ADMIN_EMAILS.includes(email)) {
-    return NextResponse.next();
-  }
+  // Admin bypass is already handled above.
 
   // Role-based routing: main + sub-accounts via business_members (fallback to profiles.role).
   const member = await getBusinessMemberForUser(userId);
@@ -420,7 +612,11 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image).*)'],
+  // Run middleware on app routes (including /pricing) so logged-in users can be gated to /onboarding.
+  // Next internals + static assets are excluded for perf.
+  matcher: [
+    '/((?!_next/|favicon\\.ico|robots\\.txt|sitemap(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|webp|gif|ico|css|js|map|txt|xml|woff|woff2|ttf|eot)$).*)',
+  ],
 };
 
 

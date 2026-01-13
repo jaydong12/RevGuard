@@ -83,8 +83,8 @@ export async function POST(request: Request) {
       customer: stripeCustomerId,
       line_items: [{ price: String((planRow as any).stripe_price_id), quantity: 1 }],
       ...(planRow.stripe_coupon_id ? { discounts: [{ coupon: String(planRow.stripe_coupon_id) }] } : {}),
-      success_url: `${siteUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl}/billing/cancel`,
+      success_url: `${siteUrl}/onboarding?from=stripe&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${siteUrl}/pricing?from=stripe_cancel`,
       metadata: { planId, userId: String(user.id) },
       subscription_data: {
         metadata: { planId, userId: String(user.id) },

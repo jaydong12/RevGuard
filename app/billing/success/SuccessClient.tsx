@@ -40,7 +40,7 @@ export default function BillingSuccessClient() {
           if (!alive) return;
           setStatus('inactive');
           setDetail('Please log in to finish activating your subscription.');
-          router.replace('/login?redirect=/pricing');
+          router.replace('/signup?next=/pricing');
           return;
         }
 

@@ -14,6 +14,8 @@ type Props = {
 
 const AUTH_PREFIXES = ['/login', '/signup'];
 const CLOCK_PREFIXES = ['/clock'];
+const ONBOARDING_PREFIXES = ['/onboarding'];
+const PUBLIC_APP_PAGES = ['/pricing'];
 
 // Routes that should render inside the app shell (sidebar + tabs).
 // Everything else (like the marketing landing page at "/") renders without shell.
@@ -28,7 +30,6 @@ const APP_SHELL_PREFIXES = [
   '/notifications',
   '/reports',
   '/settings',
-  '/pricing',
   '/billing',
   '/admin',
 ];
@@ -37,6 +38,8 @@ export default function RootShell({ children }: Props) {
   const pathname = usePathname() || '/';
   const isAuth = AUTH_PREFIXES.some((p) => pathname.startsWith(p));
   const isClock = CLOCK_PREFIXES.some((p) => pathname.startsWith(p));
+  const isOnboarding = ONBOARDING_PREFIXES.some((p) => pathname.startsWith(p));
+  const isPublicAppPage = PUBLIC_APP_PAGES.some((p) => pathname.startsWith(p));
   const hasShell = APP_SHELL_PREFIXES.some((p) => pathname.startsWith(p));
 
   if (isAuth) {
@@ -56,6 +59,33 @@ export default function RootShell({ children }: Props) {
         <ToastProvider>
           <div className="min-h-screen bg-slate-950 text-slate-50">
             <div className="max-w-3xl mx-auto px-4 py-10">{children}</div>
+          </div>
+        </ToastProvider>
+      </ReactQueryProvider>
+    );
+  }
+
+  if (isOnboarding) {
+    // Onboarding should be authenticated (middleware handles that), but should not show the app shell.
+    return (
+      <ReactQueryProvider>
+        <ToastProvider>
+          <div className="min-h-screen bg-slate-950 text-slate-50">
+            <div className="max-w-6xl mx-auto px-4 py-10">{children}</div>
+          </div>
+        </ToastProvider>
+      </ReactQueryProvider>
+    );
+  }
+
+  if (isPublicAppPage) {
+    // Public-facing app pages that still need React Query / Toasts, but must NOT require auth
+    // or app data loading (so they remain accessible to logged-out users).
+    return (
+      <ReactQueryProvider>
+        <ToastProvider>
+          <div className="min-h-screen bg-slate-950 text-slate-50">
+            <div className="max-w-6xl mx-auto px-4 py-10">{children}</div>
           </div>
         </ToastProvider>
       </ReactQueryProvider>

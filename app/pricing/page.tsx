@@ -2,20 +2,78 @@
 
 import React from 'react';
 import { useSearchParams } from 'next/navigation';
-import { useAppData } from '../../components/AppDataProvider';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '../../utils/supabaseClient';
 import { PLAN_FEATURES, PLAN_META, type PlanId } from '../../lib/plans';
-import { StartPlanButton } from '../../components/StartPlanButton';
+import { StartPlanButton, startStripeCheckout } from '../../components/StartPlanButton';
 
 export default function PricingPage() {
   const params = useSearchParams();
   const upgrade = String(params.get('upgrade') ?? '').trim().toLowerCase();
-  const { business, userEmail } = useAppData();
+  const planParam = String(params.get('plan') ?? '').trim().toLowerCase();
+
+  function normalizePlanId(raw: string): Exclude<PlanId, 'none'> | null {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (s === 'starter' || s === 'growth' || s === 'pro') return s;
+    return null;
+  }
+
+  const requestedPlan = normalizePlanId(planParam);
+  const [sessionEmail, setSessionEmail] = React.useState<string | null>(null);
+  const [autoCheckoutError, setAutoCheckoutError] = React.useState<string | null>(null);
+  const autoCheckoutStarted = React.useRef(false);
+
+  React.useEffect(() => {
+    let alive = true;
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!alive) return;
+        setSessionEmail(data.session?.user?.email ?? null);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setSessionEmail(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // If the user just logged in with a plan intent (/?plan=starter), continue checkout automatically.
+  // NOTE: guarded to run only once (handles React strict-mode double-invocation in dev).
+  React.useEffect(() => {
+    let alive = true;
+
+    async function run() {
+      if (!requestedPlan) return;
+      if (autoCheckoutStarted.current) return;
+      autoCheckoutStarted.current = true;
+
+      try {
+        const { data } = await supabase.auth.getSession();
+        const session = data.session ?? null;
+        if (!session) return; // logged out: user must click a plan (which routes to /login)
+
+        const url = await startStripeCheckout(requestedPlan, session);
+        if (!alive) return;
+        window.location.href = url;
+      } catch (e: any) {
+        if (!alive) return;
+        setAutoCheckoutError(String(e?.message ?? 'Could not start checkout.'));
+      }
+    }
+
+    void run();
+
+    return () => {
+      alive = false;
+    };
+  }, [requestedPlan]);
 
   const isAdmin =
-    String(userEmail ?? '').trim().toLowerCase() === 'jaydongant@gmail.com' ||
-    String(userEmail ?? '').trim().toLowerCase() === 'shannon_g75@yahoo.com';
+    String(sessionEmail ?? '').trim().toLowerCase() === 'jaydongant@gmail.com' ||
+    String(sessionEmail ?? '').trim().toLowerCase() === 'shannon_g75@yahoo.com';
 
   const plansQ = useQuery({
     queryKey: ['subscription_plans_public_v1'],
@@ -125,6 +183,19 @@ export default function PricingPage() {
           </div>
         ) : null}
 
+        {requestedPlan ? (
+          <div className="rounded-2xl border border-slate-700/60 bg-slate-950/40 px-4 py-3 text-sm text-slate-200">
+            Selected plan: <span className="font-semibold">{requestedPlan}</span>
+            {autoCheckoutError ? (
+              <div className="mt-2 text-xs text-rose-300">{autoCheckoutError}</div>
+            ) : (
+              <div className="mt-2 text-xs text-slate-400">
+                If you’re logged in, checkout will open automatically. Otherwise, log in to continue.
+              </div>
+            )}
+          </div>
+        ) : null}
+
         <section className="w-full max-w-[980px] mx-auto">
           <div className="grid md:grid-cols-3 gap-4 md:gap-6 items-stretch">
             {displayedPlans
@@ -136,7 +207,7 @@ export default function PricingPage() {
               .map((p) => {
               const plan = (String(p.id).trim().toLowerCase() as any) as Exclude<PlanId, 'none'>;
               const isCurrent = currentPlan === plan;
-              const highlight = upgrade === plan;
+              const highlight = upgrade === plan || requestedPlan === plan;
               const features = PLAN_FEATURES[plan] ?? [];
 
               return (
