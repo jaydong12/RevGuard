@@ -91,40 +91,30 @@ function SignupInner() {
         return;
       }
 
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const origin =
+        (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/+$/, '') ||
+        (typeof window !== 'undefined' ? window.location.origin : '');
+      const emailRedirectTo = origin
+        ? `${origin}/auth/callback?next=/onboarding`
+        : undefined;
+
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: emailRedirectTo ? { emailRedirectTo } : undefined,
+      });
       if (error) throw error;
 
       // If email confirmation is off, we get a session immediately.
-      if (data.session) {
-        setAuthCookie(data.session.access_token ?? null);
-        // Paywall: if not active, redirect to pricing after signup.
-        const userId = data.session.user.id;
-        const userEmail = String(data.session.user.email ?? '').trim().toLowerCase();
-
-        if (userEmail && ADMIN_EMAILS.includes(userEmail)) {
-          router.replace('/dashboard');
-          return;
-        }
-
-        // Ensure business exists and route to Business Profile if incomplete.
-        try {
-          const needsBizProfile = await businessProfileIncompleteForUser(userId);
-          if (needsBizProfile) {
-            router.replace('/settings');
-            return;
-          }
-        } catch {
-          // ignore; fall through to paywall logic
-        }
-
-        const status = await getSubscriptionStatus(userId);
-
-        if (status !== 'active') router.replace('/pricing');
-        else router.replace('/dashboard');
+      if (data.session?.access_token) {
+        setAuthCookie(data.session.access_token);
+        router.replace('/onboarding');
         return;
       }
 
-      setNote('Account created. Check your email to confirm, then log in.');
+      // Email confirmation required: route to check-email screen.
+      router.replace('/check-email?next=/onboarding');
+      return;
     } catch (err: any) {
       // eslint-disable-next-line no-console
       console.error('SIGNUP_ERROR', err);

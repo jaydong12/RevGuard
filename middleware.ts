@@ -306,6 +306,23 @@ async function getBusinessMemberForUser(userId: string): Promise<{
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Hard bypass: never redirect these routes.
+  if (
+    pathname === '/login' ||
+    pathname.startsWith('/login/') ||
+    pathname === '/signup' ||
+    pathname.startsWith('/signup/') ||
+    pathname === '/check-email' ||
+    pathname.startsWith('/check-email/') ||
+    pathname === '/onboarding' ||
+    pathname.startsWith('/onboarding/') ||
+    pathname.startsWith('/auth') ||
+    pathname.startsWith('/api') ||
+    pathname.startsWith('/_next')
+  ) {
+    return NextResponse.next();
+  }
+
   // Ignore Next internals / assets
   if (
     pathname.startsWith('/_next') ||

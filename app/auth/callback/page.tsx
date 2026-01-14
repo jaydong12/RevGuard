@@ -19,7 +19,7 @@ function setAuthCookie(token: string | null) {
 export default function AuthCallbackPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params.get('next') || params.get('redirect') || '/dashboard';
+  const next = params.get('next') ?? '/dashboard';
 
   const [message, setMessage] = useState('Finishing sign-in…');
 
@@ -40,7 +40,7 @@ export default function AuthCallbackPage() {
 
         if (!alive) return;
         setMessage('Redirecting…');
-        router.replace(next);
+        router.replace(next || '/dashboard');
       } catch (e: any) {
         // eslint-disable-next-line no-console
         console.error('AUTH_CALLBACK_ERROR', e);
@@ -48,7 +48,7 @@ export default function AuthCallbackPage() {
         setMessage(e?.message ? `Sign-in failed: ${e.message}` : 'Sign-in failed.');
         // Give them a way out.
         window.setTimeout(() => {
-          router.replace('/login?redirect=/dashboard');
+          router.replace('/dashboard');
         }, 800);
       }
     })();
