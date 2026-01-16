@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     } as any);
     if (ins.error) throw ins.error;
 
-    const { ip, userAgent } = getClientMeta();
+    const { ip, userAgent } = await getClientMeta();
     await admin.from('time_entry_audit').insert({
       user_id: userId,
       business_id: bId,

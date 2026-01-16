@@ -4,10 +4,11 @@ import { getSupabaseAdmin } from '../../../lib/server/supabaseAdmin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export function getRequestToken(req: Request): string | null {
+export async function getRequestToken(req: Request): Promise<string | null> {
   const auth = req.headers.get('authorization') ?? '';
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7);
-  const cookieToken = cookies().get('rg_at')?.value ?? null;
+  const cookieStore = await cookies();
+  const cookieToken = cookieStore.get('rg_at')?.value ?? null;
   return cookieToken || null;
 }
 
@@ -16,7 +17,7 @@ export async function requireEmployee(req: Request): Promise<{
   userId: string;
   email: string;
 }> {
-  const token = getRequestToken(req);
+  const token = await getRequestToken(req);
   if (!token) throw Object.assign(new Error('Unauthorized'), { status: 401 });
 
   const admin = getSupabaseAdmin();
@@ -95,8 +96,8 @@ export async function tryLinkWorkerOnFirstLogin(params: {
   return { linked: true as const };
 }
 
-export function getClientMeta() {
-  const h = headers();
+export async function getClientMeta() {
+  const h = await headers();
   const ipRaw = h.get('x-forwarded-for') || h.get('x-real-ip') || '';
   const ip = ipRaw.split(',')[0]?.trim() || null;
   const userAgent = h.get('user-agent') || null;

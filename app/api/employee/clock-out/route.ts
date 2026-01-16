@@ -39,7 +39,7 @@ export async function POST(req: Request) {
       .is('clock_out_at', null);
     if (upd.error) throw upd.error;
 
-    const { ip, userAgent } = getClientMeta();
+    const { ip, userAgent } = await getClientMeta();
     await admin.from('time_entry_audit').insert({
       user_id: userId,
       business_id: bId,
