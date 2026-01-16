@@ -94,7 +94,7 @@ function LoginInner() {
       const userId = sess.session?.user?.id ?? null;
       const userEmail = String(sess.session?.user?.email ?? '').trim().toLowerCase();
       if (!userId) {
-        router.replace('/login?redirect=/pricing');
+        router.replace('/login');
         return;
       }
 
@@ -103,18 +103,17 @@ function LoginInner() {
         return;
       }
 
-      // Employee routing: employees should go straight to /clock and must not be forced through business creation/profile.
+      // Employee routing: employees should go straight to /employee/clock.
       try {
-        const { data: member, error: memberErr } = await supabase
-          .from('business_members')
-          .select('business_id, role')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: true })
+        const { data: prof, error: profErr } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', userId)
           .limit(1)
           .maybeSingle();
-        const mRole = String((member as any)?.role ?? '').toLowerCase();
-        if (!memberErr && (member as any)?.business_id && mRole === 'employee') {
-          router.replace('/clock');
+        const role = String((prof as any)?.role ?? '').toLowerCase();
+        if (!profErr && role === 'employee') {
+          router.replace('/employee/clock');
           return;
         }
       } catch {
@@ -184,7 +183,7 @@ function LoginInner() {
             </div>
           }
           footer={
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <div className="relative z-10 pointer-events-auto flex items-center justify-between text-[11px] text-slate-400">
               <div>
                 New to RevGuard?{' '}
                 <Link
@@ -195,7 +194,7 @@ function LoginInner() {
                 </Link>
               </div>
               <div>
-                <Link className="text-slate-300 hover:text-slate-100" href="/clock">
+                <Link className="text-slate-300 hover:text-slate-100" href="/employee/clock">
                   Employee Clock
                 </Link>
               </div>

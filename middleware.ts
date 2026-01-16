@@ -306,10 +306,12 @@ async function getBusinessMemberForUser(userId: string): Promise<{
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Hard bypass: never redirect these routes.
+  // Allowlist: never redirect these routes (employee clock + auth + next internals).
   if (
     pathname === '/login' ||
     pathname.startsWith('/login/') ||
+    pathname.startsWith('/employee/') ||
+    pathname === '/employee' ||
     pathname === '/signup' ||
     pathname.startsWith('/signup/') ||
     pathname === '/check-email' ||
@@ -379,11 +381,11 @@ export async function middleware(req: NextRequest) {
   // Role-based routing: main + sub-accounts via business_members (fallback to profiles.role).
   const member = await getBusinessMemberForUser(userId);
   const prof = await getProfileForUser(userId);
-  const role = String(member?.role ?? prof?.role ?? '').toLowerCase();
+  const role = String(prof?.role ?? member?.role ?? '').toLowerCase();
   const isEmployee = role === 'employee';
 
   if (isEmployee) {
-    const allowedPagePrefixes = ['/clock'];
+    const allowedPagePrefixes = ['/employee'];
     const allowedApiPrefixes: string[] = []; // employees should not call app APIs
 
     if (isApi) {
@@ -395,7 +397,7 @@ export async function middleware(req: NextRequest) {
       const ok = allowedPagePrefixes.some((p) => pathname.startsWith(p));
       if (!ok) {
         const url = req.nextUrl.clone();
-        url.pathname = '/clock';
+        url.pathname = '/employee/clock';
         return NextResponse.redirect(url);
       }
     }

@@ -13,7 +13,7 @@ type Props = {
 };
 
 const AUTH_PREFIXES = ['/login', '/signup'];
-const CLOCK_PREFIXES = ['/clock'];
+const CLOCK_PREFIXES = ['/clock', '/employee'];
 
 // Routes that should render inside the app shell (sidebar + tabs).
 // Everything else (like the marketing landing page at "/") renders without shell.

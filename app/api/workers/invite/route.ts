@@ -75,16 +75,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Link invited auth user to worker for self clock-in.
-    // (Uses real UUIDs, no placeholders.)
+    // Store the email on the worker row (for first-login linking on employee device).
+    // Do NOT pre-link workers.user_id here; it will be linked on the employee's first login
+    // only if the auth email matches and the worker is unlinked.
     const { error: wLinkErr } = await admin
       .from('workers')
-      .update({ user_id: invitedUser.id } as any)
+      .update({ email, role: 'employee' } as any)
       .eq('id', workerId)
       .eq('business_id', businessId);
     if (wLinkErr) {
       return NextResponse.json(
-        { error: wLinkErr.message ?? 'Invite created, but failed to link worker.user_id.' },
+        { error: wLinkErr.message ?? 'Invite created, but failed to update worker.' },
         { status: 500 }
       );
     }
