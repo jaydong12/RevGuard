@@ -39,6 +39,7 @@ type NavItem = {
     | 'bills'
     | 'customers'
     | 'ai'
+    | 'bot'
     | 'notifications'
     | 'reports'
     | 'pricing'
@@ -212,6 +213,33 @@ function NavIcon({ name }: { name: NavItem['icon'] }) {
       </svg>
     );
   }
+  if (name === 'bot') {
+    // A subtle "sparkles" / AI icon for the mobile tab label "Bot".
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
+        <path
+          d="M12 3l.9 3.1L16 7l-3.1.9L12 11l-.9-3.1L8 7l3.1-.9L12 3Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M18.5 10.5l.6 2.1 2.1.6-2.1.6-.6 2.1-.6-2.1-2.1-.6 2.1-.6.6-2.1Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          opacity="0.9"
+        />
+        <path
+          d="M6 13.5l.6 2.1 2.1.6-2.1.6L6 19l-.6-2.2-2.1-.6 2.1-.6L6 13.5Z"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          opacity="0.75"
+        />
+      </svg>
+    );
+  }
   if (name === 'reports') {
     return (
       <svg viewBox="0 0 24 24" fill="none" className={common} aria-hidden="true">
@@ -370,8 +398,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const bottomNavItems: Array<{ label: string; href: string; icon: NavItem['icon'] }> = [
     { label: 'Home', href: '/dashboard', icon: 'dashboard' },
-    // Mobile label "Alerts" maps to existing AI Advisor route (no new routes).
-    { label: 'Alerts', href: '/ai-advisor', icon: 'ai' },
+    // Mobile label "Bot" maps to existing AI Advisor route (no new routes).
+    { label: 'Bot', href: '/ai-advisor', icon: 'bot' },
     { label: 'Transactions', href: '/transactions', icon: 'transactions' },
     { label: 'Invoices', href: '/invoices', icon: 'invoices' },
   ];
