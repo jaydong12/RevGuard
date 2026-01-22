@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../utils/supabaseClient';
-import AuthCard from '../../components/AuthCard';
+import { AuthCard } from '../../components/AuthCard';
 
 function setAuthCookie(token: string | null) {
   try {
