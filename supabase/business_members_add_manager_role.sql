@@ -14,7 +14,7 @@ begin
   begin
     alter table public.business_members
       add constraint business_members_role_check
-      check (role in ('owner','manager','employee'));
+      check (role in ('owner','manager','employee','admin'));
   exception when duplicate_object then
     null;
   end;

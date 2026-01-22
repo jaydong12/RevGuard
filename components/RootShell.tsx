@@ -7,12 +7,14 @@ import KeepAliveTabs from './KeepAliveTabs';
 import ReactQueryProvider from './ReactQueryProvider';
 import { AppDataProvider } from './AppDataProvider';
 import { ToastProvider } from './ToastProvider';
+import { HealthGate } from './HealthGate';
+import { OneTimeClientCleanup } from './OneTimeClientCleanup';
 
 type Props = {
   children: React.ReactNode;
 };
 
-const AUTH_PREFIXES = ['/login', '/signup'];
+const AUTH_PREFIXES = ['/login', '/signup', '/reset-password'];
 const CLOCK_PREFIXES = ['/clock', '/employee'];
 
 // Routes that should render inside the app shell (sidebar + tabs).
@@ -44,7 +46,10 @@ export default function RootShell({ children }: Props) {
     // premium background + centered width container.
     return (
       <div className="min-h-screen bg-slate-950 text-slate-50">
-        <div className="max-w-6xl mx-auto px-4 py-10">{children}</div>
+        <OneTimeClientCleanup />
+        <div className="max-w-6xl mx-auto px-4 py-10">
+          <HealthGate>{children}</HealthGate>
+        </div>
       </div>
     );
   }
@@ -55,7 +60,10 @@ export default function RootShell({ children }: Props) {
       <ReactQueryProvider>
         <ToastProvider>
           <div className="min-h-screen bg-slate-950 text-slate-50">
-            <div className="max-w-3xl mx-auto px-4 py-10">{children}</div>
+            <OneTimeClientCleanup />
+            <div className="max-w-3xl mx-auto px-4 py-10">
+              <HealthGate>{children}</HealthGate>
+            </div>
           </div>
         </ToastProvider>
       </ReactQueryProvider>
@@ -70,11 +78,14 @@ export default function RootShell({ children }: Props) {
   return (
     <ReactQueryProvider>
       <ToastProvider>
-        <AppLayout>
-          <AppDataProvider>
-            <KeepAliveTabs>{children}</KeepAliveTabs>
-          </AppDataProvider>
-        </AppLayout>
+        <OneTimeClientCleanup />
+        <HealthGate>
+          <AppLayout>
+            <AppDataProvider>
+              <KeepAliveTabs>{children}</KeepAliveTabs>
+            </AppDataProvider>
+          </AppLayout>
+        </HealthGate>
       </ToastProvider>
     </ReactQueryProvider>
   );

@@ -65,8 +65,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Worker not found for this business.' }, { status: 404 });
     }
 
-    // Invite user
-    const inviteRes = await admin.auth.admin.inviteUserByEmail(email);
+    // Invite user (ensure confirm/invite redirect returns to /auth/callback).
+    const siteUrl =
+      (process.env.NEXT_PUBLIC_SITE_URL || '').replace(/\/+$/, '') ||
+      new URL(request.url).origin;
+    const inviteRes = await admin.auth.admin.inviteUserByEmail(email, {
+      redirectTo: `${siteUrl}/auth/callback?next=/employee/clock`,
+    });
     const invitedUser = inviteRes.data?.user ?? null;
     if (inviteRes.error || !invitedUser?.id) {
       return NextResponse.json(

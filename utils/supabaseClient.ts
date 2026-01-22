@@ -3,6 +3,24 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 let _client: SupabaseClient | null | undefined;
 let _initError: string | null | undefined;
 
+function fetchWithTimeout(timeoutMs: number) {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(input, { ...(init ?? {}), signal: controller.signal });
+      return res;
+    } catch (e: any) {
+      if (String(e?.name ?? '') === 'AbortError') {
+        throw new Error('Network request timed out. Check your connection or network policies.');
+      }
+      throw e;
+    } finally {
+      clearTimeout(t);
+    }
+  };
+}
+
 function makeThenableResult<T>(value: T) {
   // A very small "query builder" stub:
   // - allows arbitrary chaining: .select().eq().order().single()...
@@ -75,7 +93,12 @@ export function getSupabaseClient(): SupabaseClient | null {
   }
 
   try {
-    _client = createClient(url, anon);
+    _client = createClient(url, anon, {
+      global: {
+        // Prevent infinite loading when networks block Supabase (corporate WiFi, VPN, etc.).
+        fetch: fetchWithTimeout(12000),
+      },
+    });
     _initError = null;
     return _client;
   } catch (e: any) {
