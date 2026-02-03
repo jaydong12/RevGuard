@@ -15,6 +15,7 @@ import { useToast } from '../../components/ToastProvider';
 import { TAX_FEATURES_ENABLED } from '../../lib/featureFlags';
 import { BottomSheet } from '../../components/mobile/BottomSheet';
 import { MobileFab } from '../../components/mobile/MobileFab';
+import { BankTransactionsFeed } from '../../components/BankTransactionsFeed';
 import {
   Calendar,
   FilterX,
@@ -842,6 +843,9 @@ export default function TransactionsPage() {
 
         {businessError && <div className="text-xs text-rose-300">{businessError}</div>}
         {businessLoading && <div className="text-xs text-slate-400">Loading business…</div>}
+
+        {/* Phase 1: Bank-connected feed (mock provider for now). */}
+        <BankTransactionsFeed />
 
         {/* Filter bar (desktop) */}
         <section className="hidden md:block rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-4 shadow-[0_1px_0_rgba(255,255,255,0.04)]">
