@@ -1,5 +1,4 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
 
 const PROTECTED_PREFIXES = [
   '/dashboard',
@@ -16,7 +15,54 @@ const PROTECTED_PREFIXES = [
   '/billing',
 ];
 
-const ONBOARDING_PREFIXES = ['/onboarding'];
+function getRgAt(req: NextRequest): string | null {
+  const v = req.cookies.get('rg_at')?.value ?? null;
+  return v ? decodeURIComponent(v) : null;
+}
+
+async function getSupabaseUserIdFromToken(opts: { url: string; anon: string; token: string }) {
+  try {
+    const res = await fetch(`${opts.url}/auth/v1/user`, {
+      headers: {
+        apikey: opts.anon,
+        Authorization: `Bearer ${opts.token}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json().catch(() => null)) as any;
+    return json?.id ? String(json.id) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getOnboardingStatus(opts: { url: string; anon: string; token: string; userId: string }) {
+  try {
+    const q = new URLSearchParams({
+      select: 'onboarding_complete,onboarding_step',
+      id: `eq.${opts.userId}`,
+      limit: '1',
+    });
+    const res = await fetch(`${opts.url}/rest/v1/profiles?${q.toString()}`, {
+      headers: {
+        apikey: opts.anon,
+        Authorization: `Bearer ${opts.token}`,
+        Accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+    if (!res.ok) return { complete: false, step: 'business' as const };
+    const rows = (await res.json().catch(() => [])) as any[];
+    const p = rows?.[0] ?? null;
+    const complete = Boolean(p?.onboarding_complete);
+    const stepRaw = String(p?.onboarding_step ?? 'business').trim().toLowerCase();
+    const step = stepRaw === 'profile' || stepRaw === 'banking' ? stepRaw : 'business';
+    return { complete, step };
+  } catch {
+    return { complete: false, step: 'business' as const };
+  }
+}
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -43,62 +89,30 @@ export function middleware(req: NextRequest) {
   const protect = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!protect) return NextResponse.next();
 
-  const res = NextResponse.next();
-
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anon) {
-    // Fail closed for protected routes.
+  const token = getRgAt(req);
+  if (!url || !anon || !token) {
     const to = req.nextUrl.clone();
     to.pathname = '/login';
     to.search = '';
     return NextResponse.redirect(to);
   }
 
-  const supabase = createServerClient(url, anon, {
-    cookies: {
-      get(name: string) {
-        return req.cookies.get(name)?.value;
-      },
-      set(name: string, value: string, options: any) {
-        res.cookies.set(name, value, options);
-      },
-      remove(name: string, options: any) {
-        res.cookies.set(name, '', { ...options, maxAge: 0 });
-      },
-    },
-  });
-
   return (async () => {
-    const { data: userRes } = await supabase.auth.getUser();
-    const user = userRes?.user ?? null;
-    if (!user?.id) {
+    const userId = await getSupabaseUserIdFromToken({ url, anon, token });
+    if (!userId) {
       const to = req.nextUrl.clone();
       to.pathname = '/login';
       to.search = '';
       return NextResponse.redirect(to);
     }
 
-    // Onboarding gate: users must complete onboarding before entering the app.
-    // Only enforce on protected routes (avoid loops).
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('onboarding_complete,onboarding_step')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    const complete = Boolean((profile as any)?.onboarding_complete);
-    if (complete) return res;
-
-    const stepRaw = String((profile as any)?.onboarding_step ?? 'business').trim().toLowerCase();
-    const step = stepRaw === 'profile' || stepRaw === 'banking' ? stepRaw : 'business';
-    const dest = `/onboarding/${step}`;
-
-    // If already on onboarding routes, do nothing (shouldn't happen due to matcher, but be safe).
-    if (ONBOARDING_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return res;
+    const status = await getOnboardingStatus({ url, anon, token, userId });
+    if (status.complete) return NextResponse.next();
 
     const to = req.nextUrl.clone();
-    to.pathname = dest;
+    to.pathname = `/onboarding/${status.step}`;
     to.search = '';
     return NextResponse.redirect(to);
   })();
