@@ -69,13 +69,20 @@ export default function OnboardingBankingPage() {
       const name = String((prof as any)?.full_name ?? '').trim();
       if (!name) throw new Error('Profile setup is incomplete. Please complete Profile info.');
 
+      // Ensure business is marked setup-complete (idempotent).
+      const bizUpd = await supabase
+        .from('business')
+        .update({ is_setup_complete: true } as any)
+        .eq('id', businessId);
+      if (bizUpd.error) throw bizUpd.error;
+
       const upd = await supabase
         .from('profiles')
         .update({ onboarding_complete: true, onboarding_step: 'done' } as any)
         .eq('id', uid);
       if (upd.error) throw upd.error;
 
-      router.replace('/onboarding/done');
+      router.replace('/dashboard');
     } catch (e: any) {
       setError(String(e?.message ?? 'Failed to finish onboarding.'));
     } finally {
