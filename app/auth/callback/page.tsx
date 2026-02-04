@@ -109,7 +109,7 @@ export default function AuthCallbackPage() {
         // Decide onboarding vs dashboard (no redirect=/login params).
         const { data: prof, error: profErr } = await supabase
           .from('profiles')
-          .select('*')
+          .select('onboarding_complete,onboarding_step')
           .eq('id', session.user.id)
           .maybeSingle();
         if (profErr) {
@@ -117,16 +117,21 @@ export default function AuthCallbackPage() {
           console.warn('AUTH_CALLBACK_PROFILE_ERROR', profErr);
         }
         const profile: any = prof ?? null;
+        const isOnboarded = Boolean(profile?.onboarding_complete);
+        const stepRaw = String(profile?.onboarding_step ?? 'business').trim().toLowerCase();
+        const step = stepRaw === 'profile' || stepRaw === 'banking' ? stepRaw : 'business';
 
-        const onboardedFlag =
-          profile?.onboarded ??
-          profile?.onboarding_complete ??
-          profile?.onboarding_completed ??
-          null;
-        const isOnboarded =
-          typeof onboardedFlag === 'boolean' ? onboardedFlag : Boolean(profile?.business_id);
+        // If onboarding is complete, honor a safe `next` (default /dashboard).
+        const safeNext = (() => {
+          const n = String(next ?? '').trim();
+          if (!n || !n.startsWith('/')) return '/dashboard';
+          if (n.startsWith('/login') || n.startsWith('/signup') || n.startsWith('/auth') || n.startsWith('/reset-password')) {
+            return '/dashboard';
+          }
+          return n;
+        })();
 
-        const dest = isOnboarded ? '/dashboard' : '/onboarding';
+        const dest = isOnboarded ? safeNext : `/onboarding/${step}`;
         // eslint-disable-next-line no-console
         console.log('AUTH_CALLBACK_REDIRECT', { reason: 'post_auth', onboarded: isOnboarded, to: dest });
         setMessage('Redirecting…');

@@ -1,17 +1,22 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
 
-function hasSessionCookie(req: NextRequest): boolean {
-  const rgAt = req.cookies.get('rg_at')?.value ?? null;
-  if (rgAt) return true;
+const PROTECTED_PREFIXES = [
+  '/dashboard',
+  '/transactions',
+  '/invoices',
+  '/bills',
+  '/customers',
+  '/workers',
+  '/ai-advisor',
+  '/notifications',
+  '/reports',
+  '/settings',
+  '/admin',
+  '/billing',
+];
 
-  // Supabase SSR cookies vary by project. Be permissive.
-  const names = req.cookies.getAll().map((c) => c.name);
-  return (
-    names.some((n) => n.startsWith('sb-') && n.endsWith('-auth-token')) ||
-    names.includes('sb-access-token') ||
-    names.includes('sb-refresh-token')
-  );
-}
+const ONBOARDING_PREFIXES = ['/onboarding'];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -35,26 +40,85 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const protect = pathname.startsWith('/dashboard/') || pathname === '/dashboard' || pathname.startsWith('/app/');
-  // eslint-disable-next-line no-console
-  console.log('MW_CHECK', { pathname, protect });
-
+  const protect = PROTECTED_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!protect) return NextResponse.next();
 
-  const hasSession = hasSessionCookie(req);
-  // eslint-disable-next-line no-console
-  console.log('MW_DECISION', { pathname, hasSession, decision: hasSession ? 'allow' : 'redirect_login' });
+  const res = NextResponse.next();
 
-  if (hasSession) return NextResponse.next();
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) {
+    // Fail closed for protected routes.
+    const to = req.nextUrl.clone();
+    to.pathname = '/login';
+    to.search = '';
+    return NextResponse.redirect(to);
+  }
 
-  const url = req.nextUrl.clone();
-  url.pathname = '/login';
-  url.search = '';
-  return NextResponse.redirect(url);
+  const supabase = createServerClient(url, anon, {
+    cookies: {
+      get(name: string) {
+        return req.cookies.get(name)?.value;
+      },
+      set(name: string, value: string, options: any) {
+        res.cookies.set(name, value, options);
+      },
+      remove(name: string, options: any) {
+        res.cookies.set(name, '', { ...options, maxAge: 0 });
+      },
+    },
+  });
+
+  return (async () => {
+    const { data: userRes } = await supabase.auth.getUser();
+    const user = userRes?.user ?? null;
+    if (!user?.id) {
+      const to = req.nextUrl.clone();
+      to.pathname = '/login';
+      to.search = '';
+      return NextResponse.redirect(to);
+    }
+
+    // Onboarding gate: users must complete onboarding before entering the app.
+    // Only enforce on protected routes (avoid loops).
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('onboarding_complete,onboarding_step')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    const complete = Boolean((profile as any)?.onboarding_complete);
+    if (complete) return res;
+
+    const stepRaw = String((profile as any)?.onboarding_step ?? 'business').trim().toLowerCase();
+    const step = stepRaw === 'profile' || stepRaw === 'banking' ? stepRaw : 'business';
+    const dest = `/onboarding/${step}`;
+
+    // If already on onboarding routes, do nothing (shouldn't happen due to matcher, but be safe).
+    if (ONBOARDING_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) return res;
+
+    const to = req.nextUrl.clone();
+    to.pathname = dest;
+    to.search = '';
+    return NextResponse.redirect(to);
+  })();
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/app/:path*'],
+  matcher: [
+    '/dashboard/:path*',
+    '/transactions/:path*',
+    '/invoices/:path*',
+    '/bills/:path*',
+    '/customers/:path*',
+    '/workers/:path*',
+    '/ai-advisor/:path*',
+    '/notifications/:path*',
+    '/reports/:path*',
+    '/settings/:path*',
+    '/admin/:path*',
+    '/billing/:path*',
+  ],
 };
 
 
