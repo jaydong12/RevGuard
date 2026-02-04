@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../../lib/getOrCreateBusinessId';
 import { Building2, Globe, Image as ImageIcon, Mail, MapPin, Phone, CreditCard, Shield, User } from 'lucide-react';
+import { SettingsTabs } from './SettingsTabs';
 
 function safeConsoleError(err: any) {
   try {
@@ -610,50 +611,11 @@ export default function SettingsPage() {
       <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Manage your account and preferences
-          </p>
+          <p className="text-slate-400 text-sm mt-1">Manage your account and preferences</p>
         </div>
       </header>
 
-      {/* Sticky tabs */}
-      <div className="sticky top-0 z-40 -mx-2 px-2 pt-1 pb-2">
-        <div className="mx-auto w-full max-w-5xl">
-          <div className="grid grid-cols-4 gap-1 rounded-2xl border border-slate-800 bg-slate-950/60 p-1 shadow-sm">
-            {[
-              { key: 'business' as const, label: 'Business', icon: <Building2 className="h-4 w-4" /> },
-              { key: 'profile' as const, label: 'Profile', icon: <User className="h-4 w-4" /> },
-              { key: 'security' as const, label: 'Security', icon: <Shield className="h-4 w-4" /> },
-              { key: 'billing' as const, label: 'Billing', icon: <CreditCard className="h-4 w-4" /> },
-            ].map((t) => {
-              const selected = activeTab === t.key;
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => {
-                    router.push(`/settings?tab=${t.key}`);
-                    try {
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                  className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition ${
-                    selected
-                      ? 'bg-white/10 text-slate-50 border border-white/10 shadow-sm'
-                      : 'text-slate-300 hover:text-slate-50 hover:bg-white/5 border border-transparent'
-                  }`}
-                  aria-current={selected ? 'page' : undefined}
-                >
-                  <span className={selected ? 'text-emerald-200' : 'text-slate-400'}>{t.icon}</span>
-                  <span>{t.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      <SettingsTabs />
 
       {/* Active tab panel */}
       <div className="mx-auto w-full max-w-5xl pt-2">
