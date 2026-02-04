@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { AuthCard } from '../../../components/AuthCard';
 import { supabase } from '../../../utils/supabaseClient';
 import { getOrCreateBusinessId } from '../../../lib/getOrCreateBusinessId';
+import { OnboardingProgress } from '../../../components/onboarding/OnboardingProgress';
 
 function digitsOnly(s: string) {
   return (s || '').replace(/\D/g, '');
@@ -124,6 +125,33 @@ export default function OnboardingBusinessPage() {
         .eq('id', bizId);
       if (upd.error) throw upd.error;
 
+      // Seed default categories (idempotent).
+      try {
+        const defaults = [
+          'Income',
+          'Owner Contribution',
+          'Fuel',
+          'Software',
+          'Marketing',
+          'Payroll',
+          'Equipment',
+          'Office Supplies',
+          'Taxes',
+          'Insurance',
+          'Transfers',
+        ];
+        for (const n of defaults) {
+          const ins = await supabase.from('tx_categories').insert({ business_id: bizId, name: n } as any);
+          if (ins.error && String((ins.error as any)?.code ?? '') !== '23505') {
+            // eslint-disable-next-line no-console
+            console.warn('TX_CATEGORY_SEED_ERROR', ins.error);
+          }
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('TX_CATEGORY_SEED_EXCEPTION', e);
+      }
+
       const prof = await supabase
         .from('profiles')
         .upsert({ id: uid, onboarding_step: 'profile', onboarding_complete: false } as any, { onConflict: 'id' });
@@ -139,7 +167,11 @@ export default function OnboardingBusinessPage() {
 
   return (
     <main>
-      <AuthCard title="Business info" subtitle="Tell us about your business. You can edit this later in Settings.">
+      <AuthCard
+        title="Let’s set up your financial command center."
+        subtitle="This takes about 60 seconds. You can edit this anytime in Settings."
+      >
+        <OnboardingProgress step="business" />
         {error ? (
           <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {error}
@@ -188,7 +220,7 @@ export default function OnboardingBusinessPage() {
             disabled={loading || saving}
             className="w-full rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Continue'}
+            {saving ? 'Saving…' : 'Next →'}
           </button>
         </div>
       </AuthCard>

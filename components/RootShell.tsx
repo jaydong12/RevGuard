@@ -14,7 +14,7 @@ type Props = {
   children: React.ReactNode;
 };
 
-const AUTH_PREFIXES = ['/login', '/signup', '/reset-password'];
+const AUTH_PREFIXES = ['/login', '/signup', '/reset-password', '/onboarding'];
 const CLOCK_PREFIXES = ['/clock', '/employee'];
 
 // Routes that should render inside the app shell (sidebar + tabs).
@@ -45,9 +45,14 @@ export default function RootShell({ children }: Props) {
     // Auth pages should not show the sidebar shell, but should keep the same
     // premium background + centered width container.
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-50">
+      <div className="min-h-screen bg-slate-950 text-slate-50 relative overflow-hidden">
         <OneTimeClientCleanup />
-        <div className="max-w-6xl mx-auto px-4 py-10">
+        {/* Fintech glow */}
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -top-24 left-1/2 h-[520px] w-[520px] -translate-x-1/2 rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="absolute top-24 left-1/2 h-[620px] w-[620px] -translate-x-1/2 rounded-full bg-indigo-500/10 blur-3xl" />
+        </div>
+        <div className="relative max-w-6xl mx-auto px-4 py-10">
           <HealthGate>{children}</HealthGate>
         </div>
       </div>

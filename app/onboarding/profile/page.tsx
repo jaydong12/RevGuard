@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthCard } from '../../../components/AuthCard';
 import { supabase } from '../../../utils/supabaseClient';
+import { OnboardingProgress } from '../../../components/onboarding/OnboardingProgress';
 
 export default function OnboardingProfilePage() {
   const router = useRouter();
@@ -75,7 +76,11 @@ export default function OnboardingProfilePage() {
 
   return (
     <main>
-      <AuthCard title="Profile info" subtitle="A few details so your workspace is ready.">
+      <AuthCard
+        title="Let’s set up your financial command center."
+        subtitle="This takes about 60 seconds. You can edit this anytime in Settings."
+      >
+        <OnboardingProgress step="profile" />
         {error ? (
           <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {error}
@@ -101,7 +106,7 @@ export default function OnboardingProfilePage() {
             disabled={loading || saving}
             className="w-full rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Continue'}
+            {saving ? 'Saving…' : 'Next →'}
           </button>
         </div>
       </AuthCard>

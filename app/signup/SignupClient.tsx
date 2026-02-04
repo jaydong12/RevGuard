@@ -70,12 +70,12 @@ function SignupInner() {
       // If email confirmation is off, we get a session immediately.
       if (data.session?.access_token) {
         setAuthCookie(data.session.access_token);
-        router.replace('/dashboard');
+        router.replace('/onboarding/business');
         return;
       }
 
       // Email confirmation required: route to check-email screen.
-      router.replace('/check-email?next=/onboarding');
+      router.replace('/check-email?next=/onboarding/business');
       return;
     } catch (err: any) {
       // eslint-disable-next-line no-console

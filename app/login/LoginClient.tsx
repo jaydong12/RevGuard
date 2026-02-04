@@ -96,6 +96,25 @@ function LoginInner() {
         return;
       }
 
+      // Enforce onboarding: always route incomplete users to onboarding.
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('onboarding_complete,onboarding_step,role')
+          .eq('id', userId)
+          .limit(1)
+          .maybeSingle();
+        const onboardingComplete = Boolean((prof as any)?.onboarding_complete);
+        if (!onboardingComplete) {
+          const stepRaw = String((prof as any)?.onboarding_step ?? 'business').trim().toLowerCase();
+          const step = stepRaw === 'profile' || stepRaw === 'banking' ? stepRaw : 'business';
+          router.replace(`/onboarding/${step}`);
+          return;
+        }
+      } catch {
+        // If profile read fails, fall through to dashboard (middleware will handle gating in prod).
+      }
+
       if (userEmail && ADMIN_EMAILS.includes(userEmail)) {
         router.replace('/dashboard');
         return;

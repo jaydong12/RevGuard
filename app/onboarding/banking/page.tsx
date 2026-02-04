@@ -6,6 +6,8 @@ import { AuthCard } from '../../../components/AuthCard';
 import { supabase } from '../../../utils/supabaseClient';
 import { loadStripe } from '@stripe/stripe-js';
 import { useAppData } from '../../../components/AppDataProvider';
+import { OnboardingProgress } from '../../../components/onboarding/OnboardingProgress';
+import { ShieldCheck } from 'lucide-react';
 
 export default function OnboardingBankingPage() {
   const router = useRouter();
@@ -73,7 +75,7 @@ export default function OnboardingBankingPage() {
         .eq('id', uid);
       if (upd.error) throw upd.error;
 
-      router.replace('/dashboard');
+      router.replace('/onboarding/done');
     } catch (e: any) {
       setError(String(e?.message ?? 'Failed to finish onboarding.'));
     } finally {
@@ -131,15 +133,37 @@ export default function OnboardingBankingPage() {
   return (
     <main>
       <AuthCard
-        title="Banking (optional)"
-        subtitle="Connect your bank to auto-import transactions. You can skip for now."
+        title="Let’s set up your financial command center."
+        subtitle="This takes about 60 seconds. You can edit this anytime in Settings."
         footer={<div className="text-[11px] text-slate-400">You can connect later in Settings → Banking.</div>}
       >
+        <OnboardingProgress step="banking" />
         {error ? (
           <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
             {error}
           </div>
         ) : null}
+
+        <div className="mb-4 rounded-xl border border-white/10 bg-white/5 px-3 py-3">
+          <div className="text-sm font-semibold text-slate-100">Banking (optional, recommended)</div>
+          <div className="mt-1 text-xs text-slate-400">
+            Connect your business bank to auto-import transactions and reduce manual work.
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-slate-300">
+            <div className="inline-flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-emerald-200" />
+              Bank-level encryption
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-emerald-200" />
+              Read-only access
+            </div>
+            <div className="inline-flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-emerald-200" />
+              We never store your bank login
+            </div>
+          </div>
+        </div>
 
         <div className="space-y-3">
           <button

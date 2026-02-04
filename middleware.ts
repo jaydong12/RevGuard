@@ -15,6 +15,11 @@ const PROTECTED_PREFIXES = [
   '/billing',
 ];
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __RG_DEV_ONBOARDING_BYPASS_LOGGED: boolean | undefined;
+}
+
 function getRgAt(req: NextRequest): string | null {
   const v = req.cookies.get('rg_at')?.value ?? null;
   return v ? decodeURIComponent(v) : null;
@@ -108,11 +113,23 @@ export function middleware(req: NextRequest) {
       return NextResponse.redirect(to);
     }
 
+    // DEV ONLY: skip onboarding enforcement locally to speed up iteration.
+    // Never runs in production builds.
+    if (process.env.NODE_ENV === 'development') {
+      if (!globalThis.__RG_DEV_ONBOARDING_BYPASS_LOGGED) {
+        // eslint-disable-next-line no-console
+        console.log('DEV MODE: onboarding bypass enabled');
+        globalThis.__RG_DEV_ONBOARDING_BYPASS_LOGGED = true;
+      }
+      return NextResponse.next();
+    }
+
     const status = await getOnboardingStatus({ url, anon, token, userId });
     if (status.complete) return NextResponse.next();
 
     const to = req.nextUrl.clone();
-    to.pathname = `/onboarding/${status.step}`;
+    // Production requirement: always start at business step.
+    to.pathname = `/onboarding/business`;
     to.search = '';
     return NextResponse.redirect(to);
   })();

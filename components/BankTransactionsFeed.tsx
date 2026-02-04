@@ -23,6 +23,48 @@ type BankTx = {
   created_at: string;
 };
 
+const DEMO_TX: BankTx[] = [
+  {
+    id: 'demo-1',
+    posted_at: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10),
+    amount: -189.23,
+    currency: 'USD',
+    merchant_name: 'Slack',
+    description: 'Slack subscription',
+    tx_category_id: null,
+    category_source: 'demo',
+    confidence: 1,
+    needs_review: false,
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'demo-2',
+    posted_at: new Date(Date.now() - 4 * 86400000).toISOString().slice(0, 10),
+    amount: -42.18,
+    currency: 'USD',
+    merchant_name: 'Shell',
+    description: 'Fuel',
+    tx_category_id: null,
+    category_source: 'demo',
+    confidence: 1,
+    needs_review: false,
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'demo-3',
+    posted_at: new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10),
+    amount: 1250.0,
+    currency: 'USD',
+    merchant_name: 'Client payment',
+    description: 'Invoice paid',
+    tx_category_id: null,
+    category_source: 'demo',
+    confidence: 1,
+    needs_review: false,
+    created_at: new Date().toISOString(),
+  },
+];
+
 function normMerchantKey(v: string | null | undefined) {
   return String(v ?? '').trim().toLowerCase();
 }
@@ -58,15 +100,16 @@ export function BankTransactionsFeed() {
     status: string | null;
     last_sync_at: string | null;
   } | null>(null);
+  const [showDemo, setShowDemo] = useState(false);
 
   const [pendingCategory, setPendingCategory] = useState<Record<string, string>>({});
   const [applyRule, setApplyRule] = useState<Record<string, boolean>>({});
 
   const filtered = useMemo(() => {
-    const list = rows ?? [];
+    const list = (showDemo ? DEMO_TX : rows) ?? [];
     if (!needsReviewOnly) return list;
     return list.filter((r) => Boolean(r.needs_review));
-  }, [rows, needsReviewOnly]);
+  }, [rows, needsReviewOnly, showDemo]);
 
   async function loadCategories() {
     if (!businessId) return;
@@ -114,7 +157,7 @@ export function BankTransactionsFeed() {
   async function loadConnectionInfo() {
     if (!businessId) {
       setConnectionInfo(null);
-      return;
+      return null as any;
     }
     const res = await supabase
       .from('bank_connections')
@@ -128,18 +171,20 @@ export function BankTransactionsFeed() {
     const row = res.data as any;
     if (!row) {
       setConnectionInfo(null);
-      return;
+      return null as any;
     }
-    setConnectionInfo({
+    const info = {
       status: row.status ? String(row.status) : null,
       last_sync_at: row.last_sync_at ? String(row.last_sync_at) : null,
-    });
+    };
+    setConnectionInfo(info);
+    return info;
   }
 
   async function loadTransactions() {
     if (!businessId) {
       setRows([]);
-      return;
+      return [] as any;
     }
     const res = await supabase
       .from('bank_transactions')
@@ -150,7 +195,9 @@ export function BankTransactionsFeed() {
       .order('posted_at', { ascending: false })
       .limit(100);
     if (res.error) throw res.error;
-    setRows((res.data as any[]) as BankTx[]);
+    const list = (res.data as any[]) as BankTx[];
+    setRows(list);
+    return list;
   }
 
   async function loadAll() {
@@ -161,11 +208,13 @@ export function BankTransactionsFeed() {
         setRows([]);
         setCategories([]);
         setConnectionInfo(null);
+        setShowDemo(false);
         return;
       }
       await loadCategories();
-      await loadConnectionInfo();
-      await loadTransactions();
+      const info = await loadConnectionInfo();
+      const tx = await loadTransactions();
+      setShowDemo(Boolean(!info && (tx?.length ?? 0) === 0));
     } catch (e: any) {
       setError(String(e?.message ?? 'Failed to load bank feed.'));
     } finally {
@@ -336,6 +385,11 @@ export function BankTransactionsFeed() {
           <div className="text-xs text-slate-400">
             Phase 1: Stripe Financial Connections + rules/default categorization. {/* TODO(Phase2): cron, webhooks, presets, splits */}
           </div>
+          {showDemo ? (
+            <div className="mt-1 inline-flex w-fit items-center rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[10px] font-semibold text-indigo-200">
+              Demo Data
+            </div>
+          ) : null}
           <div className="text-[11px] text-slate-400">
             {connectionInfo ? (
               <>
